@@ -12,11 +12,14 @@ committed to the repo) so work can resume without re-deriving the plan.
       dropping rare critical errors like a single OOM buried in 80k WARNs)
 - [x] Phase 1 — AI usage telemetry persisted to Postgres (previously only
       printed to stderr from `sandbox/entrypoint.py`'s `run_skill`)
-- [ ] Phase 2/3 — trim Claude Code agent overhead further / minimal system
-      prompt (current invocation is already close: no tools requested,
-      `--restricted`, `--permission-mode dontAsk`, `--permission-prompts
-      none`, system prompt is just the skill's own SKILL.md, not a generic
-      coding-agent prompt)
+- [x] Phase 2/3 — trim Claude Code agent overhead / minimal system prompt.
+      Re-inspected `_invoke_claude` (sandbox/entrypoint.py): no tools are
+      requested, `--restricted` + `--permission-mode dontAsk` +
+      `--permission-prompts none` already strip any agentic tool-use
+      overhead, and the prompt sent is just the skill's own SKILL.md
+      content — not a generic coding-agent system prompt. Nothing left to
+      trim without dropping below what the skill schema itself needs; no
+      code change made, verified as already minimal.
 - [x] Phase 4 — default effort LOW + escalation path (`system_config.
       default_effort` and the bridge's fallback both now default to
       `low`; `sandbox/entrypoint.py` escalates once to `SKILL_EFFORT_
