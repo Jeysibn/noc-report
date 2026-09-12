@@ -157,24 +157,55 @@ _INPUT_FILE_BY_SKILL = {
 MAX_LOG_CHARS = int(os.environ.get("SKILL_MAX_LOG_CHARS", "80000"))
 MAX_PATTERN_GROUPS = int(os.environ.get("SKILL_MAX_PATTERN_GROUPS", "40"))
 
-# Substituted out before grouping so lines that are "the same error, one
-# different request" collapse into the same signature: UUIDs/trace-style
-# hex ids, IPv4 addresses, ISO-ish timestamps, and bare multi-digit
-# numbers (line numbers, ports, byte counts, etc).
+# AI cost-optimization mission Phase 2, Issue 7 fix: field-aware
+# normalization. Substituted out before grouping so lines that are "the
+# same error, one different request/trace/user" collapse into the same
+# signature — but ONLY known-dynamic fields are touched. The previous
+# version ended with a blanket `re.compile(r"\d+")` that collapsed EVERY
+# digit sequence, which silently merged semantically-different errors
+# into the same pattern: an HTTP 403 and an HTTP 500 became the same
+# signature, as did `errorCode=1001` and `errorCode=2007` — exactly the
+# kind of business-meaningful number this mission requires to be
+# preserved. There is no blanket digit-collapse pattern anymore: a number
+# is normalized only if it's part of one of the specific dynamic-field
+# shapes below; any other number (HTTP status, business/exception error
+# code, port, DB status code, JVM threshold, line number, byte count,
+# etc) is left exactly as-is in the signature.
 _SIG_PATTERNS = [
+    # UUIDs and hex-style trace/request ids.
     re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"),
     re.compile(r"\b[0-9a-fA-F]{16,40}\b"),
     re.compile(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b"),
     re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:Z|[+-]\d{2}:?\d{2})?"),
     re.compile(r"\d{2}:\d{2}:\d{2}(?:[.,]\d+)?"),
-    re.compile(r"\d+"),
+    # Known-dynamic key=value / key: value identifier fields — trace/span/
+    # request/correlation ids, user/record/session ids — regardless of
+    # whether the value itself is numeric or alphanumeric. The field name
+    # is kept (it's structural, not dynamic); only the value is collapsed.
+    re.compile(
+        r"\b((?:trace|span|request|correlation|session)[_-]?id)\s*[:=]\s*[\w-]+",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\b((?:user|record)[_-]?id)\s*[:=]\s*[\w-]+", re.IGNORECASE),
+    # Thread/worker names carrying a dynamic numeric suffix, e.g. "Thread-42".
+    re.compile(r"\b(Thread|Worker|pool)-\d+\b"),
+    # Kubernetes-style pod/replicaset name suffixes, e.g.
+    # "payments-7f8b9c9d75-abcde" -> "payments-#-#".
+    re.compile(r"-[0-9a-f]{8,10}-[0-9a-z]{5}\b"),
 ]
 
 
 def _signature(line: str) -> str:
     sig = line
-    for pattern in _SIG_PATTERNS:
-        sig = pattern.sub("#", sig)
+    sig = _SIG_PATTERNS[0].sub("#", sig)
+    sig = _SIG_PATTERNS[1].sub("#", sig)
+    sig = _SIG_PATTERNS[2].sub("#", sig)
+    sig = _SIG_PATTERNS[3].sub("#", sig)
+    sig = _SIG_PATTERNS[4].sub("#", sig)
+    sig = _SIG_PATTERNS[5].sub(lambda m: f"{m.group(1)}=#", sig)
+    sig = _SIG_PATTERNS[6].sub(lambda m: f"{m.group(1)}=#", sig)
+    sig = _SIG_PATTERNS[7].sub(lambda m: f"{m.group(1)}-#", sig)
+    sig = _SIG_PATTERNS[8].sub("-#-#", sig)
     return sig
 
 
