@@ -240,6 +240,17 @@ def test_end_to_end_log_triage_job(pg_conn, minio_client, mq_channel):
             assert field in result
         assert result["severity_signal"] in ("low", "medium", "high", "critical")
 
+    # AI cost-optimization mission Phase 1: telemetry.json uploaded
+    # alongside result.json for a real (non-mocked) sandbox run.
+    telemetry_key = f"jobs/{job_id}/telemetry.json"
+    with tempfile.TemporaryDirectory() as tmp:
+        fetched = pathlib.Path(tmp) / "telemetry.json"
+        minio_client.download_file(SETTINGS.minio_bucket_job_artifacts, telemetry_key, str(fetched))
+        telemetry = json.loads(fetched.read_text())
+        assert telemetry["model"] == "claude-sonnet-5"
+        assert isinstance(telemetry.get("raw_input_bytes"), int)
+        assert "escalated" in telemetry
+
     method, properties, body = mq_channel.basic_get("noc.events.log", auto_ack=True)
     assert method is not None
     event = json.loads(body)

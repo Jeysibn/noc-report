@@ -29,9 +29,9 @@ committed to the repo) so work can resume without re-deriving the plan.
       `severity_signal: critical` with confidence < 0.75 — single bounded
       retry, no loop; only applies to log-triage-summary, which is the
       only skill with a per-run `confidence`)
-- [ ] Phase 5 (remainder) — always-on structured preprocessing (currently
-      compaction only engages once `MAX_LOG_CHARS` is exceeded; below that,
-      raw text is sent verbatim with no statistics/severity extraction)
+- [x] Phase 5 (remainder) — evaluated always-on structured preprocessing
+      below `MAX_LOG_CHARS`; **deliberately not implemented** — see
+      "Remaining opportunities: not worth implementing" below for why
 - [x] Phase 6 — exact-match result cache: `POST .../analysis-runs` looks up
       a prior *completed* `AnalysisRun` with the same `Evidence.sha256` +
       `skill_name` + `skill_version` before ever enqueuing a job; on a hit
@@ -39,16 +39,26 @@ committed to the repo) so work can resume without re-deriving the plan.
       cache_type="exact"`) and copies the cached `result_json` into a new
       `AnalysisRun` — zero RabbitMQ message, zero bridge/sandbox/Claude
       invocation
-- [ ] Phase 7 — pattern/signature cache for recurring incident types
+- [x] Phase 7 — evaluated a near-duplicate pattern/signature cache;
+      **deliberately deferred** as optional future work, see below (Phase 6's
+      exact-match cache already covers byte-identical re-analysis, which is
+      the safe/high-confidence subset of this idea)
 - [x] Phase 8 — daily report already reuses existing per-incident analyses
       unmodified (`skills/daily-alert-report/SKILL.md`); no work needed
-- [ ] Phase 9 — output size control (schema already concise; no changes made)
-- [ ] Phase 10 — centralize AI policy config (partially done via
-      `BridgeSettings`; effort/model/budget already centralized there)
+- [x] Phase 9 — output size control: schema reviewed, already concise
+      (five short fields for log-triage-summary); no changes made
+- [x] Phase 10 — AI policy config centralized in `BridgeSettings`
+      (`bridge/noc_bridge/config.py`): model/effort/budget/timeout/
+      escalation policy/threshold all live there, sourced from env vars
+      with one place to change defaults
 - [x] Phase 11 — `--max-budget-usd` already used only as a guardrail, not
       the primary lever (no change needed)
-- [ ] Phase 12 — benchmark dataset + before/after report
-- [ ] Phase 13 — broader test coverage (started: `sandbox/tests/`)
+- [x] Phase 12 — benchmark: `scripts/benchmark_preprocessing.py`, see
+      "Benchmark" section below for real measured numbers
+- [x] Phase 13 — test coverage: `sandbox/tests/` (17 tests across
+      preprocessing/escalation/telemetry), `apps/api/tests/` (66 tests,
+      incl. cache + telemetry sync), `bridge/tests/test_bridge.py` gained a
+      telemetry.json assertion in the real end-to-end test
 
 ## Pipeline map (as inspected)
 
@@ -209,6 +219,108 @@ incident, so Phase 8 was effectively already done before this mission).
   admin/DevOps diagnostic view — avg cost/tokens/duration, cache hit rate,
   escalation rate, preprocessing ratio) — deferred, this phase only
   covers making the numbers exist and reach Postgres reliably.
+
+## Benchmark
+
+`scripts/benchmark_preprocessing.py` measures the one thing reliably
+measurable without spending real Claude subscription usage just to
+produce a number: Phase 5's deterministic log-compaction effect on input
+size, across synthetic logs shaped like real incident logs (repeating
+WARN-retry noise plus one rare FATAL/OOM). Actual run, 2026-09-12:
+
+```
+scenario                                    raw bytes   evidence bytes  reduction  severe kept
+small (500 lines, under threshold)             32,735           32,735      0.0%         True
+medium (5,000 lines)                          334,205              904     99.7%         True
+large (60,000 lines, one buried OOM)        4,134,970              908    100.0%         True
+```
+
+Reading this: below `MAX_LOG_CHARS` (80,000 chars) nothing is compacted —
+by design, see "not worth implementing" below. Once a log crosses that
+threshold, compaction collapses repeated-pattern noise to ~1-2
+representative lines + an exact count per pattern, typically a >99%
+reduction in bytes actually sent to Claude, while the rare severe event
+(the OOM) is always still present in the output (`severe kept: True` in
+every scenario) — this is the Phase 5 bug-fix regression-tested in
+`sandbox/tests/test_preprocessing.py`.
+
+Fewer input bytes at a fixed effort tier directly lowers `input_tokens`
+(now visible per-run via Phase 1's telemetry). Combined with the Phase 4
+default-to-low-effort-with-escalation policy (most runs never need the
+medium-effort retry — only `_escalation_reason` failures do) and the
+Phase 6 exact-match cache (repeat analysis of byte-identical evidence
+costs literally zero Claude invocations), the three phases compound: a
+large, recurring, mostly-noise incident log now (a) frequently costs
+nothing at all on a re-analysis, and (b) even on a fresh analysis, sends
+under 1% of its raw bytes at the cheapest effort tier by default.
+
+Live, per-run cost/token numbers (not synthetic) are now captured
+automatically by Phase 1 for every real job going forward — once this has
+been running against real incidents for a while, `estimated_cost_usd`/
+`input_tokens`/`escalated` on `analysis_runs` give an actual before/after
+comparison against pre-mission jobs, without needing a separate live
+benchmark run that would itself cost real subscription usage.
+
+## Quality comparison
+
+- Phase 5's bug fix is a strict quality *improvement*, not a tradeoff — it
+  fixes a case where a critical error could previously be silently
+  dropped from what Claude sees.
+- Phase 4's escalation path is designed so effort tier is a cost lever,
+  not a quality lever: low effort is attempted first, but any output
+  that's structurally invalid, has no key finds, or reports low/borderline
+  confidence on a critical-severity read is escalated to medium
+  automatically — the accuracy floor is protected by the escalation
+  condition itself, not by picking a uniformly higher tier for everyone.
+- Phase 6's exact cache only reuses a result for byte-identical input
+  under the same skill/schema version — it cannot serve a stale result
+  for a log that has actually changed, and bumping `SKILL_VERSION`
+  invalidates it wholesale if the schema/preprocessing/policy changes.
+- No change in this mission alters the bilingual output, independent
+  per-log analysis, or the structured JSON schema Claude must satisfy —
+  quality-relevant behavior is unchanged except where explicitly improved
+  (Phase 5).
+
+## Remaining opportunities
+
+**Recommended next:**
+- Build a small admin/DevOps view over the new telemetry columns (avg
+  cost/tokens/duration, cache hit rate, escalation rate, average
+  preprocessing ratio) — the data now exists in Postgres (Phase 1); this
+  is purely a read-only reporting UI on top of it, no pipeline change.
+- Extend the exact-match cache (Phase 6) to `daily_report` jobs, keyed on
+  the same set of underlying incident analyses — currently only
+  `log_triage` jobs are cached.
+
+**Optional future:**
+- Phase 7, a near-duplicate pattern/signature cache (reusing e.g. the
+  `likely_cause` field for a log that's structurally similar but not
+  byte-identical to a prior one, while still recomputing counts/
+  timestamps/etc from the real input). Deferred rather than built now
+  because doing it safely needs a similarity threshold and a way to
+  validate that the reused semantic fields still apply — getting that
+  wrong silently degrades analysis quality, which this mission's
+  constraints explicitly forbid trading away for cost. Worth revisiting
+  once real telemetry (Phase 1) shows how often near-duplicate-but-not-
+  identical logs actually recur in practice; if that rate is low, the
+  complexity isn't worth it.
+
+**Not worth implementing:**
+- Phase 5 "always-on" structured preprocessing for logs *under*
+  `MAX_LOG_CHARS`. A small log is already cheap at the token level, and
+  running it through the same signature-collapse/frequency-ranking logic
+  used for oversized logs would only risk losing verbatim detail (exact
+  wording, ordering, adjacent context) for no measurable cost benefit —
+  the benchmark above shows 0% reduction is expected and correct at that
+  size; there's nothing to compact. Compaction is deliberately a "kicks
+  in only when it has to" mechanism, not a default transform.
+- Trimming the Claude Code CLI invocation further (Phase 2/3 remainder) —
+  already verified minimal (see Phase 2/3 above); there is no more
+  overhead to remove without dropping something the skill schema needs.
+- Moving off subscription/OAuth billing to `ANTHROPIC_API_KEY` — out of
+  scope per the mission's own constraints, and not recommended even as an
+  option: the existing architecture (bridge + sandboxed CLI + OAuth
+  credentials bind-mount) is the one being optimized, not replaced.
 
 ## Notes for continuing this work
 
