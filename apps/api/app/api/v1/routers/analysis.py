@@ -30,36 +30,70 @@ router = APIRouter(tags=["analysis"])
 SKILL_NAME = "log-triage-summary"
 SKILL_VERSION = "1"
 
-# AI cost-optimization mission Phase 6 (exact-match result cache):
-# SKILL_VERSION doubles as the cache's compatibility key. Bump it whenever
-# the schema the sandbox validates against (sandbox/entrypoint.py's
-# _ANALYSIS_SCHEMA), the preprocessing behavior (its log compaction), or
-# the model/effort policy changes in a way that could change what a given
-# input produces — a stale cache hit would silently reuse a result from a
-# policy that no longer applies. (A single combined version is deliberately
-# simpler than tracking schema/preprocessor/model-policy versions
-# separately; split it out if/when those axes start changing independently.)
+# AI cost-optimization mission Phase 2, Issue 5 (cache versioning):
+# SKILL_VERSION alone conflated several independently-changing axes into
+# one number, so a change to any one of them (e.g. a preprocessing fix)
+# forced a version bump that also (correctly, but by accident) invalidated
+# unrelated cache entries, with no record of *why*. These are now tracked
+# separately and combined into CACHE_CONTRACT_VERSION, the actual value
+# stored on AnalysisRun.cache_contract_version and checked on cache lookup.
+# Bump the specific constant that actually changed:
+#   ANALYSIS_SCHEMA_VERSION  — sandbox/entrypoint.py's _ANALYSIS_SCHEMA
+#                              (the JSON Schema Claude's output is
+#                              validated against) changes shape/semantics.
+#   PREPROCESSOR_VERSION     — sandbox/entrypoint.py's log-compaction/
+#                              structured-evidence-extraction behavior
+#                              changes what evidence Claude actually sees
+#                              for the same raw input.
+#   AI_POLICY_VERSION        — the model/effort/escalation policy changes
+#                              (e.g. a new escalation trigger, a changed
+#                              confidence threshold, a different default
+#                              model) in a way that could change what a
+#                              given input produces even with an unchanged
+#                              schema and preprocessor.
+# SKILL_VERSION is kept separately (it identifies the SKILL.md prose
+# itself — the actual instructions given to Claude — which is a fourth,
+# independent axis: prose can change without the output schema, the
+# preprocessor, or the model/effort policy changing at all).
+ANALYSIS_SCHEMA_VERSION = "1"
+PREPROCESSOR_VERSION = "1"
+AI_POLICY_VERSION = "1"
+CACHE_CONTRACT_VERSION = f"{ANALYSIS_SCHEMA_VERSION}.{PREPROCESSOR_VERSION}.{AI_POLICY_VERSION}"
 
 
-def _find_cached_analysis_run(db: Session, *, log_evidence: Evidence) -> AnalysisRun | None:
+def _find_cached_analysis_run(
+    db: Session, *, log_evidence: Evidence, requested_model: str | None, requested_effort: str | None
+) -> AnalysisRun | None:
     """Exact-match cache lookup: a prior *completed* log-triage-summary run
     against the same evidence checksum, produced under the same skill
-    version, is reusable verbatim — this is the same log, analyzed the
-    same way, so re-running Claude on it would just reproduce the same
-    result at full cost. Never reuses a run that hasn't completed yet
-    (result_json is only set once a job actually finishes — see
-    `_sync_completed_job`)."""
+    version AND the same cache contract version (schema/preprocessor/AI
+    policy all unchanged since), is reusable verbatim — this is the same
+    log, analyzed the same way, so re-running Claude on it would just
+    reproduce the same result at full cost. Never reuses a run that hasn't
+    completed yet (result_json is only set once a job actually finishes —
+    see `_sync_completed_job`).
+
+    Also respects an explicit operator override: if the caller asked for a
+    specific model or effort, a cached run produced under a *different*
+    model/effort is not an equivalent result and must not be silently
+    served in its place — that would defeat the whole point of asking for
+    a higher effort tier. A request that leaves model/effort unset (the
+    common case) matches any cached run's model/effort."""
     if not log_evidence.sha256:
         return None
+    filters = [
+        AnalysisRun.input_manifest_sha256 == log_evidence.sha256,
+        AnalysisRun.skill_name == SKILL_NAME,
+        AnalysisRun.skill_version == SKILL_VERSION,
+        AnalysisRun.cache_contract_version == CACHE_CONTRACT_VERSION,
+        AnalysisRun.result_json.is_not(None),
+    ]
+    if requested_model is not None:
+        filters.append(AnalysisRun.model == requested_model)
+    if requested_effort is not None:
+        filters.append(AnalysisRun.effort == requested_effort)
     return db.scalar(
-        select(AnalysisRun)
-        .where(
-            AnalysisRun.input_manifest_sha256 == log_evidence.sha256,
-            AnalysisRun.skill_name == SKILL_NAME,
-            AnalysisRun.skill_version == SKILL_VERSION,
-            AnalysisRun.result_json.is_not(None),
-        )
-        .order_by(AnalysisRun.created_at.desc())
+        select(AnalysisRun).where(*filters).order_by(AnalysisRun.created_at.desc())
     )
 
 
@@ -103,6 +137,23 @@ def _to_out(job: Job, run: AnalysisRun | None) -> AnalysisRunOut:
         raw_input_bytes=run.raw_input_bytes if run else None,
         evidence_bytes=run.evidence_bytes if run else None,
         preprocessing_ratio=run.preprocessing_ratio if run else None,
+        attempt_count=run.attempt_count if run else None,
+        initial_model=run.initial_model if run else None,
+        initial_effort=run.initial_effort if run else None,
+        initial_input_tokens=run.initial_input_tokens if run else None,
+        initial_output_tokens=run.initial_output_tokens if run else None,
+        initial_cache_read_tokens=run.initial_cache_read_tokens if run else None,
+        initial_cache_creation_tokens=run.initial_cache_creation_tokens if run else None,
+        initial_duration_ms=run.initial_duration_ms if run else None,
+        initial_estimated_cost_usd=run.initial_estimated_cost_usd if run else None,
+        escalation_model=run.escalation_model if run else None,
+        escalation_effort=run.escalation_effort if run else None,
+        escalation_input_tokens=run.escalation_input_tokens if run else None,
+        escalation_output_tokens=run.escalation_output_tokens if run else None,
+        escalation_cache_read_tokens=run.escalation_cache_read_tokens if run else None,
+        escalation_cache_creation_tokens=run.escalation_cache_creation_tokens if run else None,
+        escalation_duration_ms=run.escalation_duration_ms if run else None,
+        escalation_estimated_cost_usd=run.escalation_estimated_cost_usd if run else None,
     )
 
 
@@ -145,6 +196,15 @@ def _sync_completed_job(db: Session, job: Job) -> AnalysisRun | None:
         "input_tokens", "output_tokens", "cache_creation_tokens", "cache_read_tokens",
         "duration_ms", "num_turns", "confidence", "escalation_reason",
         "raw_input_bytes", "evidence_bytes", "preprocessing_ratio",
+        # AI cost-optimization mission Phase 2, Issue 4: cumulative
+        # escalation telemetry — see sandbox/entrypoint.py's run_skill.
+        "attempt_count",
+        "initial_model", "initial_effort", "initial_input_tokens", "initial_output_tokens",
+        "initial_cache_read_tokens", "initial_cache_creation_tokens", "initial_duration_ms",
+        "initial_estimated_cost_usd",
+        "escalation_model", "escalation_effort", "escalation_input_tokens", "escalation_output_tokens",
+        "escalation_cache_read_tokens", "escalation_cache_creation_tokens", "escalation_duration_ms",
+        "escalation_estimated_cost_usd",
     ):
         if field in telemetry:
             setattr(run, field, telemetry[field])
@@ -190,7 +250,9 @@ def request_analysis(
     # COMPLETED and the AnalysisRun copies the cached result verbatim, so
     # the rest of this endpoint's contract (a Job + current AnalysisRun,
     # pollable exactly like a real run) is unchanged for callers.
-    cached_run = _find_cached_analysis_run(db, log_evidence=log_evidence)
+    cached_run = _find_cached_analysis_run(
+        db, log_evidence=log_evidence, requested_model=body.model, requested_effort=body.effort
+    )
 
     db.execute(update(AnalysisRun).where(AnalysisRun.incident_id == incident.id).values(current=False))
 
@@ -223,6 +285,7 @@ def request_analysis(
             effort=cached_run.effort,
             skill_name=SKILL_NAME,
             skill_version=SKILL_VERSION,
+            cache_contract_version=CACHE_CONTRACT_VERSION,
             input_manifest_sha256=log_evidence.sha256,
             output_sha256=cached_run.output_sha256,
             current=True,
@@ -268,6 +331,7 @@ def request_analysis(
         effort=job.effort,
         skill_name=job.skill_name,
         skill_version=job.skill_version,
+        cache_contract_version=CACHE_CONTRACT_VERSION,
         input_manifest_sha256=log_evidence.sha256,
         current=True,
     )

@@ -368,6 +368,157 @@ def test_request_analysis_exact_cache_hit_skips_queue(client, db_session):
     connection.close()
 
 
+def _make_completed_run(db_session, incident_id, evidence_id, sha256, **overrides):
+    """AI cost-optimization mission Phase 2, Issue 5 test helper: builds a
+    completed AnalysisRun row directly (bypassing the HTTP/job flow) so
+    cache-lookup version/override behavior can be tested in isolation."""
+    import uuid as _uuid
+    from datetime import datetime, timezone as _tz
+
+    from app.api.v1.routers import analysis as analysis_router
+    from app.models.models import AnalysisRun, Job
+
+    job = Job(
+        job_type="log_triage",
+        status="COMPLETED",
+        incident_id=_uuid.UUID(incident_id),
+        model=overrides.get("model", "claude-sonnet-5"),
+        effort=overrides.get("effort", "low"),
+        skill_name=analysis_router.SKILL_NAME,
+        skill_version=analysis_router.SKILL_VERSION,
+        correlation_id=str(_uuid.uuid4()),
+        completed_at=datetime.now(_tz.utc),
+    )
+    db_session.add(job)
+    db_session.flush()
+    run = AnalysisRun(
+        incident_id=_uuid.UUID(incident_id),
+        job_id=job.id,
+        log_evidence_id=_uuid.UUID(evidence_id),
+        result_json={"summary": "cached"},
+        model=overrides.get("model", "claude-sonnet-5"),
+        effort=overrides.get("effort", "low"),
+        skill_name=analysis_router.SKILL_NAME,
+        skill_version=overrides.get("skill_version", analysis_router.SKILL_VERSION),
+        cache_contract_version=overrides.get(
+            "cache_contract_version", analysis_router.CACHE_CONTRACT_VERSION
+        ),
+        input_manifest_sha256=sha256,
+        current=True,
+    )
+    db_session.add(run)
+    db_session.commit()
+    return run
+
+
+def test_cached_analysis_run_lookup_matches_same_contract_version(client, db_session):
+    """AI cost-optimization mission Phase 2, Issue 5: a cached run produced
+    under the current cache contract version (schema/preprocessor/policy
+    all unchanged) and skill version is reused."""
+    make_user(db_session, "operator2", "NOC")
+    headers = auth_headers(client, "operator2")
+    incident = _create_incident(client, headers)
+    evidence = _upload_log_evidence(client, headers, incident)
+
+    from app.api.v1.routers.analysis import _find_cached_analysis_run
+    from app.models.models import Evidence
+    import uuid as _uuid
+
+    log_evidence = db_session.get(Evidence, _uuid.UUID(evidence["id"]))
+    _make_completed_run(db_session, incident, evidence["id"], log_evidence.sha256)
+
+    hit = _find_cached_analysis_run(
+        db_session, log_evidence=log_evidence, requested_model=None, requested_effort=None
+    )
+    assert hit is not None
+
+
+def test_cached_analysis_run_lookup_invalidated_by_cache_contract_version_mismatch(client, db_session):
+    """A cached run produced under an older/different cache contract
+    version (schema, preprocessor, or AI policy changed) must not be
+    reused — the mission's Issue 5 requirement that any of those three
+    axes changing invalidates stale cache entries."""
+    make_user(db_session, "operator3", "NOC")
+    headers = auth_headers(client, "operator3")
+    incident = _create_incident(client, headers)
+    evidence = _upload_log_evidence(client, headers, incident)
+
+    from app.api.v1.routers.analysis import _find_cached_analysis_run
+    from app.models.models import Evidence
+    import uuid as _uuid
+
+    log_evidence = db_session.get(Evidence, _uuid.UUID(evidence["id"]))
+    _make_completed_run(
+        db_session, incident, evidence["id"], log_evidence.sha256,
+        cache_contract_version="0.0.0",
+    )
+
+    hit = _find_cached_analysis_run(
+        db_session, log_evidence=log_evidence, requested_model=None, requested_effort=None
+    )
+    assert hit is None
+
+
+def test_cached_analysis_run_lookup_invalidated_by_skill_version_mismatch(client, db_session):
+    make_user(db_session, "operator4", "NOC")
+    headers = auth_headers(client, "operator4")
+    incident = _create_incident(client, headers)
+    evidence = _upload_log_evidence(client, headers, incident)
+
+    from app.api.v1.routers.analysis import _find_cached_analysis_run
+    from app.models.models import Evidence
+    import uuid as _uuid
+
+    log_evidence = db_session.get(Evidence, _uuid.UUID(evidence["id"]))
+    _make_completed_run(
+        db_session, incident, evidence["id"], log_evidence.sha256,
+        skill_version="0",
+    )
+
+    hit = _find_cached_analysis_run(
+        db_session, log_evidence=log_evidence, requested_model=None, requested_effort=None
+    )
+    assert hit is None
+
+
+def test_cached_analysis_run_lookup_respects_explicit_higher_effort_override(client, db_session):
+    """AI cost-optimization mission Phase 2, Issue 5: an explicit operator
+    request for a different effort tier than the cached run must NOT
+    silently reuse that (incompatible) cached result."""
+    make_user(db_session, "operator5", "NOC")
+    headers = auth_headers(client, "operator5")
+    incident = _create_incident(client, headers)
+    evidence = _upload_log_evidence(client, headers, incident)
+
+    from app.api.v1.routers.analysis import _find_cached_analysis_run
+    from app.models.models import Evidence
+    import uuid as _uuid
+
+    log_evidence = db_session.get(Evidence, _uuid.UUID(evidence["id"]))
+    _make_completed_run(
+        db_session, incident, evidence["id"], log_evidence.sha256,
+        effort="low",
+    )
+
+    # Explicit request for "medium" must not match the cached "low" run.
+    hit = _find_cached_analysis_run(
+        db_session, log_evidence=log_evidence, requested_model=None, requested_effort="medium"
+    )
+    assert hit is None
+
+    # An unset (None) effort request still matches (the common case).
+    hit_default = _find_cached_analysis_run(
+        db_session, log_evidence=log_evidence, requested_model=None, requested_effort=None
+    )
+    assert hit_default is not None
+
+    # Explicit request for the SAME effort as the cached run still matches.
+    hit_same = _find_cached_analysis_run(
+        db_session, log_evidence=log_evidence, requested_model=None, requested_effort="low"
+    )
+    assert hit_same is not None
+
+
 def test_analysis_requires_permission(client, db_session):
     resp = client.post(
         "/api/v1/incidents/00000000-0000-0000-0000-000000000000/analysis-runs",

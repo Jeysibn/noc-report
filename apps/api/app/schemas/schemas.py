@@ -302,6 +302,27 @@ class AnalysisRunOut(BaseModel):
     raw_input_bytes: int | None = None
     evidence_bytes: int | None = None
     preprocessing_ratio: float | None = None
+    # AI cost-optimization mission Phase 2, Issue 4 (cumulative escalation
+    # telemetry): the fields above (input_tokens/estimated_cost_usd/etc)
+    # are now totals (initial + escalation, when escalated); these expose
+    # the initial and escalation attempts individually.
+    attempt_count: int | None = None
+    initial_model: str | None = None
+    initial_effort: str | None = None
+    initial_input_tokens: int | None = None
+    initial_output_tokens: int | None = None
+    initial_cache_read_tokens: int | None = None
+    initial_cache_creation_tokens: int | None = None
+    initial_duration_ms: int | None = None
+    initial_estimated_cost_usd: float | None = None
+    escalation_model: str | None = None
+    escalation_effort: str | None = None
+    escalation_input_tokens: int | None = None
+    escalation_output_tokens: int | None = None
+    escalation_cache_read_tokens: int | None = None
+    escalation_cache_creation_tokens: int | None = None
+    escalation_duration_ms: int | None = None
+    escalation_estimated_cost_usd: float | None = None
 
 
 class ReportGenerateRequest(BaseModel):
