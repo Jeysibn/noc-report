@@ -284,6 +284,9 @@ class AnalysisRunOut(BaseModel):
     run_id: uuid.UUID | None = None
     result: dict | None = None
     current: bool = False
+    # AI cost-optimization mission Phase 6 (exact-match result cache).
+    used_cache: bool = False
+    cache_type: str | None = None
 
 
 class ReportGenerateRequest(BaseModel):

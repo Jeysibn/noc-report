@@ -255,6 +255,13 @@ class Job(Base):
     queued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # AI cost-optimization mission Phase 6: set when this job was satisfied
+    # by reusing a prior identical-input AnalysisRun instead of invoking
+    # Claude at all (see app/api/v1/routers/analysis.py's exact-cache
+    # lookup). cache_type is "exact" for now; a later pattern-cache phase
+    # may add other values.
+    used_cache: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    cache_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
 
 # --- Analysis Runs (master plan §22.9, Milestone 13) ------------------------
@@ -291,6 +298,10 @@ class AnalysisRun(Base):
     output_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     current: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # AI cost-optimization mission Phase 6 — mirrors Job.used_cache/
+    # cache_type (see there) so a cache-hit run is visible from either row.
+    used_cache: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    cache_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
 
 # --- Report Snapshots / Reports (master plan §22.10, §22.11, Milestone 14) -

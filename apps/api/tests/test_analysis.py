@@ -6,6 +6,7 @@ suite verifies the API's own slice: it enqueues a real job and, once a
 result artifact exists in noc-job-artifacts (simulating what the bridge
 would have written), syncs it into the AnalysisRun row on poll.
 """
+import hashlib
 import json
 from datetime import datetime, timezone
 
@@ -63,6 +64,7 @@ def _upload_log_evidence(client, headers, incident_id: str) -> dict:
             "object_key": body["object_key"],
             "original_filename": "app.log",
             "mime_type": "text/plain",
+            "sha256": hashlib.sha256(log_bytes).hexdigest(),
         },
         headers=headers,
     )
@@ -176,6 +178,79 @@ def test_poll_syncs_result_once_job_completes(client, db_session):
     # second MinIO write attempt / overwrite.
     polled_again = client.get(f"/api/v1/incidents/{incident_id}/analysis-runs/{job_id}", headers=headers)
     assert polled_again.json()["result"] == result
+
+
+def test_request_analysis_exact_cache_hit_skips_queue(client, db_session):
+    """AI cost-optimization mission Phase 6: a second incident whose log
+    evidence has byte-identical content (same sha256) as an already-
+    completed analysis reuses that result immediately — no RabbitMQ
+    message, no bridge/Claude invocation, Job created already COMPLETED
+    with used_cache/cache_type set."""
+    make_user(db_session, "operator1", "NOC")
+    headers = auth_headers(client, "operator1")
+
+    # First incident: request + simulate the bridge completing it.
+    incident_a = _create_incident(client, headers)
+    _upload_log_evidence(client, headers, incident_a)
+    resp_a = client.post(
+        f"/api/v1/incidents/{incident_a}/analysis-runs",
+        json={"model": "claude-sonnet-5", "effort": "medium"},
+        headers=headers,
+    )
+    assert resp_a.status_code == 201
+    job_a_id = resp_a.json()["job_id"]
+
+    from app.models.models import Job
+
+    job_a = db_session.get(Job, __import__("uuid").UUID(job_a_id))
+    job_a.status = "COMPLETED"
+    job_a.completed_at = datetime.now(timezone.utc)
+    db_session.commit()
+
+    result = {
+        "summary": "One error found in the log excerpt.",
+        "likely_cause": "unhandled exception in request path",
+        "severity_signal": "high",
+        "recommended_action": "escalate to on-call engineer",
+        "confidence": 0.87,
+    }
+    minio = get_client()
+    minio.put_object(
+        Bucket=settings.minio_bucket_job_artifacts,
+        Key=f"jobs/{job_a_id}/result.json",
+        Body=json.dumps(result).encode("utf-8"),
+        ContentType="application/json",
+    )
+    # Sync it into the AnalysisRun row (what a real poll would do).
+    polled = client.get(f"/api/v1/incidents/{incident_a}/analysis-runs/{job_a_id}", headers=headers)
+    assert polled.json()["result"] == result
+
+    # Second incident, byte-identical log content (_upload_log_evidence
+    # always writes the same fixed bytes) -> same evidence sha256.
+    connection = get_connection()
+    channel = connection.channel()
+    declare_topology(channel)
+    _purge_all(channel)
+
+    incident_b = _create_incident(client, headers)
+    _upload_log_evidence(client, headers, incident_b)
+    resp_b = client.post(
+        f"/api/v1/incidents/{incident_b}/analysis-runs",
+        json={"model": "claude-sonnet-5", "effort": "medium"},
+        headers=headers,
+    )
+    assert resp_b.status_code == 201, resp_b.text
+    out_b = resp_b.json()
+    assert out_b["status"] == "COMPLETED"
+    assert out_b["result"] == result
+    assert out_b["used_cache"] is True
+    assert out_b["cache_type"] == "exact"
+
+    # No message was published for the cache-hit job.
+    names = _queue_names("log_triage")
+    method, _properties, _body = channel.basic_get(names["main"], auto_ack=True)
+    assert method is None
+    connection.close()
 
 
 def test_analysis_requires_permission(client, db_session):

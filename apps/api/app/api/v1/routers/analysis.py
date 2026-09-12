@@ -9,6 +9,7 @@ never fabricates a result.
 """
 import json
 import uuid
+from datetime import datetime, timezone
 
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -28,6 +29,38 @@ router = APIRouter(tags=["analysis"])
 
 SKILL_NAME = "log-triage-summary"
 SKILL_VERSION = "1"
+
+# AI cost-optimization mission Phase 6 (exact-match result cache):
+# SKILL_VERSION doubles as the cache's compatibility key. Bump it whenever
+# the schema the sandbox validates against (sandbox/entrypoint.py's
+# _ANALYSIS_SCHEMA), the preprocessing behavior (its log compaction), or
+# the model/effort policy changes in a way that could change what a given
+# input produces — a stale cache hit would silently reuse a result from a
+# policy that no longer applies. (A single combined version is deliberately
+# simpler than tracking schema/preprocessor/model-policy versions
+# separately; split it out if/when those axes start changing independently.)
+
+
+def _find_cached_analysis_run(db: Session, *, log_evidence: Evidence) -> AnalysisRun | None:
+    """Exact-match cache lookup: a prior *completed* log-triage-summary run
+    against the same evidence checksum, produced under the same skill
+    version, is reusable verbatim — this is the same log, analyzed the
+    same way, so re-running Claude on it would just reproduce the same
+    result at full cost. Never reuses a run that hasn't completed yet
+    (result_json is only set once a job actually finishes — see
+    `_sync_completed_job`)."""
+    if not log_evidence.sha256:
+        return None
+    return db.scalar(
+        select(AnalysisRun)
+        .where(
+            AnalysisRun.input_manifest_sha256 == log_evidence.sha256,
+            AnalysisRun.skill_name == SKILL_NAME,
+            AnalysisRun.skill_version == SKILL_VERSION,
+            AnalysisRun.result_json.is_not(None),
+        )
+        .order_by(AnalysisRun.created_at.desc())
+    )
 
 
 def _get_incident_or_404(db: Session, incident_id: uuid.UUID) -> Incident:
@@ -55,6 +88,8 @@ def _to_out(job: Job, run: AnalysisRun | None) -> AnalysisRunOut:
         run_id=run.id if run else None,
         result=run.result_json if run else None,
         current=run.current if run else False,
+        used_cache=job.used_cache,
+        cache_type=job.cache_type,
     )
 
 
@@ -116,6 +151,64 @@ def request_analysis(
         {"bucket": log_evidence.bucket, "key": log_evidence.object_key, "sha256": log_evidence.sha256}
     ]
 
+    # AI cost-optimization mission Phase 6: an exact-match cache hit skips
+    # RabbitMQ/the bridge/Claude entirely — the Job row is created already
+    # COMPLETED and the AnalysisRun copies the cached result verbatim, so
+    # the rest of this endpoint's contract (a Job + current AnalysisRun,
+    # pollable exactly like a real run) is unchanged for callers.
+    cached_run = _find_cached_analysis_run(db, log_evidence=log_evidence)
+
+    db.execute(update(AnalysisRun).where(AnalysisRun.incident_id == incident.id).values(current=False))
+
+    if cached_run is not None:
+        now = datetime.now(timezone.utc)
+        job = Job(
+            job_type="log_triage",
+            status="COMPLETED",
+            incident_id=incident.id,
+            requested_by=current_user.id,
+            model=cached_run.model,
+            effort=cached_run.effort,
+            skill_name=SKILL_NAME,
+            skill_version=SKILL_VERSION,
+            correlation_id=str(uuid.uuid4()),
+            started_at=now,
+            completed_at=now,
+            used_cache=True,
+            cache_type="exact",
+        )
+        db.add(job)
+        db.flush()
+        run = AnalysisRun(
+            incident_id=incident.id,
+            job_id=job.id,
+            log_evidence_id=log_evidence.id,
+            result_json=cached_run.result_json,
+            result_text=cached_run.result_text,
+            model=cached_run.model,
+            effort=cached_run.effort,
+            skill_name=SKILL_NAME,
+            skill_version=SKILL_VERSION,
+            input_manifest_sha256=log_evidence.sha256,
+            output_sha256=cached_run.output_sha256,
+            current=True,
+            used_cache=True,
+            cache_type="exact",
+        )
+        db.add(run)
+        record_audit(
+            db,
+            actor_user_id=current_user.id,
+            action="incident.analysis.execute",
+            resource_type="incident",
+            resource_id=str(incident.id),
+            metadata={"job_id": str(job.id), "used_cache": True, "cache_type": "exact", "source_run_id": str(cached_run.id)},
+        )
+        db.commit()
+        db.refresh(job)
+        db.refresh(run)
+        return _to_out(job, run)
+
     with open_channel() as channel:
         job = enqueue_job(
             db,
@@ -133,7 +226,6 @@ def request_analysis(
     # §22.9: created immediately (not on completion) so input provenance
     # (which evidence, its checksum) is captured against what was
     # actually submitted, not reconstructed later.
-    db.execute(update(AnalysisRun).where(AnalysisRun.incident_id == incident.id).values(current=False))
     run = AnalysisRun(
         incident_id=incident.id,
         job_id=job.id,

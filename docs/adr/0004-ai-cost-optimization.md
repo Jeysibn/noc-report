@@ -29,7 +29,13 @@ committed to the repo) so work can resume without re-deriving the plan.
 - [ ] Phase 5 (remainder) — always-on structured preprocessing (currently
       compaction only engages once `MAX_LOG_CHARS` is exceeded; below that,
       raw text is sent verbatim with no statistics/severity extraction)
-- [ ] Phase 6 — exact-match result cache (SHA256 of canonicalized input)
+- [x] Phase 6 — exact-match result cache: `POST .../analysis-runs` looks up
+      a prior *completed* `AnalysisRun` with the same `Evidence.sha256` +
+      `skill_name` + `skill_version` before ever enqueuing a job; on a hit
+      it creates the `Job` already `COMPLETED` (`used_cache=true,
+      cache_type="exact"`) and copies the cached `result_json` into a new
+      `AnalysisRun` — zero RabbitMQ message, zero bridge/sandbox/Claude
+      invocation
 - [ ] Phase 7 — pattern/signature cache for recurring incident types
 - [x] Phase 8 — daily report already reuses existing per-incident analyses
       unmodified (`skills/daily-alert-report/SKILL.md`); no work needed
@@ -106,6 +112,47 @@ incident, so Phase 8 was effectively already done before this mission).
   low-effort result and not at all for a confident one.
 - Verified: `apps/api/tests` (64 passed) and `sandbox/tests` (14 passed)
   still green after these changes.
+
+### Phase 6 — exact-match result cache
+
+- `apps/api/alembic/versions/a1b2c3d4e5f6_...py`: new migration adding
+  `jobs.used_cache`/`jobs.cache_type` and `analysis_runs.used_cache`/
+  `analysis_runs.cache_type` (all nullable/defaulted, no backfill needed).
+- `apps/api/app/models/models.py`: `Job`/`AnalysisRun` gain those columns.
+- `apps/api/app/schemas/schemas.py`: `AnalysisRunOut` surfaces
+  `used_cache`/`cache_type`.
+- `apps/api/app/api/v1/routers/analysis.py`: added `CACHE_POLICY_VERSION`
+  comment (folded into `SKILL_VERSION` for now — see the code comment for
+  why a single combined version was chosen over separately tracking
+  schema/preprocessor/model-policy versions) and
+  `_find_cached_analysis_run` (exact match on `Evidence.sha256` +
+  `skill_name` + `skill_version`, requiring `result_json IS NOT NULL`).
+  `request_analysis` checks this before enqueuing; on a hit, builds the
+  `Job`/`AnalysisRun` pair directly as already-`COMPLETED`/cache-tagged
+  instead of publishing to RabbitMQ.
+- `apps/api/tests/test_analysis.py`: new
+  `test_request_analysis_exact_cache_hit_skips_queue` — completes one
+  incident's analysis, then requests analysis on a second incident with
+  byte-identical log evidence and asserts it comes back `COMPLETED`
+  immediately with `used_cache: true`/`cache_type: "exact"` and that no
+  message was published to the `log_triage` queue. Also added an explicit
+  `sha256` to the shared `_upload_log_evidence` test helper (previously
+  omitted, which defeated the cache key).
+- Verified: `apps/api/tests` full suite (65 passed, sqlite-backed test DB
+  which uses `Base.metadata.create_all`, so the new columns applied
+  without needing the Alembic migration run for tests to pass). The
+  Alembic migration itself was smoke-checked against the shared dev
+  Postgres and is syntactically valid, but that DB's `jobs` table is
+  currently missing independent of this change (pre-existing
+  inconsistency, not introduced here) — worth a follow-up to reconcile
+  that dev DB's migration state separately from this mission.
+- The lookup is global over `AnalysisRun` (not incident-scoped), so it
+  also dedupes across *different* incidents that happen to have
+  byte-identical log evidence attached — covered by the test above.
+  Not yet done: an equivalent cache for `daily_report` jobs (lower
+  priority — Phase 8 already avoids regenerating per-incident analysis
+  there) and the pattern cache (Phase 7) for near-duplicate-but-not-
+  identical inputs.
 
 ## Notes for continuing this work
 
