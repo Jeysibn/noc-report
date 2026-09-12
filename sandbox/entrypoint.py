@@ -390,7 +390,26 @@ def _escalation_reason(result: dict) -> str | None:
     return None
 
 
-def run_skill(input_text: str, skill_name: str) -> dict:
+def _envelope_telemetry(envelope: dict) -> dict:
+    """Phase 1 (AI usage telemetry): the fields the CLI's json envelope
+    actually offers, pulled out by name so a missing/renamed field degrades
+    to null rather than blowing up telemetry capture."""
+    usage = envelope.get("usage") if isinstance(envelope.get("usage"), dict) else {}
+    return {
+        "cost_usd": envelope.get("total_cost_usd"),
+        "duration_ms": envelope.get("duration_ms"),
+        "num_turns": envelope.get("num_turns"),
+        "input_tokens": usage.get("input_tokens"),
+        "output_tokens": usage.get("output_tokens"),
+        "cache_creation_tokens": usage.get("cache_creation_input_tokens"),
+        "cache_read_tokens": usage.get("cache_read_input_tokens"),
+    }
+
+
+def run_skill(input_text: str, skill_name: str) -> tuple[dict, dict]:
+    """Returns (result, telemetry). `telemetry` is best-effort operational
+    data about this run (Phase 1) — never allowed to fail the analysis
+    itself; a missing sub-field is simply null."""
     skill_path = SKILLS_DIR / skill_name / "SKILL.md"
     if not skill_path.exists():
         raise FileNotFoundError(f"skill not found: {skill_path}")
@@ -401,8 +420,10 @@ def run_skill(input_text: str, skill_name: str) -> dict:
         raise ValueError(f"no output schema registered for skill: {skill_name}")
 
     _, intro = _INPUT_FILE_BY_SKILL[skill_name]
+    raw_input_bytes = len(input_text.encode("utf-8"))
     if skill_name == "log-triage-summary":
         input_text = _compact_log_if_oversized(input_text)
+    evidence_bytes = len(input_text.encode("utf-8"))
     prompt = (
         f"{skill_md}\n\n"
         "---\n\n"
@@ -418,7 +439,19 @@ def run_skill(input_text: str, skill_name: str) -> dict:
     escalation_effort = os.environ.get("SKILL_EFFORT_ESCALATION", "medium")
     max_budget = os.environ.get("SKILL_MAX_BUDGET_USD", "0.50")
 
-    result, _ = _invoke_claude(prompt, schema=schema, model=model, effort=effort, max_budget=max_budget)
+    result, envelope = _invoke_claude(prompt, schema=schema, model=model, effort=effort, max_budget=max_budget)
+    telemetry = {
+        "model": model,
+        "effort": effort,
+        "raw_input_bytes": raw_input_bytes,
+        "evidence_bytes": evidence_bytes,
+        "preprocessing_ratio": (
+            round(1 - (evidence_bytes / raw_input_bytes), 4) if raw_input_bytes else None
+        ),
+        "escalated": False,
+        "escalation_reason": None,
+        **_envelope_telemetry(envelope),
+    }
 
     if (
         skill_name == "log-triage-summary"
@@ -429,11 +462,21 @@ def run_skill(input_text: str, skill_name: str) -> dict:
             print(f"ai.escalated: reason={reason!r} from={effort!r} to={escalation_effort!r}", file=sys.stderr)
             # A single, bounded retry at the higher tier — never recurses,
             # so there's no possibility of an escalation loop.
-            result, _ = _invoke_claude(
+            result, escalated_envelope = _invoke_claude(
                 prompt, schema=schema, model=model, effort=escalation_effort, max_budget=max_budget
             )
+            # Telemetry reflects the call whose result was actually used
+            # (the escalated one), plus the fact that escalation happened
+            # and why — the low-effort attempt's cost is real spend too,
+            # but isn't double-counted here; see the ADR for the tradeoff.
+            telemetry.update(_envelope_telemetry(escalated_envelope))
+            telemetry["effort"] = escalation_effort
+            telemetry["escalated"] = True
+            telemetry["escalation_reason"] = reason
 
-    return result
+    telemetry["confidence"] = result.get("confidence")
+
+    return result, telemetry
 
 
 def main() -> int:
@@ -448,11 +491,20 @@ def main() -> int:
         print(f"missing input file: {input_file}", file=sys.stderr)
         return 1
 
-    result = run_skill(input_file.read_text(), skill_name=skill_name)
+    result, telemetry = run_skill(input_file.read_text(), skill_name=skill_name)
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     out_path = OUTPUT_DIR / "result.json"
     out_path.write_text(json.dumps(result, indent=2))
+    # Phase 1: telemetry is a separate file, not merged into result.json —
+    # result.json must stay exactly what the skill's schema promises
+    # (additionalProperties: false), so telemetry travels alongside it
+    # instead of inside it. Never allowed to block a successful analysis:
+    # if writing it somehow fails, that's logged, not raised.
+    try:
+        (OUTPUT_DIR / "telemetry.json").write_text(json.dumps(telemetry, indent=2))
+    except OSError as exc:  # pragma: no cover - defensive
+        print(f"failed to write telemetry.json: {exc}", file=sys.stderr)
     print(json.dumps(result))
     return 0
 

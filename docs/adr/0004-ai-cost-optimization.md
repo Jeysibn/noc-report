@@ -10,7 +10,7 @@ committed to the repo) so work can resume without re-deriving the plan.
 - [x] Phase 5 (partial) — fix rare-severe-event-preservation bug in
       `sandbox/entrypoint.py`'s log compaction (frequency-only ranking was
       dropping rare critical errors like a single OOM buried in 80k WARNs)
-- [ ] Phase 1 — AI usage telemetry persisted to Postgres (currently only
+- [x] Phase 1 — AI usage telemetry persisted to Postgres (previously only
       printed to stderr from `sandbox/entrypoint.py`'s `run_skill`)
 - [ ] Phase 2/3 — trim Claude Code agent overhead further / minimal system
       prompt (current invocation is already close: no tools requested,
@@ -153,6 +153,59 @@ incident, so Phase 8 was effectively already done before this mission).
   priority — Phase 8 already avoids regenerating per-incident analysis
   there) and the pattern cache (Phase 7) for near-duplicate-but-not-
   identical inputs.
+
+### Phase 1 — AI usage telemetry
+
+- `sandbox/entrypoint.py`: added `_envelope_telemetry(envelope)` extracting
+  `cost_usd`/`duration_ms`/`num_turns`/`input_tokens`/`output_tokens`/
+  `cache_creation_tokens`/`cache_read_tokens` from the Claude CLI's JSON
+  envelope's `usage` block. `run_skill` now returns `tuple[dict, dict]`
+  (result, telemetry) instead of a bare `dict`: telemetry also carries
+  `model`, `effort` (updated to the escalated value if escalation fired),
+  `raw_input_bytes`/`evidence_bytes`/`preprocessing_ratio` (pre- vs
+  post-compaction byte counts, from Phase 5's log compaction),
+  `escalated`/`escalation_reason` (from Phase 4's escalation logic), and
+  `confidence` (copied from the final result). `main()` writes this to a
+  new `telemetry.json` alongside the existing `result.json` — kept as a
+  separate file rather than folded into `result.json` because the skill
+  output schemas declare `additionalProperties: false`, so adding fields
+  there would break schema validation.
+- `bridge/noc_bridge/service.py`: best-effort upload of `telemetry.json` to
+  `noc-job-artifacts` (`jobs/{job_id}/telemetry.json`) alongside the
+  existing result/report upload; a failure here only logs a warning, it
+  never fails the job (telemetry is diagnostic, not part of the job's
+  contract).
+- `apps/api/alembic/versions/b2c3d4e5f6a7_ai_usage_telemetry.py`: new
+  migration adding 13 nullable telemetry columns to `analysis_runs`
+  (`input_tokens`, `output_tokens`, `cache_creation_tokens`,
+  `cache_read_tokens`, `estimated_cost_usd`, `duration_ms`, `num_turns`,
+  `confidence`, `escalated`, `escalation_reason`, `raw_input_bytes`,
+  `evidence_bytes`, `preprocessing_ratio`) with a matching `downgrade()`.
+- `apps/api/app/models/models.py`: `AnalysisRun` gains those same 13
+  columns.
+- `apps/api/app/api/v1/routers/analysis.py`: `_sync_completed_job` now
+  also best-effort-fetches `jobs/{job.id}/telemetry.json` right after
+  pulling `result.json`, and merges whichever fields are present onto the
+  `AnalysisRun` row (missing file, malformed JSON, or an older run with no
+  telemetry all degrade silently to "leave the columns null" — never
+  raises, never blocks the poll from returning the result). `_to_out` now
+  surfaces all 13 fields on `AnalysisRunOut`.
+- `apps/api/app/schemas/schemas.py`: `AnalysisRunOut` gains the 13
+  telemetry fields, all defaulting to `None`/`False` so older runs and
+  cache hits (which have no `telemetry.json`) serialize cleanly.
+- `apps/api/tests/test_analysis.py`: new
+  `test_poll_syncs_telemetry_when_available` — uploads `result.json` +
+  `telemetry.json` for one job and asserts every telemetry field round-
+  trips through `AnalysisRunOut`; uploads only `result.json` (no
+  telemetry) for a second job and asserts the poll still succeeds with
+  every telemetry field `None`/`False`, proving the best-effort contract.
+- Verified: `apps/api/tests` full suite (65 passed, then 66 with the new
+  test) and `sandbox/tests` (17 passed, including the 3 new
+  `test_telemetry.py` cases) both green.
+- Not yet done: a UI surface for this data (mission mentions an
+  admin/DevOps diagnostic view — avg cost/tokens/duration, cache hit rate,
+  escalation rate, preprocessing ratio) — deferred, this phase only
+  covers making the numbers exist and reach Postgres reliably.
 
 ## Notes for continuing this work
 

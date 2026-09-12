@@ -180,6 +180,121 @@ def test_poll_syncs_result_once_job_completes(client, db_session):
     assert polled_again.json()["result"] == result
 
 
+def test_poll_syncs_telemetry_when_available(client, db_session):
+    """AI cost-optimization mission Phase 1: telemetry.json uploaded
+    alongside result.json is merged into the AnalysisRun row and surfaced
+    on AnalysisRunOut. A job with no telemetry.json (older run / upload
+    failure) must still succeed, with all telemetry fields null/False —
+    the best-effort contract must never block a normal poll."""
+    make_user(db_session, "operator1", "NOC")
+    headers = auth_headers(client, "operator1")
+
+    # --- Job with telemetry ---
+    incident_id = _create_incident(client, headers)
+    _upload_log_evidence(client, headers, incident_id)
+    resp = client.post(
+        f"/api/v1/incidents/{incident_id}/analysis-runs",
+        json={"model": "claude-sonnet-5", "effort": "low"},
+        headers=headers,
+    )
+    assert resp.status_code == 201
+    job_id = resp.json()["job_id"]
+
+    from app.models.models import Job
+
+    job = db_session.get(Job, __import__("uuid").UUID(job_id))
+    job.status = "COMPLETED"
+    job.completed_at = datetime.now(timezone.utc)
+    db_session.commit()
+
+    result = {
+        "summary": "One error found in the log excerpt.",
+        "likely_cause": "unhandled exception in request path",
+        "severity_signal": "high",
+        "recommended_action": "escalate to on-call engineer",
+        "confidence": 0.9,
+    }
+    telemetry = {
+        "model": "claude-sonnet-5",
+        "effort": "medium",
+        "cost_usd": 0.0123,
+        "duration_ms": 4567,
+        "num_turns": 3,
+        "input_tokens": 1200,
+        "output_tokens": 300,
+        "cache_creation_tokens": 500,
+        "cache_read_tokens": 100,
+        "raw_input_bytes": 90000,
+        "evidence_bytes": 12000,
+        "preprocessing_ratio": 0.8667,
+        "escalated": True,
+        "escalation_reason": "low confidence",
+        "confidence": 0.9,
+    }
+    minio = get_client()
+    minio.put_object(
+        Bucket=settings.minio_bucket_job_artifacts,
+        Key=f"jobs/{job_id}/result.json",
+        Body=json.dumps(result).encode("utf-8"),
+        ContentType="application/json",
+    )
+    minio.put_object(
+        Bucket=settings.minio_bucket_job_artifacts,
+        Key=f"jobs/{job_id}/telemetry.json",
+        Body=json.dumps(telemetry).encode("utf-8"),
+        ContentType="application/json",
+    )
+
+    polled = client.get(f"/api/v1/incidents/{incident_id}/analysis-runs/{job_id}", headers=headers)
+    assert polled.status_code == 200
+    out = polled.json()
+    assert out["result"] == result
+    assert out["input_tokens"] == 1200
+    assert out["output_tokens"] == 300
+    assert out["cache_creation_tokens"] == 500
+    assert out["cache_read_tokens"] == 100
+    assert out["estimated_cost_usd"] == 0.0123
+    assert out["duration_ms"] == 4567
+    assert out["num_turns"] == 3
+    assert out["confidence"] == 0.9
+    assert out["escalated"] is True
+    assert out["escalation_reason"] == "low confidence"
+    assert out["raw_input_bytes"] == 90000
+    assert out["evidence_bytes"] == 12000
+    assert out["preprocessing_ratio"] == 0.8667
+
+    # --- Job with no telemetry.json at all: still succeeds, all null/False ---
+    incident_id2 = _create_incident(client, headers)
+    _upload_log_evidence(client, headers, incident_id2)
+    resp2 = client.post(
+        f"/api/v1/incidents/{incident_id2}/analysis-runs",
+        json={"model": "claude-sonnet-5", "effort": "low"},
+        headers=headers,
+    )
+    assert resp2.status_code == 201
+    job_id2 = resp2.json()["job_id"]
+    job2 = db_session.get(Job, __import__("uuid").UUID(job_id2))
+    job2.status = "COMPLETED"
+    job2.completed_at = datetime.now(timezone.utc)
+    db_session.commit()
+    minio.put_object(
+        Bucket=settings.minio_bucket_job_artifacts,
+        Key=f"jobs/{job_id2}/result.json",
+        Body=json.dumps(result).encode("utf-8"),
+        ContentType="application/json",
+    )
+
+    polled2 = client.get(f"/api/v1/incidents/{incident_id2}/analysis-runs/{job_id2}", headers=headers)
+    assert polled2.status_code == 200
+    out2 = polled2.json()
+    assert out2["result"] == result
+    assert out2["input_tokens"] is None
+    assert out2["estimated_cost_usd"] is None
+    assert out2["escalated"] is False
+    assert out2["escalation_reason"] is None
+    assert out2["preprocessing_ratio"] is None
+
+
 def test_request_analysis_exact_cache_hit_skips_queue(client, db_session):
     """AI cost-optimization mission Phase 6: a second incident whose log
     evidence has byte-identical content (same sha256) as an already-

@@ -287,6 +287,21 @@ class AnalysisRunOut(BaseModel):
     # AI cost-optimization mission Phase 6 (exact-match result cache).
     used_cache: bool = False
     cache_type: str | None = None
+    # AI cost-optimization mission Phase 1 (usage telemetry) — null when
+    # unavailable (older run, cache hit, telemetry upload failure).
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cache_creation_tokens: int | None = None
+    cache_read_tokens: int | None = None
+    estimated_cost_usd: float | None = None
+    duration_ms: int | None = None
+    num_turns: int | None = None
+    confidence: float | None = None
+    escalated: bool = False
+    escalation_reason: str | None = None
+    raw_input_bytes: int | None = None
+    evidence_bytes: int | None = None
+    preprocessing_ratio: float | None = None
 
 
 class ReportGenerateRequest(BaseModel):

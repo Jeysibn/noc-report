@@ -4,6 +4,7 @@ from datetime import datetime
 from sqlalchemy import (
     Boolean,
     DateTime,
+    Float,
     ForeignKey,
     Integer,
     JSON,
@@ -302,6 +303,26 @@ class AnalysisRun(Base):
     # cache_type (see there) so a cache-hit run is visible from either row.
     used_cache: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     cache_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
+    # AI cost-optimization mission Phase 1 (usage telemetry) — populated
+    # from the sandbox's telemetry.json (see sandbox/entrypoint.py's
+    # run_skill / _envelope_telemetry) when `_sync_completed_job` syncs a
+    # completed job's result. All nullable: telemetry is best-effort and
+    # must never block a real analysis result from being usable. Left
+    # unset (None/False) on a cache hit, since no Claude call happened.
+    input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cache_creation_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cache_read_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    estimated_cost_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    num_turns: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    escalated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    escalation_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    raw_input_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    evidence_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    preprocessing_ratio: Mapped[float | None] = mapped_column(Float, nullable=True)
 
 
 # --- Report Snapshots / Reports (master plan §22.10, §22.11, Milestone 14) -

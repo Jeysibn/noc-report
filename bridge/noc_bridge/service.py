@@ -225,6 +225,24 @@ class BridgeService:
                     src_path=result_path,
                 )
 
+            # Phase 1 (AI usage telemetry): sandbox/entrypoint.py writes
+            # telemetry.json alongside result.json whenever it ran Claude
+            # at all — best-effort only, so a missing file (older sandbox
+            # image, or the entrypoint's own defensive write failure)
+            # never fails an otherwise-successful job. apps/api picks this
+            # up the same way it picks up result.json (poll + sync).
+            telemetry_path = output_dir / "telemetry.json"
+            if telemetry_path.exists():
+                try:
+                    upload_artifact(
+                        minio_client,
+                        bucket=self.settings.minio_bucket_job_artifacts,
+                        object_key=f"jobs/{job_id}/telemetry.json",
+                        src_path=telemetry_path,
+                    )
+                except Exception:  # pragma: no cover - defensive
+                    logger.warning("failed to upload telemetry.json for job %s", job_id, exc_info=True)
+
         db.mark_completed(pg_conn, job_id)
         publish_status_event(
             channel,

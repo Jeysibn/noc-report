@@ -90,6 +90,19 @@ def _to_out(job: Job, run: AnalysisRun | None) -> AnalysisRunOut:
         current=run.current if run else False,
         used_cache=job.used_cache,
         cache_type=job.cache_type,
+        input_tokens=run.input_tokens if run else None,
+        output_tokens=run.output_tokens if run else None,
+        cache_creation_tokens=run.cache_creation_tokens if run else None,
+        cache_read_tokens=run.cache_read_tokens if run else None,
+        estimated_cost_usd=run.estimated_cost_usd if run else None,
+        duration_ms=run.duration_ms if run else None,
+        num_turns=run.num_turns if run else None,
+        confidence=run.confidence if run else None,
+        escalated=run.escalated if run else False,
+        escalation_reason=run.escalation_reason if run else None,
+        raw_input_bytes=run.raw_input_bytes if run else None,
+        evidence_bytes=run.evidence_bytes if run else None,
+        preprocessing_ratio=run.preprocessing_ratio if run else None,
     )
 
 
@@ -119,6 +132,27 @@ def _sync_completed_job(db: Session, job: Job) -> AnalysisRun | None:
     run.result_json = json.loads(body)
     run.result_text = body.decode("utf-8", errors="replace")
     run.output_sha256 = sha256_of_bytes(body)
+
+    # Phase 1 (AI usage telemetry): best-effort — an older run or a run
+    # where the bridge couldn't upload telemetry.json simply leaves these
+    # fields null, same as any other missing telemetry field.
+    try:
+        telemetry_body = get_object_bytes(settings.minio_bucket_job_artifacts, f"jobs/{job.id}/telemetry.json")
+        telemetry = json.loads(telemetry_body)
+    except (ClientError, json.JSONDecodeError, ValueError):
+        telemetry = {}
+    for field in (
+        "input_tokens", "output_tokens", "cache_creation_tokens", "cache_read_tokens",
+        "duration_ms", "num_turns", "confidence", "escalation_reason",
+        "raw_input_bytes", "evidence_bytes", "preprocessing_ratio",
+    ):
+        if field in telemetry:
+            setattr(run, field, telemetry[field])
+    if "cost_usd" in telemetry:
+        run.estimated_cost_usd = telemetry["cost_usd"]
+    if "escalated" in telemetry:
+        run.escalated = bool(telemetry["escalated"])
+
     db.flush()
     return run
 

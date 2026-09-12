@@ -81,10 +81,13 @@ def test_run_skill_escalates_once_when_low_effort_result_is_uncertain(monkeypatc
     (skill_dir / "SKILL.md").write_text("---\nname: log-triage-summary\n---\nBody")
     monkeypatch.setattr(entrypoint, "SKILLS_DIR", tmp_path)
 
-    result = entrypoint.run_skill("a short log line", "log-triage-summary")
+    result, telemetry = entrypoint.run_skill("a short log line", "log-triage-summary")
 
     assert calls == ["low", "medium"]
     assert result["confidence"] == 0.95
+    assert telemetry["escalated"] is True
+    assert telemetry["effort"] == "medium"
+    assert telemetry["escalation_reason"] is not None
 
 
 def test_run_skill_does_not_escalate_when_low_effort_result_is_confident(monkeypatch, tmp_path):
@@ -103,6 +106,8 @@ def test_run_skill_does_not_escalate_when_low_effort_result_is_confident(monkeyp
     (skill_dir / "SKILL.md").write_text("---\nname: log-triage-summary\n---\nBody")
     monkeypatch.setattr(entrypoint, "SKILLS_DIR", tmp_path)
 
-    entrypoint.run_skill("a short log line", "log-triage-summary")
+    _result, telemetry = entrypoint.run_skill("a short log line", "log-triage-summary")
 
     assert calls == ["low"]
+    assert telemetry["escalated"] is False
+    assert telemetry["escalation_reason"] is None
