@@ -284,6 +284,41 @@ def _compact_log_if_oversized(input_text: str) -> str:
 _EFFORT_RANK = {"low": 0, "medium": 1, "high": 2}
 
 
+# AI cost-optimization mission Phase 2, Issue 1: the minimal system prompt
+# that replaces Claude Code's own default (generic coding-agent) system
+# prompt for every sandboxed skill run. Before this, entrypoint.py passed
+# no --system-prompt at all, so the default prompt (mentions of tools,
+# coding-agent framing, etc — all irrelevant here and paid for on every
+# call) was silently active in every real job. This one is short on
+# purpose: the skill's own SKILL.md (sent as part of the prompt body)
+# already carries the actual task instructions and output contract; this
+# only needs to set identity/scope, not repeat that.
+_NOC_SYSTEM_PROMPT = (
+    "You are a NOC (Network Operations Center) log and incident analysis "
+    "assistant. You receive log evidence or incident summaries and produce "
+    "exactly one structured JSON result matching the given schema. You do "
+    "not use tools, run commands, or browse; you reason only over the text "
+    "given to you in this single turn."
+)
+
+# Empirically confirmed (live test calls against the installed CLI, see
+# ADR 0004/0005) NOT to be added, despite being suggested by the original
+# mission brief:
+#   --disallowed-tools "*"   breaks --json-schema structured output: the
+#       CLI implements schema validation internally via a "StructuredOutput"
+#       tool call, which "*" also blocks, producing permission_denials and
+#       a plain-text fallback instead of a parsed result (num_turns inflates
+#       to 4 from repeated denied attempts).
+#   --max-turns <n>          does not exist on the installed CLI (`claude
+#       --help` has no such flag); --json-schema's internal StructuredOutput
+#       tool call means a real run is never fewer than 2 turns anyway, so
+#       this would have been incompatible with structured output even if
+#       it existed.
+# --restricted already strips Bash/code-exec/WebFetch, which is the actual
+# "zero unnecessary tools" lever available here without breaking output
+# parsing.
+
+
 def _invoke_claude(prompt: str, *, schema: dict, model: str, effort: str, max_budget: str) -> tuple[dict, dict]:
     """Runs the `claude` CLI once and returns (result, envelope). Raises on
     a CLI-level failure (nonzero exit) or an unparseable/non-dict result."""
@@ -300,6 +335,13 @@ def _invoke_claude(prompt: str, *, schema: dict, model: str, effort: str, max_bu
         "--permission-mode", "dontAsk",
         "--permission-prompts", "none",
         "--restricted",
+        "--system-prompt", _NOC_SYSTEM_PROMPT,
+        # No session/transcript persistence: each job is a fully
+        # independent, one-shot analysis (Milestone 12/§27) — there is
+        # nothing to resume later, and persisting one would be pure
+        # overhead (disk + a stray credential-adjacent artifact) for no
+        # benefit.
+        "--no-session-persistence",
         "--max-budget-usd", max_budget,
         "--json-schema", json.dumps(schema),
         # No positional prompt argument here on purpose: a log excerpt can
@@ -352,17 +394,54 @@ def _invoke_claude(prompt: str, *, schema: dict, model: str, effort: str, max_bu
             f"usage={envelope.get('usage')!r}",
             file=sys.stderr,
         )
-    # The CLI's json output-format wraps the actual result; be defensive
-    # about the exact envelope shape since this hasn't been empirically
-    # verified against a live run (only reasoned from `claude --help`).
-    result = envelope.get("result", envelope) if isinstance(envelope, dict) else envelope
+    result = _parse_claude_result(envelope, schema=schema)
+    return result, (envelope if isinstance(envelope, dict) else {})
+
+
+def _parse_claude_result(envelope: object, *, schema: dict) -> dict:
+    """AI cost-optimization mission Phase 2, Issue 2: version-tolerant,
+    robust extraction of the actual structured result from a `claude -p
+    --output-format json` envelope.
+
+    Empirically confirmed (live test calls against the installed CLI, see
+    ADR 0004/0005) that a successful --json-schema call's envelope carries
+    BOTH:
+      - `structured_output`: already a parsed dict matching the schema
+        (produced by the CLI's internal schema-validation mechanism), and
+      - `result`: a JSON *string* with equivalent content.
+    The previous implementation read only `envelope.get("result", envelope)`
+    and never looked at `structured_output` at all — fragile, since a
+    future CLI version could change how/whether `result` mirrors the
+    validated structured payload, while `structured_output` is the field
+    the CLI's own schema validation actually produced. Preference order,
+    each with a fallback to the next on absence/parse failure:
+      1. `structured_output` (already validated + already a dict)
+      2. `result` (parse as JSON if it's a string; use directly if already
+         a dict — some CLI versions/paths may return it unwrapped)
+      3. the envelope itself (defensive fallback for a maximally-stripped
+         or non-standard envelope shape)
+    """
+    if not isinstance(envelope, dict):
+        raise ValueError(f"unexpected claude CLI envelope shape: {envelope!r}")
+
+    structured = envelope.get("structured_output")
+    if isinstance(structured, dict):
+        return structured
+
+    result = envelope.get("result", envelope)
     if isinstance(result, str):
-        result = json.loads(result)
+        try:
+            result = json.loads(result)
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise ValueError(
+                f"claude CLI result was not valid JSON and no structured_output "
+                f"was present: {result[:500]!r}"
+            ) from exc
 
     if not isinstance(result, dict):
         raise ValueError(f"unexpected claude CLI result shape: {result!r}")
 
-    return result, (envelope if isinstance(envelope, dict) else {})
+    return result
 
 
 def _escalation_reason(result: dict) -> str | None:
@@ -440,6 +519,7 @@ def run_skill(input_text: str, skill_name: str) -> tuple[dict, dict]:
     max_budget = os.environ.get("SKILL_MAX_BUDGET_USD", "0.50")
 
     result, envelope = _invoke_claude(prompt, schema=schema, model=model, effort=effort, max_budget=max_budget)
+    initial = _envelope_telemetry(envelope)
     telemetry = {
         "model": model,
         "effort": effort,
@@ -450,8 +530,34 @@ def run_skill(input_text: str, skill_name: str) -> tuple[dict, dict]:
         ),
         "escalated": False,
         "escalation_reason": None,
-        **_envelope_telemetry(envelope),
+        "attempt_count": 1,
+        # AI cost-optimization mission Phase 2, Issue 4: the initial
+        # (always-made) attempt's own numbers, kept separately from the
+        # top-level totals below so they survive even after escalation.
+        "initial_model": model,
+        "initial_effort": effort,
+        "initial_input_tokens": initial.get("input_tokens"),
+        "initial_output_tokens": initial.get("output_tokens"),
+        "initial_cache_read_tokens": initial.get("cache_read_tokens"),
+        "initial_cache_creation_tokens": initial.get("cache_creation_tokens"),
+        "initial_duration_ms": initial.get("duration_ms"),
+        "initial_estimated_cost_usd": initial.get("cost_usd"),
+        "escalation_model": None,
+        "escalation_effort": None,
+        "escalation_input_tokens": None,
+        "escalation_output_tokens": None,
+        "escalation_cache_read_tokens": None,
+        "escalation_cache_creation_tokens": None,
+        "escalation_duration_ms": None,
+        "escalation_estimated_cost_usd": None,
+        **initial,
     }
+    # `**initial` above seeds the top-level (total) fields with the
+    # initial attempt's own numbers; on escalation these are replaced below
+    # with initial + escalation sums, so a non-escalated run's top-level
+    # fields and initial_* fields end up identical (as they should — one
+    # call is the only call), while an escalated run's top-level fields
+    # become real totals.
 
     if (
         skill_name == "log-triage-summary"
@@ -465,14 +571,50 @@ def run_skill(input_text: str, skill_name: str) -> tuple[dict, dict]:
             result, escalated_envelope = _invoke_claude(
                 prompt, schema=schema, model=model, effort=escalation_effort, max_budget=max_budget
             )
-            # Telemetry reflects the call whose result was actually used
-            # (the escalated one), plus the fact that escalation happened
-            # and why — the low-effort attempt's cost is real spend too,
-            # but isn't double-counted here; see the ADR for the tradeoff.
-            telemetry.update(_envelope_telemetry(escalated_envelope))
+            escalation = _envelope_telemetry(escalated_envelope)
+            telemetry["escalation_model"] = model
+            telemetry["escalation_effort"] = escalation_effort
+            telemetry["escalation_input_tokens"] = escalation.get("input_tokens")
+            telemetry["escalation_output_tokens"] = escalation.get("output_tokens")
+            telemetry["escalation_cache_read_tokens"] = escalation.get("cache_read_tokens")
+            telemetry["escalation_cache_creation_tokens"] = escalation.get("cache_creation_tokens")
+            telemetry["escalation_duration_ms"] = escalation.get("duration_ms")
+            telemetry["escalation_estimated_cost_usd"] = escalation.get("cost_usd")
+            telemetry["attempt_count"] = 2
             telemetry["effort"] = escalation_effort
             telemetry["escalated"] = True
             telemetry["escalation_reason"] = reason
+
+            # AI cost-optimization mission Phase 2, Issue 4 fix: total
+            # usage is the SUM of both real calls, not just the escalated
+            # call's own numbers (the previous behavior silently dropped
+            # the low-effort attempt's real spend from the totals, even
+            # though that attempt was real, billed usage). Sums are
+            # None-safe: a missing sub-field on either side degrades the
+            # total to None rather than raising or silently treating it
+            # as zero.
+            def _sum(*values):
+                present = [v for v in values if v is not None]
+                if not present:
+                    return None
+                return sum(present)
+
+            telemetry["input_tokens"] = _sum(initial.get("input_tokens"), escalation.get("input_tokens"))
+            telemetry["output_tokens"] = _sum(initial.get("output_tokens"), escalation.get("output_tokens"))
+            telemetry["cache_read_tokens"] = _sum(
+                initial.get("cache_read_tokens"), escalation.get("cache_read_tokens")
+            )
+            telemetry["cache_creation_tokens"] = _sum(
+                initial.get("cache_creation_tokens"), escalation.get("cache_creation_tokens")
+            )
+            telemetry["duration_ms"] = _sum(initial.get("duration_ms"), escalation.get("duration_ms"))
+            telemetry["cost_usd"] = _sum(initial.get("cost_usd"), escalation.get("cost_usd"))
+            # num_turns is the escalated call's own turn count (turns
+            # aren't additive in the same way spend/tokens are — it isn't
+            # meaningful to report "6 turns" for two independent 2-3 turn
+            # calls); the escalated call's value is kept since it's the
+            # one whose result was actually used.
+            telemetry["num_turns"] = escalation.get("num_turns")
 
     telemetry["confidence"] = result.get("confidence")
 

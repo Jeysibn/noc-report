@@ -90,6 +90,91 @@ def test_run_skill_escalates_once_when_low_effort_result_is_uncertain(monkeypatc
     assert telemetry["escalation_reason"] is not None
 
 
+def test_run_skill_escalation_telemetry_is_cumulative_not_overwritten(monkeypatch, tmp_path):
+    """AI cost-optimization mission Phase 2, Issue 4: total usage after an
+    escalation must be the SUM of the initial (low) and escalation
+    (medium) calls, not just the escalated call's own numbers overwriting
+    the first — both real calls were real spend."""
+
+    def _envelope(input_tokens, output_tokens, cache_read, cache_creation, cost, duration, turns):
+        return {
+            "total_cost_usd": cost,
+            "duration_ms": duration,
+            "num_turns": turns,
+            "usage": {
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "cache_read_input_tokens": cache_read,
+                "cache_creation_input_tokens": cache_creation,
+            },
+        }
+
+    def _fake_invoke(prompt, *, schema, model, effort, max_budget):
+        if effort == "low":
+            return _analysis(confidence=0.2, severity_signal="low"), _envelope(100, 50, 10, 5, 0.01, 1000, 2)
+        return _analysis(confidence=0.95, severity_signal="low"), _envelope(200, 80, 20, 8, 0.05, 2000, 3)
+
+    monkeypatch.setattr(entrypoint, "_invoke_claude", _fake_invoke)
+    monkeypatch.setenv("SKILL_EFFORT", "low")
+    monkeypatch.setenv("SKILL_EFFORT_ESCALATION", "medium")
+
+    skill_dir = tmp_path / "log-triage-summary"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("---\nname: log-triage-summary\n---\nBody")
+    monkeypatch.setattr(entrypoint, "SKILLS_DIR", tmp_path)
+
+    _result, telemetry = entrypoint.run_skill("a short log line", "log-triage-summary")
+
+    assert telemetry["attempt_count"] == 2
+    # Initial attempt's own numbers preserved separately.
+    assert telemetry["initial_input_tokens"] == 100
+    assert telemetry["initial_estimated_cost_usd"] == 0.01
+    # Escalation call's own numbers.
+    assert telemetry["escalation_input_tokens"] == 200
+    assert telemetry["escalation_estimated_cost_usd"] == 0.05
+    # Totals are the sum of both real calls, not just the escalated one.
+    assert telemetry["input_tokens"] == 300
+    assert telemetry["output_tokens"] == 130
+    assert telemetry["cache_read_tokens"] == 30
+    assert telemetry["cache_creation_tokens"] == 13
+    assert telemetry["duration_ms"] == 3000
+    assert telemetry["cost_usd"] == pytest.approx(0.06)
+
+
+def test_run_skill_non_escalated_telemetry_totals_equal_initial(monkeypatch, tmp_path):
+    """A non-escalated run made exactly one call, so its totals and its
+    initial_* fields should be identical (attempt_count == 1)."""
+
+    def _fake_invoke(prompt, *, schema, model, effort, max_budget):
+        return _analysis(confidence=0.9, severity_signal="low"), {
+            "total_cost_usd": 0.02,
+            "duration_ms": 900,
+            "num_turns": 2,
+            "usage": {
+                "input_tokens": 50,
+                "output_tokens": 20,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+            },
+        }
+
+    monkeypatch.setattr(entrypoint, "_invoke_claude", _fake_invoke)
+    monkeypatch.setenv("SKILL_EFFORT", "low")
+    monkeypatch.setenv("SKILL_EFFORT_ESCALATION", "medium")
+
+    skill_dir = tmp_path / "log-triage-summary"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("---\nname: log-triage-summary\n---\nBody")
+    monkeypatch.setattr(entrypoint, "SKILLS_DIR", tmp_path)
+
+    _result, telemetry = entrypoint.run_skill("a short log line", "log-triage-summary")
+
+    assert telemetry["attempt_count"] == 1
+    assert telemetry["escalated"] is False
+    assert telemetry["input_tokens"] == telemetry["initial_input_tokens"] == 50
+    assert telemetry["escalation_input_tokens"] is None
+
+
 def test_run_skill_does_not_escalate_when_low_effort_result_is_confident(monkeypatch, tmp_path):
     calls = []
 

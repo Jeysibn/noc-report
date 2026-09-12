@@ -324,6 +324,49 @@ class AnalysisRun(Base):
     evidence_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     preprocessing_ratio: Mapped[float | None] = mapped_column(Float, nullable=True)
 
+    # AI cost-optimization mission Phase 2, Issue 5 (cache versioning): the
+    # combined analysis-schema/preprocessor/AI-policy version this run was
+    # produced under (see app/api/v1/routers/analysis.py's
+    # CACHE_CONTRACT_VERSION) — a cache lookup must match this in addition
+    # to skill_name/skill_version, so bumping any of those three axes
+    # invalidates old cache entries without needing a SKILL_VERSION bump.
+    cache_contract_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
+    # AI cost-optimization mission Phase 2, Issue 4 (cumulative escalation
+    # telemetry): a LOW->MEDIUM escalated job makes two real Claude calls,
+    # and total usage must be the sum of both, not just the escalated
+    # call's. `estimated_cost_usd`/`input_tokens`/etc above already hold
+    # the totals (see sandbox/entrypoint.py's run_skill); these hold the
+    # initial (always-made) attempt's own numbers separately, so a
+    # dashboard can show "how much did the low-effort attempt alone cost"
+    # vs. "how much did escalation add" — both nullable since a non-
+    # escalated run only ever made the one (initial) call, which is
+    # already fully represented by the totals above.
+    attempt_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    initial_model: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    initial_effort: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    initial_input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    initial_output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    initial_cache_read_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    initial_cache_creation_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    initial_duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    initial_estimated_cost_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # The escalation (second) call's own numbers, populated only when
+    # `escalated` is true. The `total_*` concept the mission asks for is
+    # represented by the existing top-level fields above (input_tokens,
+    # estimated_cost_usd, etc.) — those are now computed as
+    # initial + escalation (see sandbox/entrypoint.py's run_skill), so
+    # there is no separate total_* column set duplicating them.
+    escalation_model: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    escalation_effort: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    escalation_input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    escalation_output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    escalation_cache_read_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    escalation_cache_creation_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    escalation_duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    escalation_estimated_cost_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+
 
 # --- Report Snapshots / Reports (master plan §22.10, §22.11, Milestone 14) -
 
