@@ -142,7 +142,12 @@ class SystemConfig(Base):
 
     id: Mapped[uuid.UUID] = uuid_pk()
     default_model: Mapped[str] = mapped_column(String(100), nullable=False, default="claude-sonnet-5")
-    default_effort: Mapped[str] = mapped_column(String(20), nullable=False, default="medium")
+    # Cost-optimization mission Phase 4: low effort is the default for every
+    # job; the bridge escalates to a higher tier per-job only when a low-
+    # effort result signals it isn't sufficient (sandbox/entrypoint.py's
+    # _escalation_reason). Existing rows keep whatever value they already
+    # have — this only changes the default for a newly-seeded row.
+    default_effort: Mapped[str] = mapped_column(String(20), nullable=False, default="low")
     job_timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=300)
     max_concurrent_jobs: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     updated_at: Mapped[datetime] = mapped_column(

@@ -17,8 +17,15 @@ committed to the repo) so work can resume without re-deriving the plan.
       `--restricted`, `--permission-mode dontAsk`, `--permission-prompts
       none`, system prompt is just the skill's own SKILL.md, not a generic
       coding-agent prompt)
-- [ ] Phase 4 — default effort LOW + escalation path (currently defaults to
-      `medium` via `system_config.default_effort` / `SKILL_EFFORT`)
+- [x] Phase 4 — default effort LOW + escalation path (`system_config.
+      default_effort` and the bridge's fallback both now default to
+      `low`; `sandbox/entrypoint.py` escalates once to `SKILL_EFFORT_
+      ESCALATION` (default `medium`) when the low-effort result has
+      invalid structure, empty `key_finds`, confidence below
+      `SKILL_ESCALATION_CONFIDENCE_THRESHOLD` (default 0.55), or
+      `severity_signal: critical` with confidence < 0.75 — single bounded
+      retry, no loop; only applies to log-triage-summary, which is the
+      only skill with a per-run `confidence`)
 - [ ] Phase 5 (remainder) — always-on structured preprocessing (currently
       compaction only engages once `MAX_LOG_CHARS` is exceeded; below that,
       raw text is sent verbatim with no statistics/severity extraction)
@@ -75,6 +82,30 @@ incident, so Phase 8 was effectively already done before this mission).
   bug, not just a cost one, since it could cause a missed root cause.
 - `sandbox/tests/test_preprocessing.py`: regression tests, including the
   exact "one OOM among 80k WARNs" scenario from the mission brief.
+- `sandbox/entrypoint.py`: extracted `_invoke_claude` (single CLI call) out
+  of `run_skill`, added `_escalation_reason`/`_EFFORT_RANK`, default
+  `SKILL_EFFORT` fallback changed `medium` -> `low`. `run_skill` now makes
+  one low-effort call and, only for log-triage-summary and only when
+  `_escalation_reason` finds a real problem, one bounded escalated retry.
+- `apps/api/app/models/models.py` (`SystemConfig.default_effort`) and
+  `bridge/noc_bridge/db.py` (`_SYSTEM_CONFIG_DEFAULTS`): default value
+  `medium` -> `low` (no migration needed — no DB-level `server_default`
+  existed, this only changes the value used when seeding a fresh row).
+- `bridge/noc_bridge/config.py`: added `claude_effort_escalation` (default
+  `medium`) and `claude_escalation_confidence_threshold` (default `0.55`)
+  to `BridgeSettings`, centralizing the escalation policy alongside the
+  existing model/budget/compaction settings.
+- `bridge/noc_bridge/service.py`: passes `SKILL_EFFORT_ESCALATION` /
+  `SKILL_ESCALATION_CONFIDENCE_THRESHOLD` through to the sandbox
+  environment.
+- `apps/api/tests/test_admin.py`: updated seeded-default assertion
+  (`default_effort == "medium"` -> `"low"`).
+- `sandbox/tests/test_escalation.py`: unit tests for `_escalation_reason`/
+  `_EFFORT_RANK`, plus two `run_skill`-level tests (via a monkeypatched
+  `_invoke_claude`) proving escalation fires exactly once for an uncertain
+  low-effort result and not at all for a confident one.
+- Verified: `apps/api/tests` (64 passed) and `sandbox/tests` (14 passed)
+  still green after these changes.
 
 ## Notes for continuing this work
 

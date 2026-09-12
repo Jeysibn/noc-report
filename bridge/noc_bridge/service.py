@@ -170,6 +170,10 @@ class BridgeService:
                     # the pre-existing claude_model_default fallback.
                     "SKILL_MODEL": payload.get("model") or config["default_model"],
                     "SKILL_EFFORT": payload.get("effort") or config["default_effort"],
+                    "SKILL_EFFORT_ESCALATION": self.settings.claude_effort_escalation,
+                    "SKILL_ESCALATION_CONFIDENCE_THRESHOLD": str(
+                        self.settings.claude_escalation_confidence_threshold
+                    ),
                     "SKILL_MAX_BUDGET_USD": str(self.settings.claude_max_budget_usd),
                     "SKILL_CLI_TIMEOUT_SECONDS": str(self.settings.claude_cli_timeout_seconds),
                     "SKILL_MAX_LOG_CHARS": str(self.settings.skill_max_log_chars),

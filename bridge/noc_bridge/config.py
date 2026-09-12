@@ -50,6 +50,15 @@ class BridgeSettings(BaseSettings):
     claude_max_budget_usd: float = 0.50
     claude_cli_timeout_seconds: int = 280
 
+    # Cost-optimization mission Phase 4: escalation policy for the
+    # low-effort default. A log-triage-summary result that fails structural
+    # checks, comes back with confidence below this threshold, or reports
+    # `severity_signal: critical` with borderline confidence, is retried
+    # once at `claude_effort_escalation` (see sandbox/entrypoint.py's
+    # `_escalation_reason` / `_EFFORT_RANK` for the exact rule).
+    claude_effort_escalation: str = "medium"
+    claude_escalation_confidence_threshold: float = 0.55
+
     # Cost follow-up (~/claude-cli-bridge-notes): entrypoint.py's
     # compaction defaults, made tunable here rather than baked into the
     # sandbox image. Lowered from 300000/60 — a smaller prompt is the

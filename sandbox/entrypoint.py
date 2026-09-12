@@ -277,30 +277,16 @@ def _compact_log_if_oversized(input_text: str) -> str:
     return "\n".join(parts)
 
 
-def run_skill(input_text: str, skill_name: str) -> dict:
-    skill_path = SKILLS_DIR / skill_name / "SKILL.md"
-    if not skill_path.exists():
-        raise FileNotFoundError(f"skill not found: {skill_path}")
-    skill_md = skill_path.read_text()
+# Phase 4 (effort escalation): ordering used to decide whether escalating
+# from `effort` to the configured escalation tier is actually an increase
+# (never escalate "up" to the same or a lower tier — that would either be a
+# no-op retry or a silent downgrade, and either way risks a retry loop).
+_EFFORT_RANK = {"low": 0, "medium": 1, "high": 2}
 
-    schema = _SCHEMAS.get(skill_name)
-    if schema is None:
-        raise ValueError(f"no output schema registered for skill: {skill_name}")
 
-    _, intro = _INPUT_FILE_BY_SKILL[skill_name]
-    if skill_name == "log-triage-summary":
-        input_text = _compact_log_if_oversized(input_text)
-    prompt = (
-        f"{skill_md}\n\n"
-        "---\n\n"
-        f"{intro}\n\n"
-        f"{input_text}\n"
-    )
-
-    model = os.environ.get("SKILL_MODEL", "claude-sonnet-5")
-    effort = os.environ.get("SKILL_EFFORT", "medium")
-    max_budget = os.environ.get("SKILL_MAX_BUDGET_USD", "0.50")
-
+def _invoke_claude(prompt: str, *, schema: dict, model: str, effort: str, max_budget: str) -> tuple[dict, dict]:
+    """Runs the `claude` CLI once and returns (result, envelope). Raises on
+    a CLI-level failure (nonzero exit) or an unparseable/non-dict result."""
     cmd = [
         CLAUDE_BINARY,
         "-p",
@@ -359,6 +345,7 @@ def run_skill(input_text: str, skill_name: str) -> dict:
     if isinstance(envelope, dict):
         print(
             "claude CLI usage: "
+            f"model={model!r} effort={effort!r} "
             f"cost_usd={envelope.get('total_cost_usd')!r} "
             f"duration_ms={envelope.get('duration_ms')!r} "
             f"num_turns={envelope.get('num_turns')!r} "
@@ -374,6 +361,77 @@ def run_skill(input_text: str, skill_name: str) -> dict:
 
     if not isinstance(result, dict):
         raise ValueError(f"unexpected claude CLI result shape: {result!r}")
+
+    return result, (envelope if isinstance(envelope, dict) else {})
+
+
+def _escalation_reason(result: dict) -> str | None:
+    """Phase 4 escalation triggers, checked against a low-effort analysis
+    result. Only applies to skills whose schema carries `confidence`/
+    `severity_signal` at the top level (log-triage-summary); daily-report's
+    cross-incident section has no per-run confidence of its own, so it's
+    never escalated here. Returns a short human-readable reason, or None if
+    the low-effort result looks sufficient."""
+    confidence = result.get("confidence")
+    if not isinstance(confidence, (int, float)):
+        return "invalid structured output: missing/invalid confidence field"
+    if not result.get("key_finds"):
+        return "invalid structured output: empty key_finds"
+
+    threshold = float(os.environ.get("SKILL_ESCALATION_CONFIDENCE_THRESHOLD", "0.55"))
+    if confidence < threshold:
+        return f"confidence {confidence:.2f} below threshold {threshold:.2f}"
+
+    # "critical ambiguity": a critical severity call the model itself isn't
+    # very sure about is exactly the case worth a second, deeper look.
+    if result.get("severity_signal") == "critical" and confidence < 0.75:
+        return f"critical severity_signal with borderline confidence {confidence:.2f}"
+
+    return None
+
+
+def run_skill(input_text: str, skill_name: str) -> dict:
+    skill_path = SKILLS_DIR / skill_name / "SKILL.md"
+    if not skill_path.exists():
+        raise FileNotFoundError(f"skill not found: {skill_path}")
+    skill_md = skill_path.read_text()
+
+    schema = _SCHEMAS.get(skill_name)
+    if schema is None:
+        raise ValueError(f"no output schema registered for skill: {skill_name}")
+
+    _, intro = _INPUT_FILE_BY_SKILL[skill_name]
+    if skill_name == "log-triage-summary":
+        input_text = _compact_log_if_oversized(input_text)
+    prompt = (
+        f"{skill_md}\n\n"
+        "---\n\n"
+        f"{intro}\n\n"
+        f"{input_text}\n"
+    )
+
+    model = os.environ.get("SKILL_MODEL", "claude-sonnet-5")
+    # Phase 4 (cost optimization): default to the cheapest effort tier for
+    # every job; escalate to a higher tier only when the low-effort result
+    # itself signals it isn't good enough (see _escalation_reason).
+    effort = os.environ.get("SKILL_EFFORT", "low")
+    escalation_effort = os.environ.get("SKILL_EFFORT_ESCALATION", "medium")
+    max_budget = os.environ.get("SKILL_MAX_BUDGET_USD", "0.50")
+
+    result, _ = _invoke_claude(prompt, schema=schema, model=model, effort=effort, max_budget=max_budget)
+
+    if (
+        skill_name == "log-triage-summary"
+        and _EFFORT_RANK.get(effort, 0) < _EFFORT_RANK.get(escalation_effort, 1)
+    ):
+        reason = _escalation_reason(result)
+        if reason:
+            print(f"ai.escalated: reason={reason!r} from={effort!r} to={escalation_effort!r}", file=sys.stderr)
+            # A single, bounded retry at the higher tier — never recurses,
+            # so there's no possibility of an escalation loop.
+            result, _ = _invoke_claude(
+                prompt, schema=schema, model=model, effort=escalation_effort, max_budget=max_budget
+            )
 
     return result
 

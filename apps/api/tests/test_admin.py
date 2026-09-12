@@ -218,7 +218,7 @@ def test_get_system_config_seeded_defaults(client, db_session, seeded):
     assert resp.status_code == 200
     body = resp.json()
     assert body["default_model"] == "claude-sonnet-5"
-    assert body["default_effort"] == "medium"
+    assert body["default_effort"] == "low"
     assert body["job_timeout_seconds"] == 300
     assert body["max_concurrent_jobs"] == 1
 

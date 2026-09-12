@@ -66,7 +66,10 @@ _SYSTEM_CONFIG_ID = "00000000-0000-0000-0000-000000000001"
 
 _SYSTEM_CONFIG_DEFAULTS = {
     "default_model": "claude-sonnet-5",
-    "default_effort": "medium",
+    # Cost-optimization mission Phase 4: low effort by default, escalated
+    # per-job by the sandbox entrypoint when warranted (see
+    # sandbox/entrypoint.py::_escalation_reason).
+    "default_effort": "low",
     "job_timeout_seconds": 300,
     "max_concurrent_jobs": 1,
 }
