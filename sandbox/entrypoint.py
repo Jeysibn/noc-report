@@ -178,6 +178,25 @@ def _signature(line: str) -> str:
     return sig
 
 
+# Cost-optimization mission, Phase 5 fix: frequency-only ranking silently
+# dropped rare-but-critical patterns (e.g. one OutOfMemoryError buried under
+# 80,000 WARN retries never made it into the top MAX_PATTERN_GROUPS and was
+# never sent to Claude at all). Severity is now a second, independent
+# selection dimension: any pattern whose line matches one of these markers
+# is always kept, regardless of how it ranks by frequency. This mirrors the
+# "never use frequency alone" rule — frequency and severity are separate
+# axes, not one ranking.
+_SEVERITY_MARKERS = re.compile(
+    r"\b(FATAL|OutOfMemoryError|OOM|StackOverflowError|SecurityException|"
+    r"DataLoss|data\s*loss|corrupt(?:ion|ed)?|Deadlock|panic)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_severe(line: str) -> bool:
+    return bool(_SEVERITY_MARKERS.search(line))
+
+
 def _extract_lines(input_text: str) -> list[str]:
     """log.txt is usually a JSON array of {"line": ...} evidence entries
     (per app.models.models.Evidence's LOG upload shape); fall back to
@@ -207,10 +226,24 @@ def _compact_log_if_oversized(input_text: str) -> str:
             groups[sig].append(line)
 
     counts = {sig: 0 for sig in order}
+    severe = {sig: False for sig in order}
     for line in lines:
-        counts[_signature(line)] += 1
+        sig = _signature(line)
+        counts[sig] += 1
+        if not severe[sig] and _is_severe(line):
+            severe[sig] = True
 
     ranked = sorted(order, key=lambda sig: counts[sig], reverse=True)
+
+    # Selection: top-by-frequency patterns, PLUS every severe pattern that
+    # frequency-ranking alone would have excluded (rare severe patterns are
+    # rare precisely because they're rare — that's not a reason to drop
+    # them; see _SEVERITY_MARKERS above).
+    by_frequency = ranked[:MAX_PATTERN_GROUPS]
+    frequency_set = set(by_frequency)
+    rare_severe = [sig for sig in ranked if severe[sig] and sig not in frequency_set]
+    shown = by_frequency + rare_severe
+    shown_set = set(shown)
 
     parts = [
         f"[This log was too large to include verbatim ({len(input_text):,} characters, "
@@ -218,18 +251,27 @@ def _compact_log_if_oversized(input_text: str) -> str:
         f"lines (same error, different request id/timestamp/etc) are collapsed to one or "
         f"two representative examples plus an exact occurrence count computed over the "
         f"full log — {len(order):,} distinct patterns found. Use these counts directly for "
-        f"any count/percentage fields; they are exact, not estimates.]\n"
+        f"any count/percentage fields; they are exact, not estimates. Patterns marked "
+        f"'SEVERE' were kept regardless of frequency because they matched a critical-"
+        f"severity marker (OOM, FATAL, data loss, corruption, deadlock, etc) — treat them "
+        f"as important even if their count is low.]\n"
     ]
-    shown = ranked[:MAX_PATTERN_GROUPS]
-    for sig in shown:
+    for sig in by_frequency:
         examples = groups[sig]
-        parts.append(f"--- pattern occurs {counts[sig]:,} time(s) ---")
+        tag = " [SEVERE]" if severe[sig] else ""
+        parts.append(f"--- pattern occurs {counts[sig]:,} time(s){tag} ---")
         parts.extend(examples)
-    omitted = ranked[MAX_PATTERN_GROUPS:]
+    if rare_severe:
+        parts.append("--- additional rare but severe patterns (excluded from top-frequency list) ---")
+        for sig in rare_severe:
+            examples = groups[sig]
+            parts.append(f"--- pattern occurs {counts[sig]:,} time(s) [SEVERE] ---")
+            parts.extend(examples)
+    omitted = [sig for sig in ranked if sig not in shown_set]
     if omitted:
         omitted_lines = sum(counts[sig] for sig in omitted)
         parts.append(
-            f"--- {len(omitted):,} additional low-frequency pattern(s) not shown "
+            f"--- {len(omitted):,} additional low-frequency, non-severe pattern(s) not shown "
             f"({omitted_lines:,} lines total) ---"
         )
     return "\n".join(parts)
