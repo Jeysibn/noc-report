@@ -1,0 +1,51 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: noc-report-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: noc
+      POSTGRES_PASSWORD: noc
+      POSTGRES_DB: noc_report
+    ports:
+      # Host port chosen to avoid colliding with other projects' default
+      # 5432 instances already running on this machine.
+      - "55432:5432"
+    volumes:
+      - noc-report-postgres-data:/var/lib/postgresql/data
+
+  minio:
+    image: minio/minio:latest
+    container_name: noc-report-minio
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: noc-minio
+      MINIO_ROOT_PASSWORD: noc-minio-secret
+    command: server /data --console-address ":9091"
+    ports:
+      # Host ports chosen to avoid colliding with other projects' default
+      # 9000/9001 MinIO instances already running on this machine.
+      - "59000:9000"
+      - "59091:9091"
+    volumes:
+      - noc-report-minio-data:/data
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: noc-report-rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: noc
+      RABBITMQ_DEFAULT_PASS: noc-rabbit-secret
+    ports:
+      # Host ports chosen to avoid colliding with other projects' default
+      # 5672/15672 RabbitMQ instances already running on this machine.
+      - "55672:5672"
+      - "55673:15672"
+    volumes:
+      - noc-report-rabbitmq-data:/var/lib/rabbitmq
+
+volumes:
+  noc-report-postgres-data:
+  noc-report-minio-data:
+  noc-report-rabbitmq-data:

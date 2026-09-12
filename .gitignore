@@ -1,0 +1,15 @@
+node_modules/
+dist/
+build/
+coverage/
+.env
+.env.local
+*.log
+.DS_Store
+.vscode/
+apps/api/.venv/
+apps/api/__pycache__/
+bridge/noc_bridge/__pycache__/
+**/__pycache__/
+*.py[cod]
+apps/web/tsconfig.tsbuildinfo

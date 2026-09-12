@@ -1,0 +1,100 @@
+import io
+from datetime import datetime, timezone
+
+import httpx
+from PIL import Image, ImageDraw
+
+from tests.conftest import auth_headers, make_user
+
+
+def _make_alert_screenshot_bytes() -> bytes:
+    img = Image.new("RGB", (500, 120), "white")
+    draw = ImageDraw.Draw(img)
+    draw.text((10, 15), "AppService Error Rate High", fill="black")
+    draw.text((10, 55), "Triggered 09:31:22", fill="black")
+    draw.text((10, 90), "Trigger value 193K", fill="black")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _create_incident_with_uploaded_evidence(client, headers) -> tuple[str, str]:
+    incident = client.post(
+        "/api/v1/incidents",
+        json={
+            "title": "AppService error spike",
+            "service": "app-service",
+            "environment": "production",
+            "triggered_at": datetime.now(timezone.utc).isoformat(),
+        },
+        headers=headers,
+    ).json()
+
+    upload_req = client.post(
+        f"/api/v1/incidents/{incident['id']}/evidence/upload-url",
+        json={"evidence_type": "ALERT_SCREENSHOT", "filename": "alert.png", "content_type": "image/png"},
+        headers=headers,
+    ).json()
+
+    httpx.put(
+        upload_req["upload_url"],
+        content=_make_alert_screenshot_bytes(),
+        headers={"Content-Type": "image/png"},
+    )
+
+    evidence = client.post(
+        f"/api/v1/incidents/{incident['id']}/evidence/complete",
+        json={
+            "evidence_type": "ALERT_SCREENSHOT",
+            "bucket": upload_req["bucket"],
+            "object_key": upload_req["object_key"],
+            "original_filename": "alert.png",
+            "mime_type": "image/png",
+        },
+        headers=headers,
+    ).json()
+
+    return incident["id"], evidence["id"]
+
+
+def test_ocr_extracts_real_text_from_screenshot(client, db_session):
+    make_user(db_session, "operator1", "NOC")
+    headers = auth_headers(client, "operator1")
+    _, evidence_id = _create_incident_with_uploaded_evidence(client, headers)
+
+    resp = client.post(f"/api/v1/evidence/{evidence_id}/ocr", headers=headers)
+    assert resp.status_code == 201
+    run = resp.json()
+    assert run["status"] == "REVIEW_REQUIRED"
+    assert run["engine"] == "paddleocr"
+    assert "AppService Error Rate High" in run["raw_text"]
+
+    fields = run["extracted_json"]["fields"]
+    assert "alert_title" in fields
+    assert fields["alert_title"]["confidence"] > 0.5
+    assert "triggered_at" in fields
+    assert fields["triggered_at"]["value"] == "09:31:22"
+    assert "trigger_value" in fields
+    assert fields["trigger_value"]["value"].upper().replace(" ", "") == "193K"
+
+
+def test_get_ocr_run(client, db_session):
+    make_user(db_session, "operator1", "NOC")
+    headers = auth_headers(client, "operator1")
+    _, evidence_id = _create_incident_with_uploaded_evidence(client, headers)
+
+    created = client.post(f"/api/v1/evidence/{evidence_id}/ocr", headers=headers).json()
+
+    fetched = client.get(f"/api/v1/ocr-runs/{created['id']}", headers=headers)
+    assert fetched.status_code == 200
+    assert fetched.json()["id"] == created["id"]
+
+
+def test_ocr_on_missing_evidence_404(client, db_session):
+    make_user(db_session, "operator1", "NOC")
+    headers = auth_headers(client, "operator1")
+
+    resp = client.post(
+        "/api/v1/evidence/00000000-0000-0000-0000-000000000000/ocr", headers=headers
+    )
+    assert resp.status_code == 404

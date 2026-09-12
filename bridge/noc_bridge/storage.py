@@ -1,0 +1,64 @@
+"""MinIO download/upload + checksum validation (master plan §27 steps
+5-6, 14; ADR-004 — the bridge is where object references from a job
+message actually turn into bytes).
+"""
+from __future__ import annotations
+
+import hashlib
+import pathlib
+
+import boto3
+from botocore.client import Config as BotoConfig
+
+from noc_bridge.config import BridgeSettings
+
+
+def get_client(settings: BridgeSettings):
+    return boto3.client(
+        "s3",
+        endpoint_url=settings.minio_endpoint_url,
+        aws_access_key_id=settings.minio_access_key,
+        aws_secret_access_key=settings.minio_secret_key,
+        config=BotoConfig(signature_version="s3v4"),
+    )
+
+
+def sha256_of_file(path: pathlib.Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(65536), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+class ChecksumMismatch(RuntimeError):
+    pass
+
+
+def download_object(
+    client, *, bucket: str, object_key: str, dest_path: pathlib.Path, expected_sha256: str | None
+) -> None:
+    """§27 step 5-6: download then validate checksum before the sandbox ever
+    sees the file — a corrupted/tampered object must never reach the
+    container."""
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    client.download_file(bucket, object_key, str(dest_path))
+
+    if expected_sha256:
+        actual = sha256_of_file(dest_path)
+        if actual != expected_sha256:
+            raise ChecksumMismatch(
+                f"{bucket}/{object_key}: expected sha256 {expected_sha256}, got {actual}"
+            )
+
+
+def upload_artifact(
+    client, *, bucket: str, object_key: str, src_path: pathlib.Path, content_type: str = "application/json"
+) -> str:
+    """§27 step 14: upload the sandbox's structured output to
+    `noc-job-artifacts`. Returns the sha256 of the uploaded bytes so the
+    caller can record it alongside the job."""
+    client.upload_file(
+        str(src_path), bucket, object_key, ExtraArgs={"ContentType": content_type}
+    )
+    return sha256_of_file(src_path)

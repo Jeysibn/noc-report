@@ -1,0 +1,73 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Command Deck design tokens — see the vault's
+ * "03 Frontend/UI Phase Plan.md" § Design direction for the source palette.
+ * Light theme is the default (bare :root); dark tokens redefine the same
+ * names so components never branch on theme, only read tokens.
+ */
+:root {
+  --color-navy: #141a33;
+  --color-navy-hover: #1c2444;
+  --color-accent: #2f5fe0;
+  --color-accent-hover: #2850c2;
+  --color-ground: #eef1f8;
+  --color-surface: #ffffff;
+  --color-border: #dfe4f0;
+  --color-ink: #10152b;
+  --color-muted: #5b6485;
+
+  --color-good: #16a34a;
+  --color-good-tint: #e3f6ea;
+  --color-warning: #d97706;
+  --color-warning-tint: #fdf0dc;
+  --color-critical: #dc2626;
+  --color-critical-tint: #fbe4e4;
+  --color-info: #2563eb;
+  --color-info-tint: #e2eafd;
+  --color-neutral: #94a3b8;
+  --color-neutral-tint: #eef1f5;
+}
+
+:root[data-theme="dark"] {
+  --color-navy: #0b0e1e;
+  --color-navy-hover: #141a33;
+  --color-accent: #5b82f2;
+  --color-accent-hover: #7396f5;
+  --color-ground: #0f1324;
+  --color-surface: #171c33;
+  --color-border: #2a3155;
+  --color-ink: #eef1f8;
+  --color-muted: #9aa3c7;
+
+  --color-good: #34d17a;
+  --color-good-tint: #113322;
+  --color-warning: #f0a63e;
+  --color-warning-tint: #3a2a10;
+  --color-critical: #f0605a;
+  --color-critical-tint: #3a1616;
+  --color-info: #5b8cf5;
+  --color-info-tint: #16233f;
+  --color-neutral: #7c88a8;
+  --color-neutral-tint: #232a44;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: var(--color-ground);
+  color: var(--color-ink);
+  font-family: "Inter", system-ui, -apple-system, sans-serif;
+}
+
+.font-data {
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
+  font-variant-numeric: tabular-nums;
+}
