@@ -137,6 +137,33 @@ def test_materialize_snapshot_raises_terminal_error_when_snapshot_missing(tmp_pa
         materialize_snapshot(conn, "log-triage-summary", "some-hash", dest_root=tmp_path)
 
 
+def test_materialize_snapshot_grants_sandbox_uid_read_access(tmp_path):
+    """Regression test: dest_root is normally a fresh
+    tempfile.TemporaryDirectory (0700, host-user-only), which alone blocks
+    the sandbox's fixed non-root uid (10001) from reading anything under
+    it once bind-mounted read-only at /skills — regardless of skill_dir's
+    or the individual files' own modes. materialize_snapshot must widen
+    exactly the "other" bits needed (traverse+list on both directories,
+    read on each file) and grant no "group" bit."""
+    import stat
+
+    conn = _FakeConn(_FAKE_SNAPSHOT_ROW)
+    dest_root = tmp_path / "job-scratch"
+    dest_root.mkdir(mode=0o700)
+
+    materialize_snapshot(conn, "log-triage-summary", "abc123", dest_root=dest_root)
+
+    skill_dir = dest_root / "log-triage-summary"
+
+    def mode(path):
+        return stat.S_IMODE(path.stat().st_mode)
+
+    assert mode(dest_root) == 0o705
+    assert mode(skill_dir) == 0o705
+    for filename in ("SKILL.md", "output.schema.json", "skill.yaml"):
+        assert mode(skill_dir / filename) == 0o604
+
+
 def test_classify_failure_treats_missing_snapshot_as_terminal():
     from noc_bridge.failures import TERMINAL, classify_failure
 

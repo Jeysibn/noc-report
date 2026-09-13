@@ -111,4 +111,17 @@ def materialize_snapshot(conn, skill_name: str, content_hash: str, *, dest_root:
     (skill_dir / _PROMPT_FILENAME).write_text(snapshot["skill_md"])
     (skill_dir / _SCHEMA_FILENAME).write_text(snapshot["output_schema_json"])
     (skill_dir / _MANIFEST_FILENAME).write_text(snapshot["manifest_yaml"])
+
+    # dest_root is normally a fresh tempfile.TemporaryDirectory, which
+    # defaults to 0700 (host-user-only) — that alone blocks the sandbox's
+    # fixed non-root uid (10001, §28) from even traversing into it once
+    # bind-mounted read-only at /skills, regardless of skill_dir's or the
+    # files' own modes. Same reasoning as
+    # sandbox_runner.py::_grant_sandbox_uid_access: grant only the
+    # "other" bits actually needed to read (traverse+list on the two
+    # directories, read on the three files), zero "group" bits.
+    dest_root.chmod(0o705)
+    skill_dir.chmod(0o705)
+    for filename in (_PROMPT_FILENAME, _SCHEMA_FILENAME, _MANIFEST_FILENAME):
+        (skill_dir / filename).chmod(0o604)
     return dest_root
