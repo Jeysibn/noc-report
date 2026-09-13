@@ -8,6 +8,7 @@ rather than a normal import.
 from __future__ import annotations
 
 import importlib.util
+import json
 import pathlib
 
 import pytest
@@ -183,3 +184,45 @@ def test_run_skill_appends_deterministic_grounding_for_a_small_log(monkeypatch, 
 
     assert "exact, not estimates" in seen["prompt"]
     assert "occurs 5 time(s)" in seen["prompt"]
+
+
+# --- Skill Runtime mission Phase 20: prove a brand-new skill with a wholly
+# different output shape runs end-to-end through run_skill with zero
+# entrypoint.py changes — schema, prompt intro, and input contract all come
+# from files under the skill's own directory, never a hard-coded Python
+# shape (Phase 3/4). ---
+
+
+def test_run_skill_handles_a_synthetic_skill_with_an_unrelated_output_shape(monkeypatch, tmp_path):
+    seen = {}
+
+    def _fake_invoke_claude(prompt, *, schema, model, effort, max_budget):
+        seen["schema"] = schema
+        # A shape that shares nothing with log-triage-summary or
+        # daily-alert-report's schemas (no "summary", no "sections", no
+        # bilingual _en/_zh pairs at all) — proves the sandbox imposes no
+        # assumed structure of its own.
+        return {"widgets": [{"widget_id": "w1", "count": 3}], "total_widgets": 3}, {}
+
+    monkeypatch.setattr(entrypoint, "_invoke_claude", _fake_invoke_claude)
+    monkeypatch.setattr(entrypoint, "_load_input_contract", lambda skill_name: ("input.txt", "intro"))
+    monkeypatch.setattr(entrypoint, "_escalation_reason", lambda result: None)
+
+    skill_dir = tmp_path / "widget-counter"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text("count the widgets")
+    synthetic_schema = {
+        "type": "object",
+        "required": ["widgets", "total_widgets"],
+        "properties": {
+            "widgets": {"type": "array"},
+            "total_widgets": {"type": "integer"},
+        },
+    }
+    (skill_dir / "output.schema.json").write_text(json.dumps(synthetic_schema))
+    monkeypatch.setattr(entrypoint, "SKILLS_DIR", tmp_path)
+
+    result, _telemetry = entrypoint.run_skill("some widgets: a, b, c", "widget-counter")
+
+    assert seen["schema"] == synthetic_schema
+    assert result == {"widgets": [{"widget_id": "w1", "count": 3}], "total_widgets": 3}
