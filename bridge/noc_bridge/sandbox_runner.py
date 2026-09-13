@@ -9,6 +9,7 @@ Milestone 12 concerns, out of scope for the Milestone 0.5 spike.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 import pathlib
 import tempfile
@@ -19,6 +20,7 @@ from docker.types import Ulimit
 
 SANDBOX_IMAGE = "noc-sandbox:spike"
 SANDBOX_DOCKERFILE_DIR = pathlib.Path(__file__).resolve().parents[2] / "sandbox"
+_BUILD_HASH_LABEL = "noc.sandbox.build_context_sha256"
 
 # Conceptual limits from master plan §28.
 CPU_LIMIT_NANO_CPUS = 2_000_000_000  # 2 CPUs
@@ -60,15 +62,49 @@ def _grant_sandbox_uid_access(input_dir: pathlib.Path, output_dir: pathlib.Path)
     output_dir.chmod(0o703)
 
 
+def _build_context_hash() -> str:
+    """sha256 over every file in the sandbox build context (currently just
+    `Dockerfile` and `entrypoint.py` — see SANDBOX_DOCKERFILE_DIR), each
+    length-prefixed in a fixed (sorted-by-relative-path) order. Used as an
+    image label so `ensure_image_built` can tell a real content change
+    (e.g. entrypoint.py picking up a new mission's code) apart from "the
+    image already exists" — the two were conflated before, which silently
+    ran an ever-more-stale entrypoint.py against every job until something
+    forced a manual rebuild."""
+    digest = hashlib.sha256()
+    paths = sorted(
+        p for p in SANDBOX_DOCKERFILE_DIR.rglob("*")
+        if p.is_file() and "__pycache__" not in p.parts and "tests" not in p.parts
+    )
+    for path in paths:
+        contents = path.read_bytes()
+        rel = str(path.relative_to(SANDBOX_DOCKERFILE_DIR)).encode()
+        digest.update(len(rel).to_bytes(8, "big"))
+        digest.update(rel)
+        digest.update(len(contents).to_bytes(8, "big"))
+        digest.update(contents)
+    return digest.hexdigest()
+
+
 def ensure_image_built(client: docker.DockerClient) -> None:
+    """Rebuilds `SANDBOX_IMAGE` whenever its build context (Dockerfile,
+    entrypoint.py) has changed since the last build, not only when the
+    image is entirely missing — a stale image previously ran an
+    out-of-date entrypoint.py against every job indefinitely, since
+    nothing ever invalidated it."""
+    current_hash = _build_context_hash()
     try:
-        client.images.get(SANDBOX_IMAGE)
+        image = client.images.get(SANDBOX_IMAGE)
+        if image.labels.get(_BUILD_HASH_LABEL) == current_hash:
+            return
     except ImageNotFound:
-        client.images.build(
-            path=str(SANDBOX_DOCKERFILE_DIR),
-            tag=SANDBOX_IMAGE,
-            rm=True,
-        )
+        pass
+    client.images.build(
+        path=str(SANDBOX_DOCKERFILE_DIR),
+        tag=SANDBOX_IMAGE,
+        rm=True,
+        labels={_BUILD_HASH_LABEL: current_hash},
+    )
 
 
 def run_job_sandbox(
