@@ -8,9 +8,13 @@ PaddleOCR): no mocked broker.
 import json
 import uuid
 
+import jsonschema
+import pytest
+
 from app.core.queue import (
     JOB_TYPES,
     _queue_names,
+    build_job_message,
     declare_topology,
     get_connection,
     publish_job,
@@ -260,3 +264,51 @@ def test_dlq_requeue_and_purge(client, db_session):
 
     unknown_resp = client.post("/api/v1/admin/dlq/not_a_real_type/requeue", headers=headers)
     assert unknown_resp.status_code == 404
+
+
+# -- Skill Runtime mission Phase 14: canonical job message protocol --------
+
+
+def test_build_job_message_produces_a_schema_valid_message():
+    message = build_job_message(
+        job_id=uuid.uuid4(),
+        job_type="log_triage",
+        incident_id="INC-1001",
+        object_refs=[{"bucket": "noc-evidence", "key": "a.log"}],
+        model="claude-sonnet-5",
+        effort="medium",
+        skill_name="log-triage-summary",
+        skill_version="1",
+        correlation_id="corr-1",
+    )
+    # build_job_message itself validates before returning (Phase 14) --
+    # this just proves the resulting shape also matches the same schema
+    # the bridge validates incoming deliveries against, i.e. the two sides
+    # genuinely share one contract rather than two hand-kept-in-sync ones.
+    from app.core.queue import _job_message_schema
+
+    jsonschema.validate(message, _job_message_schema)
+
+
+def test_build_job_message_rejects_a_message_missing_a_required_field(monkeypatch):
+    """A producer-side bug that drifts from the protocol (here: simulated
+    by monkeypatching the schema to require a field build_job_message never
+    sets) must fail loudly at build time, not silently publish a malformed
+    message for the bridge to choke on later."""
+    import app.core.queue as queue_module
+
+    broken_schema = {**queue_module._job_message_schema, "required": ["job_id", "not_a_real_field"]}
+    monkeypatch.setattr(queue_module, "_job_message_schema", broken_schema)
+
+    with pytest.raises(jsonschema.ValidationError):
+        build_job_message(
+            job_id=uuid.uuid4(),
+            job_type="log_triage",
+            incident_id=None,
+            object_refs=[],
+            model="claude-sonnet-5",
+            effort="medium",
+            skill_name="log-triage-summary",
+            skill_version="1",
+            correlation_id="corr-1",
+        )

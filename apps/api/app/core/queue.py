@@ -21,13 +21,25 @@ file bytes.
 """
 
 import json
+import pathlib
 import uuid
 from datetime import datetime, timezone
 
+import jsonschema
 import pika
 from pika.exchange_type import ExchangeType
 
 from app.core.config import settings
+
+# Skill Runtime mission Phase 14: the job message protocol's single source
+# of truth is this schema file, shared with the bridge (which validates the
+# same file against its own incoming payloads in
+# bridge/noc_bridge/service.py) rather than each side's shape living only
+# in Python code kept in sync by hand.
+_JOB_MESSAGE_SCHEMA_PATH = (
+    pathlib.Path(__file__).resolve().parents[4] / "packages" / "contracts" / "job_message.schema.json"
+)
+_job_message_schema = json.loads(_JOB_MESSAGE_SCHEMA_PATH.read_text())
 
 JOB_TYPES = ["log_triage", "daily_report"]
 
@@ -86,7 +98,7 @@ def build_job_message(
     for callers that haven't been updated to pass it (tests, tooling)."""
     if job_type not in JOB_TYPES:
         raise ValueError(f"Unknown job_type: {job_type}")
-    return {
+    message = {
         "job_id": str(job_id),
         "job_type": job_type,
         "incident_id": incident_id,
@@ -99,6 +111,13 @@ def build_job_message(
         "correlation_id": correlation_id,
         "attempt": attempt,
     }
+    # Skill Runtime mission Phase 14: validate against the canonical
+    # protocol schema before it's ever persisted into an OutboxEvent.payload
+    # or published — a producer-side bug that drifts from the protocol is
+    # caught here, at message-build time, rather than surfacing later as a
+    # bridge-side KeyError deep inside job processing.
+    jsonschema.validate(message, _job_message_schema)
+    return message
 
 
 def get_connection() -> pika.BlockingConnection:

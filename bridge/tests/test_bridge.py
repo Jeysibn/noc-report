@@ -213,6 +213,60 @@ def test_validate_output_rejects_unknown_skill_missing_schema(tmp_path):
         validate_output("something_unknown", {"a": 1}, skill_name="nonexistent-skill", skills_dir=tmp_path)
 
 
+# -- Skill Runtime mission Phase 14: canonical job message protocol --------
+
+
+def test_handle_delivery_routes_a_malformed_message_to_dlq_without_crashing(pg_conn, mq_channel):
+    """A message missing a required protocol field (here: object_refs) must
+    be rejected at the top of _handle_delivery and routed to this
+    job_type's DLQ, acked -- never propagate out as an uncaught
+    jsonschema.ValidationError, which would otherwise crash the whole
+    consumer loop over one bad message."""
+    job_id = uuid.uuid4()
+    malformed_payload = {
+        "job_id": str(job_id),
+        "job_type": "log_triage",
+        "incident_id": None,
+        # object_refs deliberately omitted -- violates the canonical schema.
+        "model": "claude-sonnet-5",
+        "effort": "medium",
+        "skill_name": "log-triage-summary",
+        "skill_version": "1",
+        "skill_hash": None,
+        "correlation_id": str(uuid.uuid4()),
+        "attempt": 1,
+    }
+
+    names = queue_names("log_triage")
+    mq_channel.confirm_delivery()
+    mq_channel.basic_publish(
+        exchange="noc.jobs",
+        routing_key=names["routing_key"],
+        body=json.dumps(malformed_payload).encode("utf-8"),
+    )
+    method, properties, body = mq_channel.basic_get(names["main"])
+    assert method is not None
+
+    service = BridgeService(SETTINGS)
+    service._handle_delivery(
+        mq_channel,
+        method,
+        properties=properties,
+        body=body,
+        pg_conn=pg_conn,
+        minio_client=None,
+        job_type="log_triage",
+    )
+
+    # Nothing left on the main queue (it was acked), and the malformed
+    # message landed on the DLQ instead of being silently dropped or
+    # crashing the consumer.
+    assert mq_channel.basic_get(names["main"])[0] is None
+    dlq_method, _, dlq_body = mq_channel.basic_get(names["dlq"])
+    assert dlq_method is not None
+    assert json.loads(dlq_body)["job_id"] == str(job_id)
+
+
 # -- full pipeline: real RabbitMQ + Postgres + MinIO + Docker --------------
 
 
