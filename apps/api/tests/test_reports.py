@@ -116,6 +116,71 @@ def test_generate_report_freezes_snapshot_and_enqueues_real_job(client, db_sessi
     assert versions == [2, 1]
 
 
+def test_report_snapshot_carries_per_incident_analysis_provenance(client, db_session):
+    """Skill Runtime mission Phase 7: each incident row in the frozen
+    snapshot records exactly which AnalysisRun/SkillSnapshot/output
+    produced its analysis — not just the analysis content itself — so a
+    report can always be traced back to the exact skill version and raw
+    output that fed it."""
+    import uuid as _uuid
+
+    from app.api.v1.routers import analysis as analysis_router
+    from app.models.models import AnalysisRun, Job
+    from app.skills.registry import resolve_active_snapshot
+
+    make_user(db_session, "operator2", "NOC")
+    headers = auth_headers(client, "operator2")
+    shift = _create_active_shift(db_session)
+    incident_id = _create_incident(client, headers)
+
+    active_snapshot = resolve_active_snapshot(db_session, analysis_router.SKILL_NAME)
+    job = Job(
+        job_type="log_triage",
+        status="COMPLETED",
+        incident_id=_uuid.UUID(incident_id),
+        skill_name=analysis_router.SKILL_NAME,
+        skill_version=analysis_router.SKILL_VERSION,
+        skill_hash=active_snapshot.content_hash,
+        correlation_id=str(_uuid.uuid4()),
+        completed_at=datetime.now(timezone.utc),
+    )
+    db_session.add(job)
+    db_session.flush()
+    run = AnalysisRun(
+        incident_id=_uuid.UUID(incident_id),
+        job_id=job.id,
+        result_json={"summary_en": "x"},
+        skill_name=analysis_router.SKILL_NAME,
+        skill_version=analysis_router.SKILL_VERSION,
+        skill_hash=active_snapshot.content_hash,
+        skill_snapshot_id=active_snapshot.id,
+        output_sha256="a" * 64,
+        current=True,
+    )
+    db_session.add(run)
+    db_session.commit()
+
+    resp = client.post(
+        f"/api/v1/shifts/{shift.id}/reports",
+        json={"model": "claude-sonnet-5", "effort": "medium"},
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+
+    from app.models.models import ReportSnapshot
+
+    report_id = resp.json()["id"]
+    from app.models.models import Report
+
+    report = db_session.get(Report, _uuid.UUID(report_id))
+    snapshot = db_session.get(ReportSnapshot, report.snapshot_id)
+    row = next(i for i in snapshot.snapshot_json["incidents"] if i["id"] == incident_id)
+    assert row["analysis_run_id"] == str(run.id)
+    assert row["analysis_skill_snapshot_id"] == str(active_snapshot.id)
+    assert row["analysis_skill_hash"] == active_snapshot.content_hash
+    assert row["analysis_output_sha256"] == "a" * 64
+
+
 def test_poll_syncs_docx_once_job_completes_and_download_url_works(client, db_session):
     make_user(db_session, "operator1", "NOC")
     headers = auth_headers(client, "operator1")
