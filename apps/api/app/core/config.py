@@ -34,6 +34,15 @@ class Settings(BaseSettings):
     # Milestone 11 — RabbitMQ (master plan §26)
     rabbitmq_url: str = "amqp://noc:noc-rabbit-secret@localhost:55672/"
 
+    # Skill Runtime mission Phase 12: whether the outbox dispatcher runs as
+    # a background thread embedded in this API process ("embedded", the
+    # historical default — a dev convenience, see app/outbox_worker.py's
+    # docstring) or is left entirely to an external `python -m
+    # app.outbox_worker` process ("external"). A real deployment running
+    # its own dispatcher process should set this to "external" so it isn't
+    # also racing an embedded copy inside every API replica.
+    outbox_mode: str = "embedded"
+
     # Milestone 17 gap follow-up ("limits"): evidence uploads go straight
     # from the browser to MinIO via a presigned PUT URL (§25), so there's
     # no request body for the API to cap directly — this is enforced in
