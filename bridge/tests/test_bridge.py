@@ -393,6 +393,7 @@ def test_end_to_end_unsupported_job_type_goes_to_dlq(pg_conn, minio_client, mq_c
         "effort": "high",
         "skill_name": "not-a-real-skill",
         "skill_version": "1",
+        "skill_hash": None,
         "correlation_id": str(uuid.uuid4()),
         "attempt": 1,
     }
