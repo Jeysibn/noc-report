@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.audit import record_audit
 from app.db.session import get_db
 from app.deps import require_permission
-from app.models.models import AnalysisRun, Evidence, Incident, Job, OcrRun, Shift, User
+from app.models.models import AnalysisRun, Evidence, Incident, Job, OcrRun, OutboxEvent, Shift, User
 from app.schemas.schemas import (
     IncidentCreate,
     IncidentOut,
@@ -313,14 +313,22 @@ def delete_incident(
 
     # Deleting an incident with real evidence/jobs on it fails on FK
     # constraints (evidence.incident_id, jobs.incident_id, analysis_runs.*,
-    # ocr_runs.evidence_id) unless those dependent rows go first — nothing
-    # here is soft-deletable data worth keeping once the incident itself is
-    # gone, so this is a real cascading delete, not a workaround.
+    # ocr_runs.evidence_id, outbox_events.job_id) unless those dependent
+    # rows go first — nothing here is soft-deletable data worth keeping
+    # once the incident itself is gone, so this is a real cascading
+    # delete, not a workaround.
     evidence_ids = list(
         db.scalars(select(Evidence.id).where(Evidence.incident_id == incident_id))
     )
     if evidence_ids:
         db.execute(delete(OcrRun).where(OcrRun.evidence_id.in_(evidence_ids)))
+    job_ids = list(db.scalars(select(Job.id).where(Job.incident_id == incident_id)))
+    if job_ids:
+        # outbox_events.job_id FK (ADR 0006, added after this route was
+        # first written) blocks deleting a Job until its dispatch
+        # events are gone too — the outbox row's dispatch history has no
+        # meaning once the job it describes no longer exists.
+        db.execute(delete(OutboxEvent).where(OutboxEvent.job_id.in_(job_ids)))
     db.execute(delete(AnalysisRun).where(AnalysisRun.incident_id == incident_id))
     db.execute(delete(Evidence).where(Evidence.incident_id == incident_id))
     db.execute(delete(Job).where(Job.incident_id == incident_id))
