@@ -210,11 +210,14 @@ def _extract_lines(input_text: str) -> list[str]:
     return input_text.splitlines()
 
 
-def _compact_log_if_oversized(input_text: str) -> str:
-    if len(input_text) <= MAX_LOG_CHARS:
-        return input_text
-
-    lines = _extract_lines(input_text)
+def _pattern_stats(lines: list[str]) -> tuple[list[str], dict[str, list[str]], dict[str, int], dict[str, bool]]:
+    """Skill Runtime mission Phase 15: the deterministic core shared by
+    both the oversized-log compaction path and the always-on grounding
+    stats appended below — one exact pass over every line, grouped by
+    `_signature`, is computed exactly once regardless of which caller
+    needs it. Returns (pattern order of first appearance, up-to-2
+    representative example lines per pattern, exact occurrence count per
+    pattern, whether any line in that pattern matched a severity marker)."""
     groups: dict[str, list[str]] = {}
     order: list[str] = []
     for line in lines:
@@ -232,6 +235,16 @@ def _compact_log_if_oversized(input_text: str) -> str:
         counts[sig] += 1
         if not severe[sig] and _is_severe(line):
             severe[sig] = True
+
+    return order, groups, counts, severe
+
+
+def _compact_log_if_oversized(input_text: str) -> str:
+    if len(input_text) <= MAX_LOG_CHARS:
+        return input_text
+
+    lines = _extract_lines(input_text)
+    order, groups, counts, severe = _pattern_stats(lines)
 
     ranked = sorted(order, key=lambda sig: counts[sig], reverse=True)
 
@@ -274,6 +287,56 @@ def _compact_log_if_oversized(input_text: str) -> str:
             f"--- {len(omitted):,} additional low-frequency, non-severe pattern(s) not shown "
             f"({omitted_lines:,} lines total) ---"
         )
+    return "\n".join(parts)
+
+
+# Max distinct patterns listed in the always-on grounding appendix below —
+# deliberately small (a handful of lines), since below MAX_LOG_CHARS the
+# full raw log is still sent verbatim; this is only exact-count grounding
+# on top of it, not a replacement for it.
+MAX_GROUNDING_PATTERN_GROUPS = 15
+
+
+def _deterministic_stats_appendix(input_text: str) -> str | None:
+    """Skill Runtime mission Phase 15: before this, a log under
+    MAX_LOG_CHARS was sent to Claude with *no* deterministic extraction at
+    all — count/percentage fields in log-triage-summary's output for a
+    small log were pure model estimates, while the same fields for a large
+    (compacted) log were grounded in exact counts (see
+    `_compact_log_if_oversized`'s own prompt text: "Use these counts
+    directly ... they are exact, not estimates"). That inconsistency meant
+    accuracy of a finding's count/percentage depended on log size, which
+    has nothing to do with whether an exact count is knowable — it always
+    is, deterministically, from the raw lines.
+
+    This computes the same exact per-pattern counts/severity `_pattern_
+    stats` gives the oversized path, as a short appendix appended after
+    the (still verbatim, untruncated) raw log — never a replacement for
+    it. Returns None for an empty log (nothing to ground)."""
+    lines = _extract_lines(input_text)
+    if not lines:
+        return None
+
+    order, _groups, counts, severe = _pattern_stats(lines)
+    ranked = sorted(order, key=lambda sig: counts[sig], reverse=True)
+    shown = ranked[:MAX_GROUNDING_PATTERN_GROUPS]
+    # Same "never frequency alone" rule as the oversized path: a rare but
+    # severe pattern is always surfaced even if it would rank below the
+    # top-N by frequency.
+    for sig in ranked:
+        if severe[sig] and sig not in shown:
+            shown.append(sig)
+
+    parts = [
+        f"[Deterministic line-pattern counts over the full log above ({len(lines):,} "
+        f"lines, {len(order):,} distinct patterns) — exact, not estimates. Use these "
+        f"directly for any count/percentage fields whose pattern matches one below; "
+        f"'SEVERE' means a critical-severity marker (OOM, FATAL, data loss, corruption, "
+        f"deadlock, etc) was found in at least one occurrence.]"
+    ]
+    for sig in shown:
+        tag = " [SEVERE]" if severe[sig] else ""
+        parts.append(f"- occurs {counts[sig]:,} time(s){tag}: {sig}")
     return "\n".join(parts)
 
 
@@ -529,7 +592,15 @@ def run_skill(input_text: str, skill_name: str) -> tuple[dict, dict]:
     _, intro = _load_input_contract(skill_name)
     raw_input_bytes = len(input_text.encode("utf-8"))
     if skill_name == "log-triage-summary":
-        input_text = _compact_log_if_oversized(input_text)
+        if len(input_text) > MAX_LOG_CHARS:
+            input_text = _compact_log_if_oversized(input_text)
+        else:
+            # Skill Runtime mission Phase 15: even an under-the-limit log
+            # gets exact deterministic grounding now, not just an oversized
+            # one — see _deterministic_stats_appendix's own docstring.
+            appendix = _deterministic_stats_appendix(input_text)
+            if appendix:
+                input_text = f"{input_text}\n\n{appendix}"
     elif skill_name == "daily-alert-report":
         # AI cost-optimization mission Phase 2, Issue 6: send Claude only
         # the compact per-incident summaries (title/status/severity/main

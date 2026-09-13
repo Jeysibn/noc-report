@@ -127,3 +127,59 @@ def test_root_cause_stack_frame_is_preserved_through_compaction():
     compacted = entrypoint._compact_log_if_oversized(log_text)
     assert "LedgerWorker.flush" in compacted
     assert "LedgerWorker.java:88" in compacted
+
+
+# --- Skill Runtime mission Phase 15: deterministic grounding for logs that
+# never get compacted (previously: no deterministic extraction ran at all
+# below MAX_LOG_CHARS, so count/percentage fields for a small log were pure
+# model estimates while the same fields for a large log were exact). ---
+
+
+def test_deterministic_stats_appendix_reports_exact_counts_for_a_small_log():
+    log_text = "\n".join(
+        ["INFO request completed"] * 7 + ["WARN retry attempt for request"] * 3
+    )
+    appendix = entrypoint._deterministic_stats_appendix(log_text)
+    assert appendix is not None
+    assert "occurs 7 time(s)" in appendix
+    assert "occurs 3 time(s)" in appendix
+    assert "exact, not estimates" in appendix
+
+
+def test_deterministic_stats_appendix_flags_a_rare_severe_pattern():
+    log_text = "\n".join(
+        ["INFO request completed"] * 50 + ["FATAL OutOfMemoryError: heap space"]
+    )
+    appendix = entrypoint._deterministic_stats_appendix(log_text)
+    assert "[SEVERE]" in appendix
+    assert "OutOfMemoryError" in appendix
+
+
+def test_deterministic_stats_appendix_is_none_for_an_empty_log():
+    assert entrypoint._deterministic_stats_appendix("") is None
+
+
+def test_run_skill_appends_deterministic_grounding_for_a_small_log(monkeypatch, tmp_path):
+    """run_skill's log-triage-summary branch must append the grounding
+    appendix (not just compact when oversized) so a small log's prompt
+    still carries exact counts, never only the raw log."""
+    seen = {}
+
+    def _fake_invoke_claude(prompt, *, schema, model, effort, max_budget):
+        seen["prompt"] = prompt
+        return {"summary": "ok"}, {}
+
+    monkeypatch.setattr(entrypoint, "_invoke_claude", _fake_invoke_claude)
+    monkeypatch.setattr(entrypoint, "_load_output_schema", lambda skill_name: {})
+    monkeypatch.setattr(entrypoint, "_load_input_contract", lambda skill_name: ("log.txt", "intro"))
+    monkeypatch.setattr(entrypoint, "_escalation_reason", lambda result: None)
+    skill_dir = tmp_path / "log-triage-summary"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text("skill instructions")
+    monkeypatch.setattr(entrypoint, "SKILLS_DIR", tmp_path)
+
+    log_text = "\n".join(["INFO request completed"] * 5 + ["WARN retry attempt"] * 2)
+    entrypoint.run_skill(log_text, "log-triage-summary")
+
+    assert "exact, not estimates" in seen["prompt"]
+    assert "occurs 5 time(s)" in seen["prompt"]
