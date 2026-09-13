@@ -79,6 +79,41 @@ def _delete_job_row(pg_conn, job_id: uuid.UUID) -> None:
     pg_conn.commit()
 
 
+# -- Skill Runtime mission Phase 13: lease lifetime must cover the job's
+# own configured timeout, not a fixed value shorter than it -----------------
+
+
+def test_claim_lease_covers_configured_job_timeout_plus_safety_margin(pg_conn):
+    """service.py computes lease_seconds as system_config.job_timeout_seconds
+    + _LEASE_SAFETY_MARGIN_SECONDS before claiming (Phase 13) -- this proves
+    that computation, applied via the real db.claim_job, actually produces a
+    lease that outlives the configured timeout. Before Phase 13, the lease
+    was a fixed 600s regardless of job_timeout_seconds (which defaults to,
+    and skill.yaml's execution_policy sets, 900s) -- a job legitimately
+    still running past 600s could have its lease reclaimed out from under
+    it."""
+    from noc_bridge.service import _LEASE_SAFETY_MARGIN_SECONDS
+
+    config = db.load_system_config(pg_conn)
+    job_timeout_seconds = config["job_timeout_seconds"]
+
+    job_id = uuid.uuid4()
+    _insert_job_row(pg_conn, job_id, "log_triage")
+    try:
+        lease_seconds = job_timeout_seconds + _LEASE_SAFETY_MARGIN_SECONDS
+        claimed = db.claim_job(pg_conn, job_id, worker_id="test-worker", lease_seconds=lease_seconds)
+        assert claimed is not None
+
+        row = db.fetch_job_row(pg_conn, job_id)
+        lease_span = (row["lease_expires_at"] - row["claimed_at"]).total_seconds()
+        # Must be at least as long as the configured job timeout -- the bug
+        # this closes is a lease shorter than that.
+        assert lease_span >= job_timeout_seconds
+        assert lease_span == pytest.approx(lease_seconds, abs=2)
+    finally:
+        _delete_job_row(pg_conn, job_id)
+
+
 # -- storage: real MinIO round-trip ---------------------------------------
 
 
