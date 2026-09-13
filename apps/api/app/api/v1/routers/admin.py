@@ -451,14 +451,11 @@ def activate_skill_version(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("skill.manage")),
 ) -> SkillSnapshotOut:
-    """Phase 12: marks one snapshot version "active" for audit/bookkeeping
-    (see set_active_snapshot's docstring for exactly what this does and
-    does not control — it does not override what content a dispatched job
-    actually runs, which is always verified against current on-disk
-    content by the bridge)."""
+    """Atomically publish one validated immutable snapshot for new jobs.
+    Existing jobs retain their previously selected snapshot."""
     try:
         snapshot = set_active_snapshot(db, skill_name, version_label)
-    except SkillVersionNotFound as exc:
+    except (SkillVersionNotFound, ValueError) as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
 
     record_audit(

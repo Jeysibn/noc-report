@@ -249,6 +249,11 @@ class Job(Base):
     effort: Mapped[str | None] = mapped_column(String(20), nullable=True)
     skill_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     skill_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # Immutable execution contract selected when the job was created.  The
+    # display fields above remain for backwards-compatible reporting only.
+    skill_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("skill_snapshots.id"), nullable=True
+    )
     # Skill Registry (Reliability mission Batch B): the content hash of
     # the SkillSnapshot actually used for this row, computed by
     # app/skills/registry.py at enqueue time. skill_name/skill_version
@@ -387,6 +392,7 @@ class AnalysisRun(Base):
     skill_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("skill_snapshots.id"), nullable=True
     )
+    schema_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     input_manifest_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     output_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     current: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
@@ -474,6 +480,9 @@ class ReportSnapshot(Base):
     shift_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("shifts.id"), nullable=False)
     snapshot_json: Mapped[dict] = mapped_column(JSON, nullable=False)
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    skill_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("skill_snapshots.id"), nullable=True
+    )
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -500,6 +509,9 @@ class Report(Base):
     effort: Mapped[str | None] = mapped_column(String(20), nullable=True)
     skill_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     skill_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    skill_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("skill_snapshots.id"), nullable=True
+    )
     # Skill Registry (Reliability mission Batch B): the content hash of
     # the SkillSnapshot actually used for this row, computed by
     # app/skills/registry.py at enqueue time. skill_name/skill_version

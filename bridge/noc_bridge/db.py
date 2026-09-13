@@ -120,6 +120,21 @@ def claim_job(conn, job_id: uuid.UUID, *, worker_id: str, lease_seconds: int = D
     return dict(row) if row else None
 
 
+def renew_job_lease(conn, job_id: uuid.UUID, claim_token: str, *, lease_seconds: int) -> bool:
+    """Extend only the lease owned by this worker. A stale worker cannot
+    renew a reclaimed job because the claim token changes on every claim."""
+    now = datetime.now(timezone.utc)
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE jobs SET lease_expires_at = %(now)s + (%(seconds)s * interval '1 second') "
+            "WHERE id = %(job_id)s AND status = 'PROCESSING' AND claim_token = %(token)s",
+            {"now": now, "seconds": lease_seconds, "job_id": str(job_id), "token": claim_token},
+        )
+        renewed = cur.rowcount == 1
+    conn.commit()
+    return renewed
+
+
 # Milestone 17 gap follow-up (AI Configuration, "real config, live-wired to
 # the bridge" — operator's explicit scope choice): system_config is a
 # single-row table (apps/api/app/seed.py's SYSTEM_CONFIG_ID), read fresh on

@@ -68,7 +68,7 @@ class SkillSnapshotMissing(RuntimeError):
     treated as retryable."""
 
 
-def fetch_skill_snapshot(conn, content_hash: str) -> dict | None:
+def fetch_skill_snapshot(conn, content_hash: str | None = None, snapshot_id: str | None = None) -> dict | None:
     """Reads the exact immutable SkillSnapshot row (Reliability/Phase-3
     mission: "SkillSnapshot is execution truth, not current files on
     disk") by its content_hash — the same hash the API stamped onto the
@@ -80,14 +80,17 @@ def fetch_skill_snapshot(conn, content_hash: str) -> dict | None:
         cur.execute(
             "SELECT skill_name, version_label, content_hash, skill_md, "
             "output_schema_json, manifest_yaml FROM skill_snapshots "
-            "WHERE content_hash = %s",
-            (content_hash,),
+            "WHERE id = %s" if snapshot_id else "WHERE content_hash = %s",
+            (snapshot_id or content_hash,),
         )
         row = cur.fetchone()
     return dict(row) if row else None
 
 
-def materialize_snapshot(conn, skill_name: str, content_hash: str, *, dest_root: pathlib.Path) -> pathlib.Path:
+def materialize_snapshot(
+    conn, skill_name: str, content_hash: str | None = None, *,
+    snapshot_id: str | None = None, dest_root: pathlib.Path
+) -> pathlib.Path:
     """Writes the exact SkillSnapshot content identified by `content_hash`
     (fetched fresh from Postgres — never from the live, mutable `skills/`
     checkout) into `dest_root/<skill_name>/{SKILL.md, output.schema.json,
@@ -99,13 +102,27 @@ def materialize_snapshot(conn, skill_name: str, content_hash: str, *, dest_root:
     Raises SkillSnapshotMissing (terminal) if no such row exists — a
     missing/corrupted snapshot must fail safely rather than silently
     falling back to whatever happens to be on disk right now."""
-    snapshot = fetch_skill_snapshot(conn, content_hash)
+    snapshot = fetch_skill_snapshot(conn, content_hash, snapshot_id=snapshot_id)
     if snapshot is None:
         raise SkillSnapshotMissing(
-            f"no SkillSnapshot found for {skill_name} with content_hash={content_hash} "
+            f"no SkillSnapshot found for {skill_name} with snapshot_id={snapshot_id or content_hash} "
             "— cannot execute this job against an immutable snapshot that no "
             "longer exists"
         )
+    if snapshot["skill_name"] != skill_name:
+        raise SkillSnapshotMissing(
+            f"snapshot {snapshot_id or content_hash} belongs to {snapshot['skill_name']}, not {skill_name}"
+        )
+    # The row is the source of truth, but its hash is still an integrity
+    # guard against partial/corrupt database content.
+    digest = hashlib.sha256()
+    for value in (snapshot["skill_md"], snapshot["output_schema_json"], snapshot["manifest_yaml"]):
+        contents = value.encode("utf-8")
+        digest.update(len(contents).to_bytes(8, "big"))
+        digest.update(contents)
+    if snapshot_id is not None and digest.hexdigest() != snapshot["content_hash"]:
+        raise SkillSnapshotMissing(f"snapshot {snapshot_id or content_hash} failed content hash verification")
+
     skill_dir = dest_root / skill_name
     skill_dir.mkdir(parents=True, exist_ok=True)
     (skill_dir / _PROMPT_FILENAME).write_text(snapshot["skill_md"])

@@ -8,6 +8,7 @@ running, a request just stays QUEUED (visible truthfully as such), it
 never fabricates a result.
 """
 import json
+import hashlib
 import uuid
 from datetime import datetime, timezone
 
@@ -69,6 +70,7 @@ def _find_cached_analysis_run(
     requested_model: str | None,
     requested_effort: str | None,
     skill_hash: str,
+    skill_snapshot_id: uuid.UUID | None = None,
 ) -> AnalysisRun | None:
     """Exact-match cache lookup: a prior *completed* log-triage-summary run
     against the same evidence checksum, produced under the same skill
@@ -109,6 +111,8 @@ def _find_cached_analysis_run(
         AnalysisRun.cache_contract_version == CACHE_CONTRACT_VERSION,
         AnalysisRun.result_json.is_not(None),
     ]
+    if skill_snapshot_id is not None:
+        filters.append(AnalysisRun.skill_snapshot_id == skill_snapshot_id)
     if requested_model is not None:
         filters.append(AnalysisRun.model == requested_model)
     if requested_effort is not None:
@@ -116,6 +120,10 @@ def _find_cached_analysis_run(
     return db.scalar(
         select(AnalysisRun).where(*filters).order_by(AnalysisRun.created_at.desc())
     )
+
+
+def _snapshot_schema_hash(snapshot) -> str:
+    return hashlib.sha256(snapshot.output_schema_json.encode("utf-8")).hexdigest()
 
 
 def _get_incident_or_404(db: Session, incident_id: uuid.UUID) -> Incident:
@@ -288,6 +296,7 @@ def request_analysis(
         requested_model=body.model,
         requested_effort=body.effort,
         skill_hash=skill_snapshot.content_hash,
+        skill_snapshot_id=skill_snapshot.id,
     )
 
     db.execute(update(AnalysisRun).where(AnalysisRun.incident_id == incident.id).values(current=False))
@@ -304,6 +313,7 @@ def request_analysis(
             skill_name=SKILL_NAME,
             skill_version=SKILL_VERSION,
             skill_hash=skill_snapshot.content_hash,
+            skill_snapshot_id=skill_snapshot.id,
             correlation_id=str(uuid.uuid4()),
             started_at=now,
             completed_at=now,
@@ -324,6 +334,7 @@ def request_analysis(
             skill_version=SKILL_VERSION,
             skill_hash=skill_snapshot.content_hash,
             skill_snapshot_id=skill_snapshot.id,
+            schema_hash=_snapshot_schema_hash(skill_snapshot),
             cache_contract_version=CACHE_CONTRACT_VERSION,
             input_manifest_sha256=log_evidence.sha256,
             output_sha256=cached_run.output_sha256,
@@ -362,6 +373,7 @@ def request_analysis(
         skill_name=SKILL_NAME,
         skill_version=SKILL_VERSION,
         skill_hash=skill_snapshot.content_hash,
+        skill_snapshot_id=skill_snapshot.id,
     )
 
     # §22.9: created immediately (not on completion) so input provenance
@@ -377,6 +389,7 @@ def request_analysis(
         skill_version=job.skill_version,
         skill_hash=job.skill_hash,
         skill_snapshot_id=skill_snapshot.id,
+        schema_hash=_snapshot_schema_hash(skill_snapshot),
         cache_contract_version=CACHE_CONTRACT_VERSION,
         input_manifest_sha256=log_evidence.sha256,
         current=True,
