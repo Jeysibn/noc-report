@@ -298,7 +298,7 @@ class BridgeService:
             # (see noc_bridge.validation._validate_daily_report_ai_output)
             # — the full report is assembled and validated separately
             # right below, once merged with the frozen snapshot.
-            validate_output(job_type, result.output)
+            validate_output(job_type, result.output, skill_name=skill_name, skills_dir=job_skills_dir)
 
             if job_type == "daily_report":
                 # AI cost-optimization mission Phase 2, Issue 6: Claude
