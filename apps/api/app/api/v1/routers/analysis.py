@@ -23,7 +23,7 @@ from app.db.session import get_db
 from app.deps import require_permission
 from app.jobs import enqueue_job
 from app.models.models import AnalysisRun, Evidence, Incident, Job, User
-from app.skills.registry import get_or_create_snapshot
+from app.skills.registry import resolve_active_snapshot
 from app.schemas.schemas import AnalysisRequest, AnalysisRunOut
 
 router = APIRouter(tags=["analysis"])
@@ -263,7 +263,10 @@ def request_analysis(
     # content — this is the tamper-evident identity threaded through the
     # cache lookup, the Job/AnalysisRun rows, and the job message the
     # bridge re-verifies before executing.
-    skill_snapshot = get_or_create_snapshot(db, SKILL_NAME)
+    # Skill Runtime mission Phase 2: resolve the *active* snapshot, not
+    # necessarily whatever is on disk right now — activation genuinely
+    # controls what new jobs run.
+    skill_snapshot = resolve_active_snapshot(db, SKILL_NAME)
 
     # AI cost-optimization mission Phase 6: an exact-match cache hit skips
     # RabbitMQ/the bridge/Claude entirely — the Job row is created already

@@ -19,6 +19,8 @@ from __future__ import annotations
 import hashlib
 import pathlib
 
+import psycopg2.extras
+
 _PROMPT_FILENAME = "SKILL.md"
 _SCHEMA_FILENAME = "output.schema.json"
 _MANIFEST_FILENAME = "skill.yaml"
@@ -55,3 +57,58 @@ def verify_skill_hash(skill_name: str, expected_hash: str | None, *, skills_dir:
             "changed since this job was enqueued (missing required immutable "
             "snapshot match)"
         )
+
+
+class SkillSnapshotMissing(RuntimeError):
+    """Terminal (see noc_bridge/failures.py): a job stamped a skill_hash at
+    enqueue time but no SkillSnapshot row with that content_hash exists in
+    Postgres now — the immutable execution record required to run this job
+    is gone or was never created. Re-running the identical job would just
+    reproduce the same missing-snapshot failure, so this must never be
+    treated as retryable."""
+
+
+def fetch_skill_snapshot(conn, content_hash: str) -> dict | None:
+    """Reads the exact immutable SkillSnapshot row (Reliability/Phase-3
+    mission: "SkillSnapshot is execution truth, not current files on
+    disk") by its content_hash — the same hash the API stamped onto the
+    Job/payload at enqueue time. Raw psycopg2, matching this module's
+    existing hand-duplicated-schema convention (see noc_bridge/db.py) —
+    the `skill_snapshots` table itself is owned by
+    apps/api/app/models/models.py::SkillSnapshot."""
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            "SELECT skill_name, version_label, content_hash, skill_md, "
+            "output_schema_json, manifest_yaml FROM skill_snapshots "
+            "WHERE content_hash = %s",
+            (content_hash,),
+        )
+        row = cur.fetchone()
+    return dict(row) if row else None
+
+
+def materialize_snapshot(conn, skill_name: str, content_hash: str, *, dest_root: pathlib.Path) -> pathlib.Path:
+    """Writes the exact SkillSnapshot content identified by `content_hash`
+    (fetched fresh from Postgres — never from the live, mutable `skills/`
+    checkout) into `dest_root/<skill_name>/{SKILL.md, output.schema.json,
+    skill.yaml}`, and returns that per-job skill directory. This is what
+    makes a job reproduce Skill v3's exact behavior even if v4 was
+    activated and the on-disk files rewritten before this job ever ran —
+    the mission's core "Job A must run Skill v3, not v4" requirement.
+
+    Raises SkillSnapshotMissing (terminal) if no such row exists — a
+    missing/corrupted snapshot must fail safely rather than silently
+    falling back to whatever happens to be on disk right now."""
+    snapshot = fetch_skill_snapshot(conn, content_hash)
+    if snapshot is None:
+        raise SkillSnapshotMissing(
+            f"no SkillSnapshot found for {skill_name} with content_hash={content_hash} "
+            "— cannot execute this job against an immutable snapshot that no "
+            "longer exists"
+        )
+    skill_dir = dest_root / skill_name
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / _PROMPT_FILENAME).write_text(snapshot["skill_md"])
+    (skill_dir / _SCHEMA_FILENAME).write_text(snapshot["output_schema_json"])
+    (skill_dir / _MANIFEST_FILENAME).write_text(snapshot["manifest_yaml"])
+    return dest_root

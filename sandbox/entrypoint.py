@@ -35,76 +35,22 @@ SKILLS_DIR = pathlib.Path("/skills")
 OUTPUT_DIR = pathlib.Path("/output")
 CLAUDE_BINARY = "/usr/local/bin/claude"
 
-# Mirrors skills/log-triage-summary/SKILL.md's contract (master plan §29).
-# Kept here (rather than parsed from the SKILL.md prose) so the CLI's
-# --json-schema flag gets a real JSON Schema regardless of skill wording.
-_FIND_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "label_en": {"type": "string"},
-        "label_zh": {"type": "string"},
-        "count": {"type": ["integer", "null"]},
-        "percentage": {"type": ["number", "null"]},
-        "detail_en": {"type": "string"},
-        "detail_zh": {"type": "string"},
-    },
-    "required": ["label_en", "label_zh", "count", "percentage", "detail_en", "detail_zh"],
-    "additionalProperties": False,
-}
+_SCHEMA_FILENAME = "output.schema.json"
 
-_ANALYSIS_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "summary_en": {"type": "string"},
-        "summary_zh": {"type": "string"},
-        "key_finds": {"type": "array", "items": _FIND_SCHEMA, "minItems": 1},
-        "secondary_finds": {"type": "array", "items": _FIND_SCHEMA},
-        "likely_cause_en": {"type": "string"},
-        "likely_cause_zh": {"type": "string"},
-        "severity_signal": {"type": "string", "enum": ["low", "medium", "high", "critical"]},
-        "recommended_action_en": {"type": "string"},
-        "recommended_action_zh": {"type": "string"},
-        "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
-    },
-    "required": [
-        "summary_en", "summary_zh", "key_finds", "secondary_finds",
-        "likely_cause_en", "likely_cause_zh", "severity_signal",
-        "recommended_action_en", "recommended_action_zh", "confidence",
-    ],
-    "additionalProperties": False,
-}
 
-_SCHEMAS = {
-    "log-triage-summary": _ANALYSIS_SCHEMA,
-    # Mirrors skills/daily-alert-report/SKILL.md's contract (master plan
-    # §29, Milestone 14): bilingual overview, sections carrying through
-    # grafana_url/log_filename/screenshots and each incident's analysis
-    # object in the same bilingual shape as log-triage-summary above.
-    # AI cost-optimization mission Phase 2, Issue 6: Claude no longer
-    # receives (or is asked to reproduce) each incident's full analysis,
-    # screenshots, or MinIO/Grafana references — none of that is
-    # reasoning-dependent. Its output is now just the shift-level overview
-    # and any real cross-incident correlation; everything else (existing
-    # per-incident analysis, screenshots, links, metadata) is merged back
-    # in deterministically by the bridge (see
-    # bridge/noc_bridge/service.py's daily-report merge step) using the
-    # frozen snapshot it already has on disk, not round-tripped through
-    # Claude. See skills/daily-alert-report/SKILL.md.
-    "daily-alert-report": {
-        "type": "object",
-        "properties": {
-            "overview_en": {"type": "string"},
-            "overview_zh": {"type": "string"},
-            "cross_incident_findings_en": {"type": "string"},
-            "cross_incident_findings_zh": {"type": "string"},
-        },
-        "required": [
-            "overview_en", "overview_zh",
-            "cross_incident_findings_en", "cross_incident_findings_zh",
-        ],
-        "additionalProperties": False,
-    },
-}
+def _load_output_schema(skill_name: str) -> dict:
+    """Skill Runtime mission Phase 3: the skill's own output.schema.json
+    (mounted at /skills/<skill_name>/output.schema.json — either the live
+    checkout, or, once the bridge materializes exact SkillSnapshot content
+    there per-job, the frozen snapshot content) is now the single source
+    of truth for the CLI's --json-schema enforcement. This used to be a
+    hard-coded Python dict duplicating that same file, which could (and
+    did) silently drift from it. A skill's output format can now change by
+    editing output.schema.json alone — no sandbox code change required."""
+    schema_path = SKILLS_DIR / skill_name / _SCHEMA_FILENAME
+    if not schema_path.exists():
+        raise ValueError(f"no output schema found for skill {skill_name!r} at {schema_path}")
+    return json.loads(schema_path.read_text())
 
 
 def _compact_incident_summaries(snapshot: dict) -> list[dict]:
@@ -563,9 +509,7 @@ def run_skill(input_text: str, skill_name: str) -> tuple[dict, dict]:
         raise FileNotFoundError(f"skill not found: {skill_path}")
     skill_md = skill_path.read_text()
 
-    schema = _SCHEMAS.get(skill_name)
-    if schema is None:
-        raise ValueError(f"no output schema registered for skill: {skill_name}")
+    schema = _load_output_schema(skill_name)
 
     _, intro = _INPUT_FILE_BY_SKILL[skill_name]
     raw_input_bytes = len(input_text.encode("utf-8"))

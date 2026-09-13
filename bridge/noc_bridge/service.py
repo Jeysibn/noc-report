@@ -39,7 +39,7 @@ from noc_bridge.queue_topology import (
 )
 from noc_bridge.docx_render import render_daily_report_docx
 from noc_bridge.sandbox_runner import run_job_sandbox
-from noc_bridge.skill_registry import SkillHashMismatch, verify_skill_hash
+from noc_bridge.skill_registry import SkillHashMismatch, SkillSnapshotMissing, materialize_snapshot, verify_skill_hash
 from noc_bridge.storage import ChecksumMismatch, download_object, get_client, object_exists, upload_artifact
 from noc_bridge.validation import OutputValidationError, validate_output, validate_merged_daily_report
 
@@ -163,17 +163,23 @@ class BridgeService:
             channel.basic_qos(prefetch_count=config["max_concurrent_jobs"])
             self._last_max_concurrency = config["max_concurrent_jobs"]
 
-        # Skill Registry (Reliability mission Batch B): verify the skill
-        # content on disk right now still matches what the API resolved
-        # at enqueue time, before doing anything else — a stale/replaced
-        # SKILL.md must never silently execute under an old skill_hash's
-        # assumed identity. Raises SkillHashMismatch (terminal — see
-        # noc_bridge/failures.py) on drift; no-ops if the message carries
-        # no skill_hash at all (older enqueuer/test).
-        if job_type in _SKILL_NAME_BY_JOB_TYPE:
+        # Skill Runtime mission Phase 1: SkillSnapshot is execution truth,
+        # not "whatever is currently on disk." A job stamped with a
+        # skill_hash at enqueue time must execute the exact immutable
+        # snapshot content that hash identifies — even if the skill was
+        # edited or a newer version activated after this job was queued.
+        # Falls back to the old hash-verify-against-live-disk behavior
+        # only when the message carries no skill_hash at all (an older
+        # enqueuer/test that never went through the Skill Registry).
+        skill_hash = payload.get("skill_hash") if job_type in _SKILL_NAME_BY_JOB_TYPE else None
+        if job_type in _SKILL_NAME_BY_JOB_TYPE and skill_hash is None:
+            # No skill_hash at all (older enqueuer/test): nothing to
+            # materialize against, so fall back to the live mutable
+            # checkout with a no-op verify (verify_skill_hash no-ops when
+            # expected_hash is None).
             verify_skill_hash(
                 _SKILL_NAME_BY_JOB_TYPE[job_type],
-                payload.get("skill_hash"),
+                skill_hash,
                 skills_dir=self.settings.skills_dir,
             )
 
@@ -192,9 +198,28 @@ class BridgeService:
         publish_status_event(channel, job_id=job_id, event="started", detail={"attempt": attempt})
 
         with tempfile.TemporaryDirectory(prefix=f"noc-job-{job_id}-input-") as input_dir_s, \
-                tempfile.TemporaryDirectory(prefix=f"noc-job-{job_id}-output-") as output_dir_s:
+                tempfile.TemporaryDirectory(prefix=f"noc-job-{job_id}-output-") as output_dir_s, \
+                tempfile.TemporaryDirectory(prefix=f"noc-job-{job_id}-skill-") as skill_dir_s:
             input_dir = pathlib.Path(input_dir_s)
             output_dir = pathlib.Path(output_dir_s)
+
+            # Skill Runtime mission Phase 1: materialize the exact
+            # immutable SkillSnapshot content this job was stamped with at
+            # enqueue time — never the live, possibly-since-edited
+            # `skills/` checkout — into a per-job scratch directory, and
+            # mount *that* into the sandbox. This is what guarantees "Job A
+            # created against Skill v3 still runs Skill v3 even if v4 was
+            # activated and the files rewritten before this worker ever
+            # dequeued the message." Raises SkillSnapshotMissing (terminal)
+            # if the DB row backing this hash is gone.
+            job_skills_dir = self.settings.skills_dir
+            if job_type in _SKILL_NAME_BY_JOB_TYPE and skill_hash is not None:
+                job_skills_dir = materialize_snapshot(
+                    pg_conn,
+                    _SKILL_NAME_BY_JOB_TYPE[job_type],
+                    skill_hash,
+                    dest_root=pathlib.Path(skill_dir_s),
+                )
 
             input_filename = _INPUT_FILENAME_BY_JOB_TYPE.get(job_type)
             if input_filename is None:
@@ -220,7 +245,7 @@ class BridgeService:
             result = run_job_sandbox(
                 input_dir=input_dir,
                 output_dir=output_dir,
-                skills_dir=self.settings.skills_dir,
+                skills_dir=job_skills_dir,
                 # Milestone 17 gap follow-up: job_timeout_seconds now comes
                 # from system_config, not the static BRIDGE_SANDBOX_TIMEOUT_
                 # SECONDS env var — an admin can tighten/loosen it live.

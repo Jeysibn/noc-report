@@ -104,6 +104,7 @@ def test_run_skill_sends_claude_only_the_compact_snapshot(monkeypatch, tmp_path)
     skill_dir = tmp_path / "daily-alert-report"
     skill_dir.mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text("---\nname: daily-alert-report\n---\nBody")
+    (skill_dir / "output.schema.json").write_text("{\n  \"$comment\": \"Skill Registry (Reliability mission Batch B): single source of truth for daily-alert-report's output contract, mirroring log-triage-summary/output.schema.json's role.\",\n  \"type\": \"object\",\n  \"properties\": {\n    \"overview_en\": {\"type\": \"string\"},\n    \"overview_zh\": {\"type\": \"string\"},\n    \"cross_incident_findings_en\": {\"type\": \"string\"},\n    \"cross_incident_findings_zh\": {\"type\": \"string\"}\n  },\n  \"required\": [\n    \"overview_en\", \"overview_zh\",\n    \"cross_incident_findings_en\", \"cross_incident_findings_zh\"\n  ],\n  \"additionalProperties\": false\n}\n")
     monkeypatch.setattr(entrypoint, "SKILLS_DIR", tmp_path)
 
     entrypoint.run_skill(json.dumps(_SNAPSHOT), "daily-alert-report")

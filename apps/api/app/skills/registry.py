@@ -81,7 +81,11 @@ def read_skill_files(skill_name: str, *, skills_dir: pathlib.Path = SKILLS_DIR) 
 
 
 def get_or_create_snapshot(
-    db: Session, skill_name: str, *, skills_dir: pathlib.Path = SKILLS_DIR
+    db: Session,
+    skill_name: str,
+    *,
+    skills_dir: pathlib.Path = SKILLS_DIR,
+    activate: bool | None = None,
 ) -> SkillSnapshot:
     """Returns the immutable SkillSnapshot for the skill's *current*
     on-disk content, creating it (with the next sequential version_label
@@ -89,7 +93,17 @@ def get_or_create_snapshot(
     before. Existing snapshots are never mutated — a new snapshot row is
     the only way content changes get represented, by design (this is the
     Batch B analogue of the reliability mission's immutable-audit-trail
-    principle applied to skills instead of jobs)."""
+    principle applied to skills instead of jobs).
+
+    Skill Runtime mission Phase 2: a newly-discovered content hash is
+    registered as a Draft (not auto-activated) unless `activate=True` is
+    passed explicitly, or this is the very first snapshot ever seen for
+    this skill_name (bootstrap — there must always be exactly one active
+    snapshot once a skill has any history at all). This is what makes
+    editing SKILL.md on disk *not* silently change what new jobs execute —
+    see `resolve_active_snapshot`, the function that actually controls job
+    dispatch; an admin must call `set_active_snapshot` (or pass
+    `activate=True` here) to promote a Draft to Active."""
     content_hash = compute_skill_hash(skill_name, skills_dir=skills_dir)
 
     existing = db.scalar(
@@ -101,6 +115,13 @@ def get_or_create_snapshot(
     if existing is not None:
         return existing
 
+    is_first_snapshot_for_skill = (
+        db.scalar(
+            select(func.count()).select_from(SkillSnapshot).where(SkillSnapshot.skill_name == skill_name)
+        )
+        or 0
+    ) == 0
+
     next_version = (
         db.scalar(
             select(func.coalesce(func.max(SkillSnapshot.version_label), 0)).where(
@@ -110,13 +131,10 @@ def get_or_create_snapshot(
         or 0
     ) + 1
 
-    # Keep "exactly one active snapshot per skill_name" true even as new
-    # content is discovered on disk: the newest snapshot becomes active by
-    # default (preserving pre-Phase-12 behavior of always running current
-    # disk content), and an admin can later move "active" back with
-    # set_active_snapshot for audit/bookkeeping purposes.
-    for other in db.scalars(select(SkillSnapshot).where(SkillSnapshot.skill_name == skill_name)):
-        other.is_active = False
+    should_activate = activate if activate is not None else is_first_snapshot_for_skill
+    if should_activate:
+        for other in db.scalars(select(SkillSnapshot).where(SkillSnapshot.skill_name == skill_name)):
+            other.is_active = False
 
     files = read_skill_files(skill_name, skills_dir=skills_dir)
     snapshot = SkillSnapshot(
@@ -126,11 +144,42 @@ def get_or_create_snapshot(
         skill_md=files["skill_md"],
         output_schema_json=files["output_schema_json"],
         manifest_yaml=files["manifest_yaml"],
-        is_active=True,
+        is_active=should_activate,
     )
     db.add(snapshot)
     db.flush()
     return snapshot
+
+
+class NoActiveSkillSnapshot(RuntimeError):
+    """Raised by resolve_active_snapshot when a skill_name has snapshot
+    history but somehow none of them is flagged active — should not
+    normally happen (bootstrap always activates the first snapshot), but
+    must fail loudly rather than silently guessing one."""
+
+
+def resolve_active_snapshot(
+    db: Session, skill_name: str, *, skills_dir: pathlib.Path = SKILLS_DIR
+) -> SkillSnapshot:
+    """Skill Runtime mission Phase 2: the actual execution-controlling
+    lookup a job-creation endpoint must call (not `get_or_create_snapshot`
+    directly). Registers any new on-disk content as a Draft snapshot for
+    audit/history visibility (same content-hash provenance as before), but
+    a new job is stamped with whichever snapshot is_active=True — set by
+    an operator's explicit `set_active_snapshot` call, not by whatever
+    happens to be on disk right now. This is what makes activation real:
+    activating v2 makes the *next* job use v2 regardless of what v3/v4
+    on-disk edits have happened since."""
+    get_or_create_snapshot(db, skill_name, skills_dir=skills_dir)
+    active = db.scalar(
+        select(SkillSnapshot).where(
+            SkillSnapshot.skill_name == skill_name,
+            SkillSnapshot.is_active.is_(True),
+        )
+    )
+    if active is None:
+        raise NoActiveSkillSnapshot(f"{skill_name}: has snapshot history but no active snapshot")
+    return active
 
 
 class SkillVersionNotFound(RuntimeError):
@@ -157,21 +206,20 @@ def list_skill_names(db: Session) -> list[str]:
 
 
 def set_active_snapshot(db: Session, skill_name: str, version_label: int) -> SkillSnapshot:
-    """Phase 12 (admin activation workflow): marks exactly one snapshot
-    active per skill_name.
+    """Phase 12 (admin activation workflow), superseded by Skill Runtime
+    mission Phase 2: marks exactly one snapshot active per skill_name.
 
-    This is a bookkeeping/audit control, not an override of what a job
-    actually executes: the bridge always verifies the *current on-disk*
-    content hash against the hash stamped on the job at enqueue time
-    (`noc_bridge.skill_registry.verify_skill_hash`) — rolling "active" back
-    to an older snapshot here does not change what SKILL.md content a job
-    runs, and if the disk content hasn't also been reverted to match, new
-    jobs will keep getting created against whatever `get_or_create_snapshot`
-    finds on disk (auto-creating a fresh snapshot if it doesn't match any
-    existing one). What this does control is which snapshot shows up as
-    "the active one" for operators reviewing skill history/audit — e.g.
-    flagging a known-bad prompt version so it's visibly not the endorsed
-    one, without being able to silently rewrite what already ran.
+    This now genuinely controls what *new* jobs execute: job-creation
+    endpoints resolve the skill to run via `resolve_active_snapshot`, which
+    reads `is_active`, and the bridge materializes and executes that exact
+    snapshot's frozen content (`bridge/noc_bridge/skill_registry.
+    materialize_snapshot`) — never the live on-disk files. Activating an
+    older version_label is therefore a real, working rollback: the very
+    next job created for this skill_name runs that snapshot's exact
+    content, with no need to revert any files on disk. Jobs already
+    created/queued before this call are unaffected — they were stamped
+    with a specific `skill_hash` at enqueue time and remain reproducible
+    against that snapshot regardless of what's active now.
     """
     target = db.scalar(
         select(SkillSnapshot).where(

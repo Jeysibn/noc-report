@@ -3,11 +3,13 @@ import pytest
 
 from app.models.models import SkillSnapshot
 from app.skills.registry import (
+    NoActiveSkillSnapshot,
     SkillVersionNotFound,
     compute_skill_hash,
     get_or_create_snapshot,
     list_skill_names,
     list_snapshots,
+    resolve_active_snapshot,
     set_active_snapshot,
 )
 
@@ -68,10 +70,13 @@ def test_snapshots_are_distinct_per_skill_name(db_session):
     assert daily_report.skill_name == "daily-alert-report"
 
 
-def test_new_snapshot_is_active_by_default_and_deactivates_prior(db_session, tmp_path):
-    """Phase 12: newest on-disk content is active by default (preserving
-    pre-Phase-12 dispatch behavior), and creating it deactivates the
-    previously-active snapshot for that skill_name."""
+def test_first_snapshot_bootstraps_active_but_later_ones_are_draft(db_session, tmp_path):
+    """Skill Runtime mission Phase 2: the very first snapshot ever seen
+    for a skill_name bootstraps as active (there must always be an active
+    snapshot once a skill has any history), but a later content change is
+    registered as a Draft — it does NOT silently become what new jobs
+    execute. An admin must explicitly activate it via set_active_snapshot
+    (see resolve_active_snapshot, the real execution-controlling lookup)."""
     skill_dir = tmp_path / "fake-skill"
     skill_dir.mkdir()
     (skill_dir / "SKILL.md").write_text("v1 prompt")
@@ -87,8 +92,8 @@ def test_new_snapshot_is_active_by_default_and_deactivates_prior(db_session, tmp
     db_session.commit()
 
     db_session.refresh(first)
-    assert first.is_active is False
-    assert second.is_active is True
+    assert first.is_active is True
+    assert second.is_active is False
 
 
 def test_set_active_snapshot_moves_active_flag_and_is_reversible(db_session, tmp_path):
@@ -104,6 +109,11 @@ def test_set_active_snapshot_moves_active_flag_and_is_reversible(db_session, tmp
     (skill_dir / "SKILL.md").write_text("v2 prompt — content changed")
     v2 = get_or_create_snapshot(db_session, "fake-skill", skills_dir=tmp_path)
     db_session.commit()
+    assert v2.is_active is False  # Draft until explicitly activated
+
+    set_active_snapshot(db_session, "fake-skill", v2.version_label)
+    db_session.commit()
+    db_session.refresh(v2)
     assert v2.is_active is True
 
     rolled_back = set_active_snapshot(db_session, "fake-skill", v1.version_label)
@@ -144,6 +154,53 @@ def test_list_snapshots_orders_newest_first(db_session, tmp_path):
 
     snapshots = list_snapshots(db_session, "fake-skill")
     assert [s.version_label for s in snapshots] == [2, 1]
+
+
+def test_resolve_active_snapshot_bootstraps_on_first_call(db_session, tmp_path):
+    skill_dir = tmp_path / "fake-skill"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text("v1 prompt")
+    (skill_dir / "output.schema.json").write_text("{}")
+    (skill_dir / "skill.yaml").write_text("name: fake-skill\n")
+
+    resolved = resolve_active_snapshot(db_session, "fake-skill", skills_dir=tmp_path)
+    db_session.commit()
+    assert resolved.version_label == 1
+    assert resolved.is_active is True
+
+
+def test_resolve_active_snapshot_ignores_disk_drift_until_activated(db_session, tmp_path):
+    """Core Skill Runtime mission Phase 2 requirement: editing SKILL.md on
+    disk and calling resolve_active_snapshot again must keep resolving the
+    still-active older version — new jobs are not silently repointed at
+    unreviewed on-disk content."""
+    skill_dir = tmp_path / "fake-skill"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text("v1 prompt")
+    (skill_dir / "output.schema.json").write_text("{}")
+    (skill_dir / "skill.yaml").write_text("name: fake-skill\n")
+
+    v1 = resolve_active_snapshot(db_session, "fake-skill", skills_dir=tmp_path)
+    db_session.commit()
+
+    (skill_dir / "SKILL.md").write_text("v2 prompt — changed on disk")
+    still_v1 = resolve_active_snapshot(db_session, "fake-skill", skills_dir=tmp_path)
+    db_session.commit()
+
+    assert still_v1.id == v1.id
+    assert still_v1.version_label == 1
+
+    # The new content was registered (for history/audit) as a Draft.
+    snapshots = list_snapshots(db_session, "fake-skill")
+    assert [s.version_label for s in snapshots] == [2, 1]
+    assert {s.version_label: s.is_active for s in snapshots} == {1: True, 2: False}
+
+    # Once activated, the *next* resolve call picks it up.
+    set_active_snapshot(db_session, "fake-skill", 2)
+    db_session.commit()
+    now_v2 = resolve_active_snapshot(db_session, "fake-skill", skills_dir=tmp_path)
+    db_session.commit()
+    assert now_v2.version_label == 2
 
 
 def test_list_skill_names(db_session):

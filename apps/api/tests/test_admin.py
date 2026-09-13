@@ -308,7 +308,15 @@ def test_activate_skill_version_rollback_and_audit(client, db_session, seeded, t
     v2 = get_or_create_snapshot(db_session, "log-triage-summary", skills_dir=fake_skills_dir)
     db_session.commit()
     assert v2.version_label == 2
-    assert v2.is_active is True
+    # Skill Runtime mission Phase 2: a newly-discovered content hash is a
+    # Draft, not auto-active — new jobs keep resolving v1 until an admin
+    # explicitly activates v2.
+    assert v2.is_active is False
+
+    from app.skills.registry import set_active_snapshot
+
+    set_active_snapshot(db_session, "log-triage-summary", v2.version_label)
+    db_session.commit()
 
     resp = client.post(
         f"/api/v1/admin/skills/log-triage-summary/versions/{v1.version_label}/activate",
