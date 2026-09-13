@@ -8,6 +8,14 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
+    # Reliability mission Phase 17 (credential/permission hardening): a
+    # deployment declares itself "production" explicitly via this env var.
+    # Nothing under normal test/dev use needs to touch it — it exists so
+    # `assert_production_secrets_are_safe` below has something to gate on
+    # (never enforced in development, where every insecure default here
+    # exists on purpose for a zero-config local run).
+    environment: str = "development"
+
     database_url: str = "postgresql+psycopg2://noc:noc@localhost:55432/noc_report"
     jwt_secret: str = "dev-only-secret-change-me"
     jwt_algorithm: str = "HS256"
@@ -36,3 +44,34 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+# Every literal below is one of this file's own insecure-by-design local
+# defaults — never a real deployment's actual secret, so listing them here
+# doesn't leak anything.
+_INSECURE_DEFAULTS = {
+    "jwt_secret": "dev-only-secret-change-me",
+    "minio_secret_key": "noc-minio-secret",
+    "rabbitmq_url": "amqp://noc:noc-rabbit-secret@localhost:55672/",
+}
+
+
+def assert_production_secrets_are_safe(config: Settings = settings) -> None:
+    """Phase 17 hardening: every credential in this file ships with a
+    convenient, publicly-known default so a fresh clone runs against the
+    dev docker-compose stack with zero setup — the previous state of
+    affairs meant that same convenience shipped silently into a real
+    deployment too, if `environment=production` was set without also
+    overriding these. Called once at API startup (see main.py's lifespan);
+    raises RuntimeError rather than merely logging, since a production
+    deployment running on the dev JWT secret is a "must not start" class
+    of misconfiguration, not a warning."""
+    if config.environment != "production":
+        return
+
+    still_default = [name for name, default in _INSECURE_DEFAULTS.items() if getattr(config, name) == default]
+    if still_default:
+        raise RuntimeError(
+            "Refusing to start with environment=production while still using the "
+            f"insecure default value for: {', '.join(sorted(still_default))}. "
+            "Set real values via environment variables/.env before deploying."
+        )

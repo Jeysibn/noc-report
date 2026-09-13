@@ -9,6 +9,7 @@ import pathlib
 
 import boto3
 from botocore.client import Config as BotoConfig
+from botocore.exceptions import ClientError
 
 from noc_bridge.config import BridgeSettings
 
@@ -50,6 +51,20 @@ def download_object(
             raise ChecksumMismatch(
                 f"{bucket}/{object_key}: expected sha256 {expected_sha256}, got {actual}"
             )
+
+
+def object_exists(client, *, bucket: str, object_key: str) -> bool:
+    """Idempotent job lifecycle (Reliability mission Batch A): before
+    re-running Claude on a redelivered message, the bridge checks whether
+    the job's deterministic artifact key was already written by a prior
+    attempt (e.g. the process died after upload but before the Job row
+    was marked COMPLETED/acked) — reconciling from here rather than
+    invoking Claude a second time."""
+    try:
+        client.head_object(Bucket=bucket, Key=object_key)
+        return True
+    except ClientError:
+        return False
 
 
 def upload_artifact(

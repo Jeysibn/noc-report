@@ -27,19 +27,27 @@ def mark_started(conn, job_id: uuid.UUID) -> None:
 
 
 def mark_completed(conn, job_id: uuid.UUID) -> None:
+    """Also releases the claim/lease (Reliability mission Batch A) — a
+    COMPLETED job is a terminal state, so there's nothing left to protect
+    a lease against, and clearing it keeps `fetch_job_row` output tidy."""
     with conn.cursor() as cur:
         cur.execute(
-            "UPDATE jobs SET status = %s, completed_at = %s WHERE id = %s",
+            "UPDATE jobs SET status = %s, completed_at = %s, claimed_at = NULL, "
+            "claim_token = NULL, lease_expires_at = NULL WHERE id = %s",
             ("COMPLETED", datetime.now(timezone.utc), str(job_id)),
         )
     conn.commit()
 
 
 def mark_failed(conn, job_id: uuid.UUID, *, error_code: str, error_message: str) -> None:
+    """Releases the claim/lease too — a FAILED job (whether headed for
+    retry-via-DLX or the DLQ) must be reclaimable again, either by this
+    worker on redelivery or by an admin's DLQ requeue."""
     with conn.cursor() as cur:
         cur.execute(
             "UPDATE jobs SET status = %s, completed_at = %s, error_code = %s, "
-            "error_message = %s WHERE id = %s",
+            "error_message = %s, claimed_at = NULL, claim_token = NULL, "
+            "lease_expires_at = NULL WHERE id = %s",
             ("FAILED", datetime.now(timezone.utc), error_code, error_message, str(job_id)),
         )
     conn.commit()
@@ -55,6 +63,61 @@ def fetch_job_row(conn, job_id: uuid.UUID) -> dict | None:
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute("SELECT * FROM jobs WHERE id = %s", (str(job_id),))
         return cur.fetchone()
+
+
+# --- Idempotent job lifecycle (Reliability mission Batch A) -----------------
+#
+# RabbitMQ delivers at-least-once, so the same job message can be handed to
+# this consumer more than once (broker-level redelivery after a dropped
+# connection, an admin's manual DLQ requeue landing on top of an in-flight
+# retry, etc.). Claiming a job here — rather than trusting "I received a
+# message, therefore I should run it" — is what makes redelivery safe:
+# claim_job only succeeds for a job that isn't already durably owned by a
+# live lease, and the caller (service.py) checks Job.status == COMPLETED /
+# artifact-already-uploaded before ever attempting a claim at all.
+
+DEFAULT_LEASE_SECONDS = 600  # matches BridgeSettings.claude_cli_timeout_seconds's rough order of magnitude
+
+
+def claim_job(conn, job_id: uuid.UUID, *, worker_id: str, lease_seconds: int = DEFAULT_LEASE_SECONDS) -> dict | None:
+    """Attempts to claim `job_id` for this worker. Succeeds (returns the
+    updated row) only if the job is QUEUED/FAILED (a fresh or
+    retry-eligible job), or PROCESSING with an *expired* lease (a prior
+    claimant crashed without releasing it) — never for a job whose lease
+    is still live, which means some other delivery (or a genuinely
+    concurrent worker) is already handling it. Returns None on failure to
+    claim; the caller must not execute Claude in that case."""
+    claim_token = str(uuid.uuid4())
+    now = datetime.now(timezone.utc)
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            """
+            UPDATE jobs
+            SET status = 'PROCESSING',
+                started_at = %(now)s,
+                claimed_at = %(now)s,
+                claim_token = %(claim_token)s,
+                lease_expires_at = %(now)s + (%(lease_seconds)s * interval '1 second'),
+                worker_id = %(worker_id)s
+            WHERE id = %(job_id)s
+              AND status != 'COMPLETED'
+              AND (
+                    status IN ('QUEUED', 'FAILED')
+                    OR (status = 'PROCESSING' AND (lease_expires_at IS NULL OR lease_expires_at < %(now)s))
+              )
+            RETURNING *
+            """,
+            {
+                "now": now,
+                "claim_token": claim_token,
+                "lease_seconds": lease_seconds,
+                "worker_id": worker_id,
+                "job_id": str(job_id),
+            },
+        )
+        row = cur.fetchone()
+    conn.commit()
+    return dict(row) if row else None
 
 
 # Milestone 17 gap follow-up (AI Configuration, "real config, live-wired to

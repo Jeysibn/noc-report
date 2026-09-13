@@ -28,6 +28,7 @@ import pika
 from noc_bridge import db, health
 from noc_bridge.config import BridgeSettings, settings as default_settings
 from noc_bridge.credentials import prepare_sandbox_credentials
+from noc_bridge.failures import RETRYABLE, classify_failure
 from noc_bridge.queue_topology import (
     JOB_TYPES,
     declare_topology,
@@ -38,7 +39,8 @@ from noc_bridge.queue_topology import (
 )
 from noc_bridge.docx_render import render_daily_report_docx
 from noc_bridge.sandbox_runner import run_job_sandbox
-from noc_bridge.storage import ChecksumMismatch, download_object, get_client, upload_artifact
+from noc_bridge.skill_registry import SkillHashMismatch, verify_skill_hash
+from noc_bridge.storage import ChecksumMismatch, download_object, get_client, object_exists, upload_artifact
 from noc_bridge.validation import OutputValidationError, validate_output, validate_merged_daily_report
 
 # Skill name per job_type. Milestone 14 adds daily_report
@@ -55,7 +57,21 @@ _INPUT_FILENAME_BY_JOB_TYPE = {"log_triage": "log.txt", "daily_report": "snapsho
 
 logger = logging.getLogger("noc_bridge")
 
-MAX_ATTEMPTS = 1
+# Reliability mission Batch A/Phase 3: was 1, which made the "retry"
+# branch below dead code — every first failure went straight to the DLQ.
+# Bounded at 3 real attempts (an initial try plus two retries) before a
+# retryable failure is considered exhausted and DLQ'd.
+MAX_ATTEMPTS = 3
+
+
+def _artifact_ref(job_type: str, job_id: uuid.UUID, settings: BridgeSettings) -> tuple[str, str]:
+    """The deterministic (bucket, key) a completed job_type's artifact
+    lives at — same convention `apps/api`'s `_sync_completed_job`/
+    `_sync_completed_report` poll for. Used here to reconcile a
+    redelivered message against work a prior attempt already finished."""
+    if job_type == "daily_report":
+        return settings.minio_bucket_reports, f"reports/{job_id}/report.docx"
+    return settings.minio_bucket_job_artifacts, f"jobs/{job_id}/result.json"
 
 
 def _merge_daily_report(snapshot: dict, ai_output: dict) -> dict:
@@ -115,6 +131,12 @@ class BridgeService:
         # `claude` re-login.
         self._claude_binary_real_path = self.settings.claude_binary_path.resolve()
         self._claude_creds_dir = None
+        # Reliability mission Batch A (idempotent job lifecycle): identifies
+        # this process as the claimant on Job.worker_id/claim_token, purely
+        # for observability/debugging (claim correctness itself doesn't
+        # depend on this being globally unique across restarts, only on the
+        # lease-expiry check in noc_bridge.db.claim_job).
+        self.worker_id = f"{uuid.uuid4()}"
         # Milestone 17 gap follow-up (AI Configuration): last prefetch_count
         # applied via basic_qos, so it's only re-set when system_config's
         # max_concurrent_jobs actually changes, not on every single job.
@@ -141,7 +163,32 @@ class BridgeService:
             channel.basic_qos(prefetch_count=config["max_concurrent_jobs"])
             self._last_max_concurrency = config["max_concurrent_jobs"]
 
-        db.mark_started(pg_conn, job_id)
+        # Skill Registry (Reliability mission Batch B): verify the skill
+        # content on disk right now still matches what the API resolved
+        # at enqueue time, before doing anything else — a stale/replaced
+        # SKILL.md must never silently execute under an old skill_hash's
+        # assumed identity. Raises SkillHashMismatch (terminal — see
+        # noc_bridge/failures.py) on drift; no-ops if the message carries
+        # no skill_hash at all (older enqueuer/test).
+        if job_type in _SKILL_NAME_BY_JOB_TYPE:
+            verify_skill_hash(
+                _SKILL_NAME_BY_JOB_TYPE[job_type],
+                payload.get("skill_hash"),
+                skills_dir=self.settings.skills_dir,
+            )
+
+        # Reliability mission Batch A: reconcile before claiming/executing
+        # anything. If a prior attempt already produced this job's
+        # deterministic artifact (crashed after upload but before
+        # mark_completed/ACK), don't re-run Claude at all — just finalize
+        # from what's already there.
+        artifact_bucket, artifact_key = _artifact_ref(job_type, job_id, self.settings)
+        if object_exists(minio_client, bucket=artifact_bucket, object_key=artifact_key):
+            logger.info("job %s artifact already present at %s/%s — reconciling without re-executing", job_id, artifact_bucket, artifact_key)
+            db.mark_completed(pg_conn, job_id)
+            publish_status_event(channel, job_id=job_id, event="completed", detail={"artifact_key": artifact_key, "reconciled": True})
+            return
+
         publish_status_event(channel, job_id=job_id, event="started", detail={"attempt": attempt})
 
         with tempfile.TemporaryDirectory(prefix=f"noc-job-{job_id}-input-") as input_dir_s, \
@@ -310,7 +357,30 @@ class BridgeService:
     def _handle_delivery(self, channel, method, properties, body, pg_conn, minio_client, job_type: str) -> None:
         payload = json.loads(body)
         job_id = payload["job_id"]
-        attempt = payload.get("attempt", 1)
+        job_uuid = uuid.UUID(job_id)
+
+        # Idempotent job lifecycle (Reliability mission Batch A/Phase 2):
+        # RabbitMQ delivery is at-least-once, so this same message can
+        # arrive more than once. Before doing anything else:
+        #   - a job already COMPLETED is a pure redelivery of finished
+        #     work — ack and do nothing.
+        #   - claim the job otherwise; a claim can fail only if some other
+        #     delivery holds a still-live lease on it, in which case this
+        #     delivery is redundant right now and is safely ack'd without
+        #     executing (the other delivery owns finishing it).
+        existing = db.fetch_job_row(pg_conn, job_uuid)
+        if existing is not None and existing["status"] == "COMPLETED":
+            logger.info("job %s redelivered but already COMPLETED — ack without re-executing", job_id)
+            channel.basic_ack(delivery_tag=method.delivery_tag)
+            return
+
+        claimed = db.claim_job(pg_conn, job_uuid, worker_id=self.worker_id)
+        if claimed is None:
+            logger.info("job %s could not be claimed (already leased elsewhere) — ack without re-executing", job_id)
+            channel.basic_ack(delivery_tag=method.delivery_tag)
+            return
+
+        attempt = claimed["attempt"]  # Postgres is authoritative for attempt count, not the message payload
 
         with self._lock:
             self.active_jobs += 1
@@ -318,38 +388,31 @@ class BridgeService:
             self._process_job(job_type, payload, pg_conn, minio_client, channel)
             channel.basic_ack(delivery_tag=method.delivery_tag)
         except (ChecksumMismatch, OutputValidationError, UnsupportedJobType, RuntimeError) as exc:
-            logger.error("job %s failed (attempt %s): %s", job_id, attempt, exc)
+            outcome = classify_failure(exc)
+            logger.error("job %s failed (attempt %s, %s): %s", job_id, attempt, outcome, exc)
             db.mark_failed(
                 pg_conn,
-                uuid.UUID(job_id),
+                job_uuid,
                 error_code=type(exc).__name__,
                 error_message=str(exc)[:2000],
             )
             publish_status_event(
-                channel, job_id=job_id, event="failed", detail={"error": str(exc)[:500]}
+                channel, job_id=job_id, event="failed", detail={"error": str(exc)[:500], "classification": outcome}
             )
-            if attempt < MAX_ATTEMPTS and not isinstance(exc, UnsupportedJobType):
-                # §26 bounded retries: nack without requeue so the queue's
-                # DLX wiring routes it to the retry queue's TTL-then-
-                # redeliver chain, with the incremented attempt count
-                # carried in a freshly-published retry message.
-                payload["attempt"] = attempt + 1
-                names = queue_names(job_type)
-                channel.confirm_delivery()
-                channel.basic_publish(
-                    exchange="noc.jobs",
-                    routing_key=names["routing_key"],
-                    body=json.dumps(payload).encode("utf-8"),
-                    properties=pika.BasicProperties(
-                        delivery_mode=pika.DeliveryMode.Persistent,
-                        content_type="application/json",
-                    ),
-                )
-                channel.basic_ack(delivery_tag=method.delivery_tag)
+            next_attempt = attempt + 1
+            if outcome == RETRYABLE and next_attempt <= MAX_ATTEMPTS:
+                # §26 bounded retries: the authoritative attempt count now
+                # lives on the Job row (bumped here), not in the message
+                # body — nacking without requeue lets the main queue's own
+                # dead-letter wiring (declared in queue_topology.py) route
+                # this message through the retry queue's TTL and back onto
+                # the main queue for redelivery, rather than this consumer
+                # hand-republishing a lookalike message itself.
+                db.bump_attempt(pg_conn, job_uuid, next_attempt)
+                channel.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
             else:
-                # Retries exhausted (or a permanently unsupported job
-                # type) — terminal DLQ, per §26 "DLQ after retry
-                # exhaustion".
+                # Retries exhausted, or a terminal failure — DLQ, per §26
+                # "DLQ after retry exhaustion".
                 send_to_dlq(channel, job_type=job_type, body=payload)
                 channel.basic_ack(delivery_tag=method.delivery_tag)
         finally:

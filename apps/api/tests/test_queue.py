@@ -18,6 +18,7 @@ from app.core.queue import (
     queue_message_count,
 )
 from app.jobs import enqueue_job, open_channel
+from app.outbox import dispatch_pending_events
 from app.models.models import Job
 
 from tests.conftest import auth_headers, make_user
@@ -106,7 +107,6 @@ def test_enqueue_job_creates_row_and_publishes(db_session):
         _purge_all(channel)
         job = enqueue_job(
             db_session,
-            channel,
             job_type="daily_report",
             requested_by=None,
             incident_id=None,
@@ -116,8 +116,14 @@ def test_enqueue_job_creates_row_and_publishes(db_session):
             skill_name="daily-report",
             skill_version="1",
         )
+        db_session.commit()
         assert job.id is not None
         assert job.status == "QUEUED"
+
+        # enqueue_job only writes the outbox row now (Reliability mission
+        # Batch A) — dispatch it explicitly rather than expecting a
+        # synchronous publish.
+        dispatch_pending_events(db_session, channel)
 
         names = _queue_names("daily_report")
         method, properties, body = channel.basic_get(names["main"], auto_ack=True)
@@ -140,7 +146,6 @@ def test_admin_jobs_and_dlq_endpoints(client, db_session):
         _purge_all(channel)
         enqueue_job(
             db_session,
-            channel,
             job_type="log_triage",
             requested_by=None,
             incident_id=None,
@@ -150,6 +155,8 @@ def test_admin_jobs_and_dlq_endpoints(client, db_session):
             skill_name="log-triage",
             skill_version="1",
         )
+        db_session.commit()
+        dispatch_pending_events(db_session, channel)
         _purge_all(channel)
 
     jobs_resp = client.get("/api/v1/admin/jobs", headers=headers)
@@ -190,7 +197,6 @@ def test_dlq_requeue_and_purge(client, db_session):
         _purge_all(channel)
         job = enqueue_job(
             db_session,
-            channel,
             job_type="log_triage",
             requested_by=None,
             incident_id=None,
@@ -201,6 +207,7 @@ def test_dlq_requeue_and_purge(client, db_session):
             skill_version="1",
         )
         db_session.commit()
+        dispatch_pending_events(db_session, channel)
         job_id = job.id
         # Simulate the bridge dead-lettering this job after exhausting
         # retries (mirrors bridge/noc_bridge/service.py's _handle_delivery).

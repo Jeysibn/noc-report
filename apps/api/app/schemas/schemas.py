@@ -445,6 +445,19 @@ class StorageBucketStatusOut(BaseModel):
     total_bytes: int
 
 
+class SkillSnapshotOut(BaseModel):
+    """Skill Registry admin activation workflow (Phase 12)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    skill_name: str
+    version_label: int
+    content_hash: str
+    is_active: bool
+    created_at: datetime
+
+
 class AuditLogOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
