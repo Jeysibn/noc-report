@@ -110,6 +110,14 @@ def test_request_analysis_enqueues_real_job(client, db_session):
     assert out["current"] is True
     job_id = out["job_id"]
 
+    # Skill Runtime mission Phase 6: the created AnalysisRun carries a
+    # direct FK to the exact SkillSnapshot row used, not just its hash.
+    from app.api.v1.routers import analysis as analysis_router
+    from app.skills.registry import resolve_active_snapshot
+
+    active_snapshot = resolve_active_snapshot(db_session, analysis_router.SKILL_NAME)
+    assert out["skill_snapshot_id"] == str(active_snapshot.id)
+
     # No fallback analyzer in the API — the real message actually landed
     # on the real queue for a real bridge to pick up. Publishing is now
     # deferred to the outbox dispatcher background thread (Reliability

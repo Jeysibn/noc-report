@@ -380,6 +380,13 @@ class AnalysisRun(Base):
     # identity a cache lookup and the bridge's pre-execution check both
     # key off of.
     skill_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Skill Runtime mission Phase 6: a direct FK to the exact
+    # skill_snapshots row used, not just its hash — one join away from
+    # the run's full provenance (SKILL.md prose, output schema, manifest,
+    # activation history) instead of a second hash-keyed lookup.
+    skill_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("skill_snapshots.id"), nullable=True
+    )
     input_manifest_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     output_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     current: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
