@@ -100,6 +100,10 @@ def _build_snapshot(db: Session, shift: Shift) -> dict:
                 "analysis_run_id": str(run.id) if run else None,
                 "analysis_skill_snapshot_id": str(run.skill_snapshot_id) if (run and run.skill_snapshot_id) else None,
                 "analysis_skill_hash": run.skill_hash if run else None,
+                "analysis_skill_version": run.skill_version if run else None,
+                "analysis_schema_hash": run.schema_hash if run else None,
+                "analysis_model": run.model if run else None,
+                "analysis_effort": run.effort if run else None,
                 "analysis_output_sha256": run.output_sha256 if run else None,
             }
         )
@@ -127,6 +131,7 @@ def _to_out(report: Report, job: Job) -> ReportOut:
         effort=report.effort,
         skill_name=report.skill_name,
         skill_version=report.skill_version,
+        skill_snapshot_id=report.skill_snapshot_id,
         generated_by=report.generated_by,
         generated_at=report.generated_at,
         error_message=job.error_message,
@@ -180,6 +185,7 @@ def generate_report(
         shift_id=shift.id,
         snapshot_json=snapshot_json,
         sha256=snapshot_sha256,
+        skill_snapshot_id=None,
         created_by=current_user.id,
     )
     db.add(snapshot)
@@ -213,6 +219,7 @@ def generate_report(
     # necessarily whatever is on disk right now — activation genuinely
     # controls what new jobs run.
     skill_snapshot = resolve_active_snapshot(db, SKILL_NAME)
+    snapshot.skill_snapshot_id = skill_snapshot.id
 
     # Reliability mission Batch A: same transactional-outbox shape as
     # analysis.py's request_analysis — the ReportSnapshot above and the
@@ -232,6 +239,7 @@ def generate_report(
         skill_name=SKILL_NAME,
         skill_version=SKILL_VERSION,
         skill_hash=skill_snapshot.content_hash,
+        skill_snapshot_id=skill_snapshot.id,
     )
 
     report = Report(
@@ -245,6 +253,7 @@ def generate_report(
         skill_name=job.skill_name,
         skill_version=job.skill_version,
         skill_hash=job.skill_hash,
+        skill_snapshot_id=skill_snapshot.id,
         generated_by=current_user.id,
     )
     db.add(report)

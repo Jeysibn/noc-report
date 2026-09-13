@@ -19,11 +19,9 @@ a new audit trail entry — no manual version bump required to get that
 safety, though `skill_version` (the human-chosen label elsewhere in the
 code) is kept too since it's still useful as a stable display name.
 
-`bridge/noc_bridge/skill_registry.py` mirrors this module's hashing logic
-(same separate-deployable-kept-in-sync-by-hand convention as
-`noc_bridge/db.py`/`noc_bridge/config.py`) so the bridge can verify, right
-before executing a job, that the skill content it's about to run still
-matches the hash the API computed at enqueue time.
+The bridge retrieves the same immutable row by snapshot ID and verifies its
+captured bytes before materializing it. The current checkout is not part of
+the execution path for snapshot-backed jobs.
 """
 from __future__ import annotations
 
@@ -146,6 +144,11 @@ def get_or_create_snapshot(
         manifest_yaml=files["manifest_yaml"],
         is_active=should_activate,
     )
+    # Validate the immutable contract before it can be persisted. Drafts are
+    # also validated so an administrator never discovers a broken schema only
+    # after attempting activation.
+    from app.skills.runtime import validate_snapshot
+    validate_snapshot(db, snapshot)
     db.add(snapshot)
     db.flush()
     return snapshot
@@ -229,6 +232,15 @@ def set_active_snapshot(db: Session, skill_name: str, version_label: int) -> Ski
     )
     if target is None:
         raise SkillVersionNotFound(f"{skill_name}: no snapshot with version_label={version_label}")
+
+    # Activation is the publication boundary for a runtime contract.  Do
+    # every validation before changing is_active so a bad snapshot cannot be
+    # made visible to new jobs.
+    from app.skills.runtime import SkillContractError, validate_snapshot
+    try:
+        validate_snapshot(db, target)
+    except SkillContractError as exc:
+        raise ValueError(str(exc)) from exc
 
     others = db.scalars(
         select(SkillSnapshot).where(

@@ -40,6 +40,7 @@
     "skill_name": { "type": "string", "minLength": 1 },
     "skill_version": { "type": "string", "minLength": 1 },
     "skill_hash": { "type": ["string", "null"] },
+    "skill_snapshot_id": { "type": ["string", "null"] },
     "correlation_id": { "type": "string", "minLength": 1 },
     "attempt": { "type": "integer", "minimum": 1 }
   }

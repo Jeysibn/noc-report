@@ -83,6 +83,7 @@ def build_job_message(
     correlation_id: str,
     attempt: int = 1,
     skill_hash: str | None = None,
+    skill_snapshot_id: uuid.UUID | None = None,
 ) -> dict:
     """The exact message body `publish_job` used to build inline. Split
     out (Reliability mission Batch A) so app/jobs.py can persist it into
@@ -108,6 +109,7 @@ def build_job_message(
         "skill_name": skill_name,
         "skill_version": skill_version,
         "skill_hash": skill_hash,
+        "skill_snapshot_id": str(skill_snapshot_id) if skill_snapshot_id else None,
         "correlation_id": correlation_id,
         "attempt": attempt,
     }
@@ -183,6 +185,7 @@ def publish_job(
     correlation_id: str,
     attempt: int = 1,
     skill_hash: str | None = None,
+    skill_snapshot_id: uuid.UUID | None = None,
 ) -> None:
     """Publish a job message directly. ADR-004: references only, never
     file bytes. Kept for tests/tools that want a one-shot publish without
@@ -202,6 +205,7 @@ def publish_job(
         correlation_id=correlation_id,
         attempt=attempt,
         skill_hash=skill_hash,
+        skill_snapshot_id=skill_snapshot_id,
     )
     publish_message(
         channel,

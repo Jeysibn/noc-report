@@ -134,7 +134,8 @@ class AnalysisReference:
 
 
 Block = (
-    Heading | Paragraph | Divider | PageBreak | BilingualText | IncidentEvidence | AnalysisReference
+    Heading | Paragraph | Divider | PageBreak | Metadata | Link | LogFileReference |
+    Screenshot | BilingualText | IncidentEvidence | AnalysisReference
 )
 
 
@@ -142,6 +143,45 @@ Block = (
 class ReportDocument:
     title: str
     blocks: tuple[Block, ...] = field(default_factory=tuple)
+
+
+def build_report_document(result: dict) -> ReportDocument:
+    """Build the generic renderer IR from a skill-owned declarative result.
+    This intentionally maps only semantic primitives; it does not know any
+    report section names. Skill-specific assemblers may still produce the
+    typed IR directly, as the daily-report assembler does."""
+    blocks = []
+    for raw in result.get("blocks", []):
+        kind = raw.get("type")
+        if kind == "heading":
+            blocks.append(Heading(raw["text"], int(raw.get("level", 1))))
+        elif kind == "paragraph":
+            blocks.append(Paragraph(raw["text"], raw.get("style")))
+        elif kind == "bilingual_text":
+            blocks.append(BilingualText(raw.get("zh", ""), raw.get("en", ""), raw.get("heading_zh"), raw.get("heading_en")))
+        elif kind == "metadata":
+            blocks.append(Metadata(raw["label"], str(raw["value"])))
+        elif kind == "link":
+            blocks.append(Link(raw["label"], raw["url"]))
+        elif kind == "log_file_reference":
+            blocks.append(LogFileReference(raw["filename"]))
+        elif kind == "screenshot":
+            blocks.append(Screenshot(raw["bucket"], raw["object_key"], raw.get("filename")))
+        elif kind == "incident_evidence":
+            blocks.append(IncidentEvidence(
+                heading=raw["heading"],
+                metadata=tuple(Metadata(str(item["label"]), str(item["value"])) for item in raw.get("metadata", [])),
+                link=Link(raw["link"]["label"], raw["link"]["url"]) if raw.get("link") else None,
+                log_file=LogFileReference(raw["log_file"]) if raw.get("log_file") else None,
+                screenshots=tuple(Screenshot(s["bucket"], s["object_key"], s.get("filename")) for s in raw.get("screenshots", [])),
+            ))
+        elif kind == "divider":
+            blocks.append(Divider())
+        elif kind == "page_break":
+            blocks.append(PageBreak())
+        else:
+            raise ValueError(f"unsupported ReportDocument block type: {kind!r}")
+    return ReportDocument(title=result.get("metadata", {}).get("title", "Report"), blocks=tuple(blocks))
 
 
 def _find(entry: dict) -> Find:

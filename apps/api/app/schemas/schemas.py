@@ -352,6 +352,7 @@ class ReportOut(BaseModel):
     effort: str | None
     skill_name: str | None
     skill_version: str | None
+    skill_snapshot_id: uuid.UUID | None = None
     generated_by: uuid.UUID | None
     generated_at: datetime | None
     error_message: str | None

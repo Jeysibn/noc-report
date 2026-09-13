@@ -33,9 +33,13 @@ from noc_bridge.report_document import (
     Divider,
     Heading,
     IncidentEvidence,
+    Link,
+    LogFileReference,
+    Metadata,
     Paragraph,
     PageBreak,
     ReportDocument,
+    Screenshot,
     build_daily_report_document,
 )
 
@@ -131,6 +135,17 @@ def render_document(
             doc.add_heading(block.text, level=block.level)
         elif isinstance(block, Paragraph):
             doc.add_paragraph(block.text, style=block.style) if block.style else doc.add_paragraph(block.text)
+        elif isinstance(block, Metadata):
+            doc.add_paragraph(f"{block.label}: {block.value}")
+        elif isinstance(block, Link):
+            doc.add_paragraph(f"{block.label}: {block.url}")
+        elif isinstance(block, LogFileReference):
+            doc.add_paragraph(f"Log File — File Name: {block.filename}")
+        elif isinstance(block, Screenshot):
+            if screenshot_fetcher is not None:
+                data = screenshot_fetcher(block.bucket, block.object_key)
+                if data:
+                    doc.add_picture(io.BytesIO(data), width=Inches(5.5))
         elif isinstance(block, Divider):
             doc.add_paragraph("―" * 20)
         elif isinstance(block, PageBreak):

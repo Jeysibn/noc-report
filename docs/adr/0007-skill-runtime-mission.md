@@ -3,6 +3,9 @@
 - Status: **implemented**
 - Date: 2026-09-13
 
+> Follow-up: ADR 0009 makes the snapshot ID a first-class Job/Report
+> relationship and supersedes the earlier hash-only execution wording.
+
 ## Context
 
 By ADR 0006, the platform reliably delivered jobs and could detect when a

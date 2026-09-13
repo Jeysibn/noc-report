@@ -22,6 +22,7 @@ import tempfile
 import threading
 import time
 import uuid
+import yaml
 
 import pika
 
@@ -37,7 +38,8 @@ from noc_bridge.queue_topology import (
     queue_names,
     send_to_dlq,
 )
-from noc_bridge.docx_render import render_daily_report_docx
+from noc_bridge.docx_render import render_daily_report_docx, render_document
+from noc_bridge.report_document import build_report_document
 from noc_bridge.sandbox_runner import run_job_sandbox
 from noc_bridge.skill_registry import SkillHashMismatch, SkillSnapshotMissing, materialize_snapshot, verify_skill_hash
 from noc_bridge.storage import ChecksumMismatch, download_object, get_client, object_exists, upload_artifact
@@ -172,6 +174,26 @@ class BridgeService:
 
     # -- job processing -----------------------------------------------
 
+    def _lease_heartbeat(self, job_id: uuid.UUID, claim_token: str, lease_seconds: int, stop: threading.Event) -> None:
+        """Renew the claim while pre-processing, sandbox execution, and
+        artifact upload are in flight. The heartbeat uses its own DB
+        connection because the consumer connection is also used for status
+        commits and must never be concurrently used by two threads."""
+        conn = None
+        interval = max(1.0, min(30.0, lease_seconds / 3))
+        try:
+            conn = db.get_connection(self.settings.database_url)
+            while not stop.wait(interval):
+                try:
+                    if not db.renew_job_lease(conn, job_id, claim_token, lease_seconds=lease_seconds):
+                        logger.warning("lease renewal rejected for job %s; claim is no longer owned", job_id)
+                        return
+                except Exception:
+                    logger.warning("lease renewal failed for job %s", job_id, exc_info=True)
+        finally:
+            if conn is not None:
+                conn.close()
+
     def _process_job(self, job_type: str, payload: dict, pg_conn, minio_client, channel) -> None:
         job_id = uuid.UUID(payload["job_id"])
         attempt = payload.get("attempt", 1)
@@ -193,6 +215,7 @@ class BridgeService:
         # only when the message carries no skill_hash at all (an older
         # enqueuer/test that never went through the Skill Registry).
         skill_hash = payload.get("skill_hash") if job_type in _SKILL_NAME_BY_JOB_TYPE else None
+        skill_snapshot_id = payload.get("skill_snapshot_id") if job_type in _SKILL_NAME_BY_JOB_TYPE else None
         if job_type in _SKILL_NAME_BY_JOB_TYPE and skill_hash is None:
             # No skill_hash at all (older enqueuer/test): nothing to
             # materialize against, so fall back to the live mutable
@@ -234,11 +257,12 @@ class BridgeService:
             # dequeued the message." Raises SkillSnapshotMissing (terminal)
             # if the DB row backing this hash is gone.
             job_skills_dir = self.settings.skills_dir
-            if job_type in _SKILL_NAME_BY_JOB_TYPE and skill_hash is not None:
+            if job_type in _SKILL_NAME_BY_JOB_TYPE and (skill_snapshot_id is not None or skill_hash is not None):
                 job_skills_dir = materialize_snapshot(
                     pg_conn,
                     _SKILL_NAME_BY_JOB_TYPE[job_type],
                     skill_hash,
+                    snapshot_id=skill_snapshot_id,
                     dest_root=pathlib.Path(skill_dir_s),
                 )
 
@@ -321,7 +345,14 @@ class BridgeService:
             # right below, once merged with the frozen snapshot.
             validate_output(job_type, result.output, skill_name=skill_name, skills_dir=job_skills_dir)
 
-            if job_type == "daily_report":
+            renderer_profile = None
+            try:
+                manifest = yaml.safe_load((job_skills_dir / skill_name / "skill.yaml").read_text()) or {}
+                renderer_profile = manifest.get("renderer_profile")
+            except (OSError, yaml.YAMLError) as exc:
+                raise RuntimeError(f"could not load renderer profile for {skill_name}: {exc}") from exc
+
+            if job_type == "daily_report" and renderer_profile == "daily_report_docx":
                 # AI cost-optimization mission Phase 2, Issue 6: Claude
                 # only ever saw/produced the compact 4-field output
                 # validated above. Everything else in the final report —
@@ -364,6 +395,17 @@ class BridgeService:
                     object_key=object_key,
                     src_path=docx_path,
                 )
+            elif job_type == "daily_report" and renderer_profile == "report-document-v1":
+                docx_path = output_dir / "report.docx"
+                render_document(build_report_document(result.output), docx_path)
+                upload_artifact(
+                    minio_client,
+                    bucket=self.settings.minio_bucket_reports,
+                    object_key=f"reports/{job_id}/report.docx",
+                    src_path=docx_path,
+                )
+            elif job_type == "daily_report":
+                raise RuntimeError(f"unsupported renderer profile: {renderer_profile!r}")
             else:
                 result_path = output_dir / "result.json"
                 object_key = f"jobs/{job_id}/result.json"
@@ -431,7 +473,20 @@ class BridgeService:
         #     delivery is redundant right now and is safely ack'd without
         #     executing (the other delivery owns finishing it).
         existing = db.fetch_job_row(pg_conn, job_uuid)
-        if existing is not None and existing["status"] == "COMPLETED":
+        if existing is None:
+            logger.error("job %s is not present in Postgres; routing to DLQ", job_id)
+            send_to_dlq(channel, job_type=job_type, body=payload)
+            channel.basic_ack(delivery_tag=method.delivery_tag)
+            return
+        # The database row is authoritative for an already-created job.
+        # Reject a message whose immutable execution reference was altered in
+        # transit or by an operator; never execute a different snapshot.
+        if existing.get("skill_snapshot_id") is not None and payload.get("skill_snapshot_id") != str(existing["skill_snapshot_id"]):
+            logger.error("job %s snapshot reference does not match its database row", job_id)
+            send_to_dlq(channel, job_type=job_type, body=payload)
+            channel.basic_ack(delivery_tag=method.delivery_tag)
+            return
+        if existing["status"] == "COMPLETED":
             logger.info("job %s redelivered but already COMPLETED — ack without re-executing", job_id)
             channel.basic_ack(delivery_tag=method.delivery_tag)
             return
@@ -457,6 +512,14 @@ class BridgeService:
             return
 
         attempt = claimed["attempt"]  # Postgres is authoritative for attempt count, not the message payload
+        heartbeat_stop = threading.Event()
+        heartbeat = threading.Thread(
+            target=self._lease_heartbeat,
+            args=(job_uuid, claimed["claim_token"], lease_seconds, heartbeat_stop),
+            name=f"lease-heartbeat-{job_uuid}",
+            daemon=True,
+        )
+        heartbeat.start()
 
         with self._lock:
             self.active_jobs += 1
@@ -492,6 +555,8 @@ class BridgeService:
                 send_to_dlq(channel, job_type=job_type, body=payload)
                 channel.basic_ack(delivery_tag=method.delivery_tag)
         finally:
+            heartbeat_stop.set()
+            heartbeat.join(timeout=2)
             with self._lock:
                 self.active_jobs -= 1
 

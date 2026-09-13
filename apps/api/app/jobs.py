@@ -53,6 +53,7 @@ def enqueue_job(
     skill_name: str,
     skill_version: str,
     skill_hash: str | None = None,
+    skill_snapshot_id: uuid.UUID | None = None,
 ) -> Job:
     """`skill_hash` (Reliability mission Batch B — Skill Registry): pass
     the content hash of the SkillSnapshot resolved via
@@ -71,6 +72,7 @@ def enqueue_job(
         skill_name=skill_name,
         skill_version=skill_version,
         skill_hash=skill_hash,
+        skill_snapshot_id=skill_snapshot_id,
         attempt=1,
         correlation_id=str(uuid.uuid4()),
     )
@@ -87,6 +89,7 @@ def enqueue_job(
         skill_name=skill_name,
         skill_version=skill_version,
         skill_hash=skill_hash,
+        skill_snapshot_id=str(skill_snapshot_id) if skill_snapshot_id else None,
         correlation_id=job.correlation_id,
     )
     names = queue_names(job_type)
