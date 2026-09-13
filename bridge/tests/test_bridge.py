@@ -33,6 +33,7 @@ from noc_bridge.storage import ChecksumMismatch, download_object, get_client, sh
 from noc_bridge.validation import OutputValidationError, validate_output
 
 SETTINGS = BridgeSettings()
+SKILLS_DIR = pathlib.Path(__file__).resolve().parents[2] / "skills"
 
 
 @pytest.fixture
@@ -142,6 +143,8 @@ def test_validate_log_triage_accepts_well_formed_output():
             "severity_signal": "high",
             "confidence": 0.9,
         },
+        skill_name="log-triage-summary",
+        skills_dir=SKILLS_DIR,
     )
 
 
@@ -156,17 +159,23 @@ def test_validate_log_triage_rejects_bad_severity():
                 "recommended_action": "x",
                 "confidence": 0.5,
             },
+            skill_name="log-triage-summary",
+            skills_dir=SKILLS_DIR,
         )
 
 
 def test_validate_output_rejects_none():
     with pytest.raises(OutputValidationError):
-        validate_output("log_triage", None)
+        validate_output("log_triage", None, skill_name="log-triage-summary", skills_dir=SKILLS_DIR)
 
 
-def test_validate_unsupported_job_type():
-    with pytest.raises(OutputValidationError):
-        validate_output("something_unknown", {"a": 1})
+def test_validate_output_rejects_unknown_skill_missing_schema(tmp_path):
+    # Skill Runtime mission Phase 4: validate_output is generic now — an
+    # unresolvable skill (no output.schema.json under skills_dir) fails
+    # loudly rather than silently succeeding, same as an unsupported
+    # job_type used to.
+    with pytest.raises(OutputValidationError, match="no output schema found"):
+        validate_output("something_unknown", {"a": 1}, skill_name="nonexistent-skill", skills_dir=tmp_path)
 
 
 # -- full pipeline: real RabbitMQ + Postgres + MinIO + Docker --------------

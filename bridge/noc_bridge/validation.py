@@ -4,18 +4,74 @@ before it's ever uploaded to MinIO or treated as a real result — a bad or
 truncated model/stand-in output must fail loudly here, not surface as a
 malformed AnalysisRun/Report downstream.
 
-`log_triage` validates against `skills/log-triage-summary/SKILL.md`'s
-contract: bilingual (Chinese/English) summary plus a Key Finds/Secondary
-Finds breakdown with per-pattern count/percentage. `daily_report` validates
-against `skills/daily-alert-report/SKILL.md`'s contract: bilingual overview
-plus a `sections` list (one per incident) each carrying a nullable, carried-
-through `analysis` object in that same shape.
+Skill Runtime mission Phase 4: this used to hard-code each skill's field
+names (summary_en/key_finds/secondary_finds/likely_cause_en/... for
+log-triage-summary; overview_en/cross_incident_findings_en/... for
+daily-alert-report) directly in Python — a second, hand-maintained copy of
+each skill's `output.schema.json` contract that could (and did) drift from
+the actual schema file. `validate_output` is now generic: it loads the
+skill's own output.schema.json (from the same per-job materialized
+SkillSnapshot directory the sandbox itself validated against — see
+`bridge/noc_bridge/skill_registry.materialize_snapshot` and
+`sandbox/entrypoint.py::_load_output_schema`) and runs a standard
+`jsonschema` validation. A skill's output format can now change by
+editing its schema file alone; no generic bridge code needs to change.
+
+`validate_merged_daily_report` is intentionally NOT schema-driven the same
+way: it checks the *deterministically-merged* report structure (title/
+overview/sections, each section carrying through screenshots/links/
+existing analysis verbatim) that `service.py::_merge_daily_report`
+assembles from the frozen snapshot plus Claude's compact AI output — a
+structure `docx_render.py` depends on today, not a skill's own output
+contract. The Skill Runtime mission's ReportDocument work (Phase 8/9) is
+what's expected to eventually replace this hand-written check with a
+generic renderer-facing schema; until then it stays declarative here,
+same as before.
 """
 from __future__ import annotations
+
+import json
+import pathlib
+
+import jsonschema
 
 
 class OutputValidationError(ValueError):
     pass
+
+
+def validate_against_schema(output: dict, schema: dict, *, label: str = "output") -> None:
+    """Generic JSON Schema validation, wrapping jsonschema's own exception
+    in OutputValidationError so callers (and noc_bridge.failures'
+    classify_failure) keep dealing with one exception type regardless of
+    which skill or schema failed."""
+    try:
+        jsonschema.validate(instance=output, schema=schema)
+    except jsonschema.ValidationError as exc:
+        raise OutputValidationError(f"{label} failed schema validation: {exc.message}") from exc
+    except jsonschema.SchemaError as exc:
+        raise OutputValidationError(f"{label}'s own schema is invalid: {exc.message}") from exc
+
+
+def validate_output(
+    job_type: str,
+    output: dict | None,
+    *,
+    skill_name: str,
+    skills_dir: pathlib.Path,
+) -> None:
+    """Validates the sandbox's raw structured output against the exact
+    skill's output.schema.json found under `skills_dir` — the same
+    directory Phase 1 materialized this job's exact SkillSnapshot content
+    into (or the live checkout, for a job with no skill_hash at all)."""
+    if output is None:
+        raise OutputValidationError(f"sandbox produced no result.json for job_type={job_type!r}")
+    schema_path = skills_dir / skill_name / "output.schema.json"
+    try:
+        schema = json.loads(schema_path.read_text())
+    except FileNotFoundError as exc:
+        raise OutputValidationError(f"no output schema found for skill {skill_name!r} at {schema_path}") from exc
+    validate_against_schema(output, schema, label=f"{job_type} output")
 
 
 _SEVERITY_LEVELS = {"low", "medium", "high", "critical"}
@@ -75,31 +131,6 @@ def _validate_analysis_object(analysis: dict, path: str) -> None:
         _validate_find_entry(entry, f"{path}.secondary_finds[{i}]")
 
 
-def _validate_log_triage(output: dict) -> None:
-    _validate_analysis_object(output, "output")
-
-
-def _validate_daily_report_ai_output(output: dict) -> None:
-    """AI cost-optimization mission Phase 2, Issue 6: validates the
-    COMPACT output Claude actually produces now (see
-    skills/daily-alert-report/SKILL.md and sandbox/entrypoint.py's
-    _SCHEMAS["daily-alert-report"]) — just the shift-level overview and
-    any real cross-incident correlation, not the full merged report
-    (title/sections/screenshots/etc, which service.py assembles
-    deterministically afterward and validates separately via
-    `_validate_daily_report`)."""
-    required = [
-        "overview_en", "overview_zh",
-        "cross_incident_findings_en", "cross_incident_findings_zh",
-    ]
-    missing = [field for field in required if field not in output]
-    if missing:
-        raise OutputValidationError(f"daily_report AI output missing fields: {missing}")
-    for field in required:
-        if not isinstance(output[field], str) or not output[field].strip():
-            raise OutputValidationError(f"{field} must be a non-empty string")
-
-
 def _validate_daily_report(output: dict) -> None:
     required = ["title", "overview_en", "overview_zh", "sections"]
     missing = [field for field in required if field not in output]
@@ -130,29 +161,11 @@ def _validate_daily_report(output: dict) -> None:
             _validate_analysis_object(analysis, f"sections[{i}].analysis")
 
 
-_VALIDATORS = {
-    "log_triage": _validate_log_triage,
-    # AI cost-optimization mission Phase 2, Issue 6: this validates the
-    # sandbox's raw output — now the COMPACT AI output, not the full
-    # merged report. The full merged report (built deterministically in
-    # service.py from this plus the frozen snapshot) is validated
-    # separately via `validate_merged_daily_report` before rendering.
-    "daily_report": _validate_daily_report_ai_output,
-}
-
-
 def validate_merged_daily_report(output: dict) -> None:
     """Validates the final, deterministically-merged daily report
     structure (title/overview/sections, each carrying through screenshots/
     links/existing analysis verbatim) — the same contract
-    bridge/noc_bridge/docx_render.py has always depended on."""
+    bridge/noc_bridge/docx_render.py has always depended on. See this
+    module's docstring for why this one stays hand-written rather than
+    schema-driven."""
     _validate_daily_report(output)
-
-
-def validate_output(job_type: str, output: dict | None) -> None:
-    if output is None:
-        raise OutputValidationError("sandbox produced no result.json")
-    validator = _VALIDATORS.get(job_type)
-    if validator is None:
-        raise OutputValidationError(f"no output validator registered for job_type={job_type!r}")
-    validator(output)
