@@ -497,7 +497,14 @@ def test_cached_analysis_run_lookup_invalidated_by_cache_contract_version_mismat
     assert hit is None
 
 
-def test_cached_analysis_run_lookup_invalidated_by_skill_version_mismatch(client, db_session):
+def test_cached_analysis_run_lookup_ignores_skill_version_label_mismatch(client, db_session):
+    """Skill Runtime mission Phase 16: skill_version is a display label,
+    not part of the cache key any more — a prior run recorded under a
+    different (even stale/forgotten-to-bump) skill_version label is still
+    reusable as long as skill_hash (the actual content-identity check)
+    matches. Before Phase 16 this mismatch alone invalidated the cache
+    entry even when the skill's real content (SKILL.md/output.schema.json/
+    skill.yaml bytes) was identical."""
     make_user(db_session, "operator4", "NOC")
     headers = auth_headers(client, "operator4")
     incident = _create_incident(client, headers)
@@ -517,7 +524,7 @@ def test_cached_analysis_run_lookup_invalidated_by_skill_version_mismatch(client
         db_session, log_evidence=log_evidence, requested_model=None, requested_effort=None,
         skill_hash=_current_skill_hash(db_session),
     )
-    assert hit is None
+    assert hit is not None
 
 
 def test_cached_analysis_run_lookup_invalidated_by_skill_hash_mismatch(client, db_session):

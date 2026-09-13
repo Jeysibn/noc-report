@@ -86,17 +86,25 @@ def _find_cached_analysis_run(
     a higher effort tier. A request that leaves model/effort unset (the
     common case) matches any cached run's model/effort.
 
-    Skill Registry (Reliability mission Batch B): `skill_hash` is checked
-    alongside skill_name/skill_version/cache_contract_version — a prior
-    run produced under different SKILL.md/output.schema.json content
-    (even under the same skill_version label, e.g. because someone forgot
-    to bump it) is not reusable."""
+    Skill Registry (Reliability mission Batch B) / Skill Runtime mission
+    Phase 16: `skill_hash` — not `skill_version` — is the cache key's
+    content-identity check. `skill_version` is a human-chosen display
+    label (see app/skills/registry.py's own docstring: "no manual version
+    bump required to get that safety") that can drift from the skill's
+    actual on-disk content independently of `skill_hash`, which is
+    mechanically derived from SKILL.md + output.schema.json + skill.yaml's
+    literal bytes. Keying the cache on the label instead of (or as well
+    as) the hash would reintroduce exactly the "forgot to bump the
+    version" drift the Skill Registry exists to close — a content change
+    without a version bump must still miss the cache (via skill_hash), and
+    a version-label-only change with no content change should still hit
+    it (harmless, but the point is skill_hash alone is both necessary and
+    sufficient for content-identity correctness here)."""
     if not log_evidence.sha256:
         return None
     filters = [
         AnalysisRun.input_manifest_sha256 == log_evidence.sha256,
         AnalysisRun.skill_name == SKILL_NAME,
-        AnalysisRun.skill_version == SKILL_VERSION,
         AnalysisRun.skill_hash == skill_hash,
         AnalysisRun.cache_contract_version == CACHE_CONTRACT_VERSION,
         AnalysisRun.result_json.is_not(None),
