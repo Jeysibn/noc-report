@@ -26,9 +26,9 @@ def test_prepared_credentials_grant_other_read_only_no_group_bits():
         tmp_dir = prepare_sandbox_credentials(source)
         try:
             dest = tmp_dir / ".credentials.json"
-            assert _mode(tmp_dir) == 0o705
-            assert _mode(dest) == 0o604
-            assert _mode(dest) & stat.S_IWOTH == 0  # not world-writable
+            assert _mode(tmp_dir) == 0o700
+            assert _mode(dest) == 0o600
+            assert _mode(dest) & stat.S_IRWXO == 0  # not world-accessible
             assert _mode(dest) & 0o070 == 0  # no group bits
         finally:
             import shutil

@@ -34,9 +34,9 @@ def prepare_sandbox_credentials(source: pathlib.Path) -> pathlib.Path:
     # access; this holds a live OAuth credential, so grant exactly
     # traverse+read for "other" (0o705/0o604) and zero "group" bits —
     # no other local group has any reason to reach a copied secret.
-    tmp_dir.chmod(0o705)
+    tmp_dir.chmod(0o700)
     dest = tmp_dir / ".credentials.json"
     shutil.copy2(source, dest)
-    dest.chmod(0o604)  # other=r for uid 10001; still not group/world-writable
+    dest.chmod(0o600)
     atexit.register(shutil.rmtree, tmp_dir, ignore_errors=True)
     return tmp_dir
