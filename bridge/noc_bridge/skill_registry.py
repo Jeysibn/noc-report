@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import pathlib
+import yaml
 
 import psycopg2.extras
 
@@ -79,10 +80,25 @@ def fetch_skill_snapshot(conn, content_hash: str | None = None, snapshot_id: str
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(
             "SELECT skill_name, version_label, content_hash, skill_md, "
-            "output_schema_json, manifest_yaml FROM skill_snapshots "
+            "output_schema_json, manifest_yaml, dependency_snapshot_ids FROM skill_snapshots "
             "WHERE id = %s" if snapshot_id else "WHERE content_hash = %s",
             (snapshot_id or content_hash,),
         )
+        row = cur.fetchone()
+    return dict(row) if row else None
+
+
+def fetch_dependency_snapshot(conn, dependency) -> dict | None:
+    name = dependency if isinstance(dependency, str) else dependency.get("id")
+    version = None if isinstance(dependency, str) else dependency.get("version")
+    query = "SELECT skill_name, version_label, content_hash, skill_md, output_schema_json, manifest_yaml, dependency_snapshot_ids FROM skill_snapshots WHERE skill_name = %s"
+    params = [name]
+    if version is not None:
+        query += " AND version_label = %s"
+        params.append(int(version))
+    query += " ORDER BY version_label DESC LIMIT 1"
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(query, tuple(params))
         row = cur.fetchone()
     return dict(row) if row else None
 
@@ -141,4 +157,26 @@ def materialize_snapshot(
     skill_dir.chmod(0o705)
     for filename in (_PROMPT_FILENAME, _SCHEMA_FILENAME, _MANIFEST_FILENAME):
         (skill_dir / filename).chmod(0o604)
+    # Dependencies are materialized beside the primary skill using their
+    # exact registered snapshots. The sandbox may consume them if the
+    # manifest references them; no mutable repository tree is mounted.
+    manifest = yaml.safe_load(snapshot["manifest_yaml"]) or {}
+    dependency_ids = snapshot.get("dependency_snapshot_ids") or {}
+    for dependency in manifest.get("dependencies", []):
+        dependency_name = dependency if isinstance(dependency, str) else dependency.get("id")
+        dep = (
+            fetch_skill_snapshot(conn, snapshot_id=dependency_ids.get(dependency_name))
+            if dependency_ids.get(dependency_name)
+            else fetch_dependency_snapshot(conn, dependency)
+        )
+        if dep is None:
+            raise SkillSnapshotMissing(f"dependency snapshot is missing: {dependency}")
+        dep_name = dep["skill_name"]
+        dep_dir = dest_root / dep_name
+        dep_dir.mkdir(parents=True, exist_ok=True)
+        dep_dir.chmod(0o705)
+        for filename, value in ((_PROMPT_FILENAME, dep["skill_md"]), (_SCHEMA_FILENAME, dep["output_schema_json"]), (_MANIFEST_FILENAME, dep["manifest_yaml"])):
+            path = dep_dir / filename
+            path.write_text(value)
+            path.chmod(0o604)
     return dest_root

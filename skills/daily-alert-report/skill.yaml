@@ -14,7 +14,8 @@ renderer_profile: daily_report_docx
 execution_policy:
   job_type: daily_report
   timeout_seconds: 900
-dependencies: []
+dependencies:
+  - log-triage-summary
 description: >
   Produce the cross-incident, shift-level narrative for a daily alert
   report from compact per-incident summaries.

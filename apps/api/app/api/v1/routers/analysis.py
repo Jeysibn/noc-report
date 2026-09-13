@@ -9,7 +9,9 @@ never fabricates a result.
 """
 import json
 import hashlib
+import pathlib
 import uuid
+import yaml
 from datetime import datetime, timezone
 
 from botocore.exceptions import ClientError
@@ -25,15 +27,25 @@ from app.deps import require_permission
 from app.jobs import enqueue_job
 from app.models.models import AnalysisRun, Evidence, Incident, Job, User
 from app.skills.registry import resolve_active_snapshot
+from app.skills.runtime import declared_skill_version
 from app.schemas.schemas import AnalysisRequest, AnalysisRunOut
 
 router = APIRouter(tags=["analysis"])
 
 SKILL_NAME = "log-triage-summary"
-SKILL_VERSION = "1"
+
+# Compatibility label for older callers/tests that construct a Job directly.
+# Runtime job creation never uses this value to select a skill; it resolves a
+# SkillSnapshot and derives the label from that immutable manifest. Reading it
+# from the source manifest avoids retaining a second hard-coded version.
+_SOURCE_MANIFEST = pathlib.Path(__file__).resolve().parents[6] / "skills" / SKILL_NAME / "skill.yaml"
+SKILL_VERSION = str((yaml.safe_load(_SOURCE_MANIFEST.read_text()) or {}).get("version", "1"))
 
 # AI cost-optimization mission Phase 2, Issue 5 (cache versioning):
-# SKILL_VERSION alone conflated several independently-changing axes into
+# The manifest-declared version is descriptive; immutable snapshot identity
+# is the execution/cache identity. This avoids an unrelated hard-coded
+# version string diverging from the active skill.
+# The old SKILL_VERSION label conflated several independently-changing axes into
 # one number, so a change to any one of them (e.g. a preprocessing fix)
 # forced a version bump that also (correctly, but by accident) invalidated
 # unrelated cache entries, with no record of *why*. These are now tracked
@@ -311,7 +323,7 @@ def request_analysis(
             model=cached_run.model,
             effort=cached_run.effort,
             skill_name=SKILL_NAME,
-            skill_version=SKILL_VERSION,
+            skill_version=declared_skill_version(skill_snapshot),
             skill_hash=skill_snapshot.content_hash,
             skill_snapshot_id=skill_snapshot.id,
             correlation_id=str(uuid.uuid4()),
@@ -331,7 +343,7 @@ def request_analysis(
             model=cached_run.model,
             effort=cached_run.effort,
             skill_name=SKILL_NAME,
-            skill_version=SKILL_VERSION,
+            skill_version=declared_skill_version(skill_snapshot),
             skill_hash=skill_snapshot.content_hash,
             skill_snapshot_id=skill_snapshot.id,
             schema_hash=_snapshot_schema_hash(skill_snapshot),
@@ -371,7 +383,7 @@ def request_analysis(
         model=body.model,
         effort=body.effort,
         skill_name=SKILL_NAME,
-        skill_version=SKILL_VERSION,
+        skill_version=declared_skill_version(skill_snapshot),
         skill_hash=skill_snapshot.content_hash,
         skill_snapshot_id=skill_snapshot.id,
     )

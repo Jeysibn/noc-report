@@ -46,9 +46,9 @@ from noc_bridge.storage import ChecksumMismatch, download_object, get_client, ob
 from noc_bridge.validation import (
     OutputValidationError,
     validate_output,
-    validate_merged_daily_report,
     validate_against_schema,
 )
+from noc_bridge.report_validation import validate_merged_daily_report
 
 # Skill Runtime mission Phase 14: the job message protocol's single source
 # of truth — see packages/contracts/job_message.schema.json's own
@@ -214,15 +214,16 @@ class BridgeService:
         # Falls back to the old hash-verify-against-live-disk behavior
         # only when the message carries no skill_hash at all (an older
         # enqueuer/test that never went through the Skill Registry).
-        skill_hash = payload.get("skill_hash") if job_type in _SKILL_NAME_BY_JOB_TYPE else None
-        skill_snapshot_id = payload.get("skill_snapshot_id") if job_type in _SKILL_NAME_BY_JOB_TYPE else None
+        skill_name = payload.get("skill_name") or _SKILL_NAME_BY_JOB_TYPE.get(job_type)
+        skill_hash = payload.get("skill_hash") if skill_name else None
+        skill_snapshot_id = payload.get("skill_snapshot_id") if skill_name else None
         if job_type in _SKILL_NAME_BY_JOB_TYPE and skill_hash is None:
             # No skill_hash at all (older enqueuer/test): nothing to
             # materialize against, so fall back to the live mutable
             # checkout with a no-op verify (verify_skill_hash no-ops when
             # expected_hash is None).
             verify_skill_hash(
-                _SKILL_NAME_BY_JOB_TYPE[job_type],
+                skill_name,
                 skill_hash,
                 skills_dir=self.settings.skills_dir,
             )
@@ -257,16 +258,25 @@ class BridgeService:
             # dequeued the message." Raises SkillSnapshotMissing (terminal)
             # if the DB row backing this hash is gone.
             job_skills_dir = self.settings.skills_dir
-            if job_type in _SKILL_NAME_BY_JOB_TYPE and (skill_snapshot_id is not None or skill_hash is not None):
+            if skill_name and (skill_snapshot_id is not None or skill_hash is not None):
                 job_skills_dir = materialize_snapshot(
                     pg_conn,
-                    _SKILL_NAME_BY_JOB_TYPE[job_type],
+                    skill_name,
                     skill_hash,
                     snapshot_id=skill_snapshot_id,
                     dest_root=pathlib.Path(skill_dir_s),
                 )
 
-            input_filename = _INPUT_FILENAME_BY_JOB_TYPE.get(job_type)
+            input_filename = None
+            if skill_name and job_skills_dir != self.settings.skills_dir:
+                try:
+                    manifest = yaml.safe_load((job_skills_dir / skill_name / "skill.yaml").read_text()) or {}
+                    contract = manifest.get("input_contract", {})
+                    input_filename = contract if isinstance(contract, str) else contract.get("filename")
+                except (OSError, yaml.YAMLError, AttributeError) as exc:
+                    raise RuntimeError(f"invalid input contract for {skill_name}: {exc}") from exc
+            if input_filename is None:
+                input_filename = _INPUT_FILENAME_BY_JOB_TYPE.get(job_type)
             if input_filename is None:
                 raise UnsupportedJobType(f"no skill wired yet for job_type={job_type!r}")
 
@@ -285,7 +295,8 @@ class BridgeService:
             publish_status_event(channel, job_id=job_id, event="progress", detail={"stage": "sandbox"})
 
             creds_dir = self._ensure_claude_creds_dir()
-            skill_name = _SKILL_NAME_BY_JOB_TYPE[job_type]
+            if not skill_name:
+                raise UnsupportedJobType(f"no skill wired yet for job_type={job_type!r}")
 
             result = run_job_sandbox(
                 input_dir=input_dir,
@@ -352,7 +363,20 @@ class BridgeService:
             except (OSError, yaml.YAMLError) as exc:
                 raise RuntimeError(f"could not load renderer profile for {skill_name}: {exc}") from exc
 
-            if job_type == "daily_report" and renderer_profile == "daily_report_docx":
+            if job_type == "daily_report" and renderer_profile == "report-document-v1":
+                # A report skill may return a completely different semantic
+                # layout.  Its result is translated to the generic IR and
+                # rendered by the same adapter; no report field names belong
+                # in this worker branch.
+                docx_path = output_dir / "report.docx"
+                render_document(build_report_document(result.output), docx_path)
+                upload_artifact(
+                    minio_client,
+                    bucket=self.settings.minio_bucket_reports,
+                    object_key=f"reports/{job_id}/report.docx",
+                    src_path=docx_path,
+                )
+            elif job_type == "daily_report" and renderer_profile == "daily_report_docx":
                 # AI cost-optimization mission Phase 2, Issue 6: Claude
                 # only ever saw/produced the compact 4-field output
                 # validated above. Everything else in the final report —
@@ -393,15 +417,6 @@ class BridgeService:
                     minio_client,
                     bucket=self.settings.minio_bucket_reports,
                     object_key=object_key,
-                    src_path=docx_path,
-                )
-            elif job_type == "daily_report" and renderer_profile == "report-document-v1":
-                docx_path = output_dir / "report.docx"
-                render_document(build_report_document(result.output), docx_path)
-                upload_artifact(
-                    minio_client,
-                    bucket=self.settings.minio_bucket_reports,
-                    object_key=f"reports/{job_id}/report.docx",
                     src_path=docx_path,
                 )
             elif job_type == "daily_report":

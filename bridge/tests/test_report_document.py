@@ -21,6 +21,7 @@ from noc_bridge.report_document import (
     Metadata,
     Paragraph,
     ReportDocument,
+    build_report_document,
     build_daily_report_document,
 )
 
@@ -114,6 +115,38 @@ def test_render_document_is_generic_over_a_synthetic_document_shape(tmp_path):
     assert "Just some text." in all_text
     assert "你好" in all_text
     assert "Hello" in all_text
+
+
+def test_materially_different_skill_layouts_use_same_docx_adapter(tmp_path):
+    """Acceptance proof: section order and meaning come from each skill's
+    declarative block result; render_document remains unchanged."""
+    layouts = [
+        {
+            "metadata": {"title": "Layout A"},
+            "blocks": [
+                {"type": "heading", "level": 1, "text": "Alerts"},
+                {"type": "paragraph", "text": "General Summary"},
+                {"type": "heading", "level": 1, "text": "Log Analysis"},
+            ],
+        },
+        {
+            "metadata": {"title": "Layout B"},
+            "blocks": [
+                {"type": "heading", "level": 1, "text": "Executive Overview"},
+                {"type": "divider"},
+                {"type": "heading", "level": 1, "text": "Critical Incidents"},
+                {"type": "paragraph", "text": "Recurring Problems"},
+                {"type": "page_break"},
+                {"type": "heading", "level": 1, "text": "Recommended Actions"},
+            ],
+        },
+    ]
+    for index, result in enumerate(layouts):
+        dest = tmp_path / f"layout-{index}.docx"
+        render_document(build_report_document(result), dest)
+        text = "\n".join(p.text for p in Document(str(dest)).paragraphs)
+        assert result["metadata"]["title"] in text
+        assert result["blocks"][0]["text"] in text
 
 
 def test_render_daily_report_docx_end_to_end_produces_a_valid_docx(tmp_path):
