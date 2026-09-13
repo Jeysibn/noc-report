@@ -55,6 +55,12 @@ _SKILL_NAME_BY_JOB_TYPE = {
 # storage bucket a completed job's rendered artifact belongs in.
 _INPUT_FILENAME_BY_JOB_TYPE = {"log_triage": "log.txt", "daily_report": "snapshot.json"}
 
+# Skill Runtime mission Phase 13: fixed margin added on top of a job's own
+# configured timeout_seconds when computing its claim lease, covering the
+# bridge's own pre/post-sandbox work (download, snapshot materialization,
+# upload, DB writes) that isn't counted in the sandbox timeout itself.
+_LEASE_SAFETY_MARGIN_SECONDS = 120
+
 logger = logging.getLogger("noc_bridge")
 
 # Reliability mission Batch A/Phase 3: was 1, which made the "retry"
@@ -399,7 +405,21 @@ class BridgeService:
             channel.basic_ack(delivery_tag=method.delivery_tag)
             return
 
-        claimed = db.claim_job(pg_conn, job_uuid, worker_id=self.worker_id)
+        # Skill Runtime mission Phase 13: the lease must outlive the job's
+        # own configured timeout, or a long-but-legitimately-still-running
+        # job's lease can expire mid-execution and be reclaimed (by a
+        # redelivery of the same message, or a second worker), causing it
+        # to run twice concurrently. `db.claim_job`'s old fixed 600s
+        # default was shorter than daily-alert-report/log-triage-summary's
+        # own 900s skill.yaml timeout_seconds — a job that legitimately
+        # took longer than 600s (but less than its real 900s budget) could
+        # already have had its lease reclaimed here. Read the same
+        # system_config value _process_job passes to run_job_sandbox so
+        # the lease is always at least as long as the sandbox is allowed
+        # to run, plus a fixed safety margin for the bridge's own
+        # pre/post-sandbox work (download, upload, DB writes).
+        lease_seconds = db.load_system_config(pg_conn)["job_timeout_seconds"] + _LEASE_SAFETY_MARGIN_SECONDS
+        claimed = db.claim_job(pg_conn, job_uuid, worker_id=self.worker_id, lease_seconds=lease_seconds)
         if claimed is None:
             logger.info("job %s could not be claimed (already leased elsewhere) — ack without re-executing", job_id)
             channel.basic_ack(delivery_tag=method.delivery_tag)
