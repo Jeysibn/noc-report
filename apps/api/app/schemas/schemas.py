@@ -275,6 +275,9 @@ class AnalysisRunOut(BaseModel):
     effort: str | None
     skill_name: str | None
     skill_version: str | None
+    # Skill Runtime mission Phase 6: the exact SkillSnapshot row's id, not
+    # just the human-readable name/version label.
+    skill_snapshot_id: uuid.UUID | None = None
     attempt: int
     error_code: str | None
     error_message: str | None
