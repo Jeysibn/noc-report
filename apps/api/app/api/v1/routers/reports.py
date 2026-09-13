@@ -29,8 +29,9 @@ from app.core.storage import (
 )
 from app.db.session import get_db
 from app.deps import require_permission
-from app.jobs import enqueue_job, open_channel
+from app.jobs import enqueue_job
 from app.models.models import AnalysisRun, Evidence, Incident, Job, Report, ReportSnapshot, Shift, User
+from app.skills.registry import get_or_create_snapshot
 from app.schemas.schemas import (
     ReportDownloadUrlResponse,
     ReportGenerateRequest,
@@ -194,21 +195,30 @@ def generate_report(
         or 0
     ) + 1
 
-    with open_channel() as channel:
-        job = enqueue_job(
-            db,
-            channel,
-            job_type="daily_report",
-            requested_by=current_user.id,
-            incident_id=None,
-            object_refs=[
-                {"bucket": settings.minio_bucket_reports, "key": snapshot_key, "sha256": snapshot_sha256}
-            ],
-            model=body.model,
-            effort=body.effort,
-            skill_name=SKILL_NAME,
-            skill_version=SKILL_VERSION,
-        )
+    # Skill Registry (Reliability mission Batch B): resolves/creates the
+    # immutable SkillSnapshot for this skill's current on-disk content —
+    # see analysis.py's request_analysis for the fuller rationale.
+    skill_snapshot = get_or_create_snapshot(db, SKILL_NAME)
+
+    # Reliability mission Batch A: same transactional-outbox shape as
+    # analysis.py's request_analysis — the ReportSnapshot above and the
+    # Report row below, plus the Job + OutboxEvent enqueue_job creates,
+    # all commit together at the bottom of this function. Nothing reaches
+    # RabbitMQ until that commit has actually happened.
+    job = enqueue_job(
+        db,
+        job_type="daily_report",
+        requested_by=current_user.id,
+        incident_id=None,
+        object_refs=[
+            {"bucket": settings.minio_bucket_reports, "key": snapshot_key, "sha256": snapshot_sha256}
+        ],
+        model=body.model,
+        effort=body.effort,
+        skill_name=SKILL_NAME,
+        skill_version=SKILL_VERSION,
+        skill_hash=skill_snapshot.content_hash,
+    )
 
     report = Report(
         shift_id=shift.id,
@@ -220,6 +230,7 @@ def generate_report(
         effort=job.effort,
         skill_name=job.skill_name,
         skill_version=job.skill_version,
+        skill_hash=job.skill_hash,
         generated_by=current_user.id,
     )
     db.add(report)

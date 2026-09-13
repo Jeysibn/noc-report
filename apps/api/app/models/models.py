@@ -249,6 +249,13 @@ class Job(Base):
     effort: Mapped[str | None] = mapped_column(String(20), nullable=True)
     skill_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     skill_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # Skill Registry (Reliability mission Batch B): the content hash of
+    # the SkillSnapshot actually used for this row, computed by
+    # app/skills/registry.py at enqueue time. skill_name/skill_version
+    # remain a human-readable label; skill_hash is the tamper-evident
+    # identity a cache lookup and the bridge's pre-execution check both
+    # key off of.
+    skill_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     attempt: Mapped[int] = mapped_column(nullable=False, default=1)
     correlation_id: Mapped[str] = mapped_column(String(100), nullable=False)
     error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
@@ -263,6 +270,77 @@ class Job(Base):
     # may add other values.
     used_cache: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     cache_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
+    # Reliability mission Batch A (idempotent job lifecycle): a claim/lease
+    # so the bridge can tell "am I the one allowed to execute this job right
+    # now" apart from RabbitMQ's own at-least-once redelivery. `claim_token`
+    # is a fresh uuid4 minted by whichever worker successfully claims the
+    # job (see bridge/noc_bridge/db.claim_job's conditional UPDATE); a
+    # redelivery that arrives while the lease is still live is not
+    # reclaimable and the bridge skips re-executing it. `lease_expires_at`
+    # lets a crashed worker's claim eventually become reclaimable again
+    # instead of wedging the job forever.
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    claim_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    worker_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
+
+# --- Outbox (Reliability mission Batch A: transactional outbox) ------------
+
+
+class OutboxEvent(Base):
+    """A row here is created in the *same* Postgres transaction as the
+    Job (and AnalysisRun/Report/ReportSnapshot) it announces, so a
+    RabbitMQ publish can never observably happen before the domain state
+    it describes is durable — the dispatcher (app/outbox.py) only
+    publishes rows that already committed. `published_at` is set once the
+    broker has confirmed the publish; a row with `published_at is None` is
+    still due and safe to retry (publishing is at-least-once, matching
+    RabbitMQ's own delivery guarantee — the job lifecycle module handles
+    the resulting idempotency on the consumer side)."""
+
+    __tablename__ = "outbox_events"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    event_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    aggregate_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    aggregate_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    job_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("jobs.id"), nullable=False)
+    routing_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_error: Mapped[str | None] = mapped_column(String, nullable=True)
+
+
+class SkillSnapshot(Base):
+    """Skill Registry (Reliability mission Batch B): an immutable record
+    of one exact version of a skill's content (its SKILL.md prompt,
+    output.schema.json contract, and skill.yaml manifest, all captured
+    verbatim here). Rows are never updated — a content change produces a
+    *new* row with a new `content_hash` and the next `version_label`,
+    computed by `app/skills/registry.py::get_or_create_snapshot`. This is
+    what makes `skill_hash` (stored on Job/AnalysisRun/Report) a real,
+    tamper-evident identity instead of a free-text label someone has to
+    remember to bump."""
+
+    __tablename__ = "skill_snapshots"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    skill_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    version_label: Mapped[int] = mapped_column(Integer, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    skill_md: Mapped[str] = mapped_column(String, nullable=False)
+    output_schema_json: Mapped[str] = mapped_column(String, nullable=False)
+    manifest_yaml: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # Skill Admin activation workflow (Phase 12, Batch D): the snapshot a
+    # skill_name currently resolves to for *new* jobs. Exactly one active
+    # snapshot per skill_name at a time; older/newer inactive snapshots
+    # stay in the table as an immutable history/rollback target.
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
 
 # --- Analysis Runs (master plan §22.9, Milestone 13) ------------------------
@@ -295,6 +373,13 @@ class AnalysisRun(Base):
     effort: Mapped[str | None] = mapped_column(String(20), nullable=True)
     skill_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     skill_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # Skill Registry (Reliability mission Batch B): the content hash of
+    # the SkillSnapshot actually used for this row, computed by
+    # app/skills/registry.py at enqueue time. skill_name/skill_version
+    # remain a human-readable label; skill_hash is the tamper-evident
+    # identity a cache lookup and the bridge's pre-execution check both
+    # key off of.
+    skill_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     input_manifest_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     output_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     current: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
@@ -408,6 +493,13 @@ class Report(Base):
     effort: Mapped[str | None] = mapped_column(String(20), nullable=True)
     skill_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     skill_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # Skill Registry (Reliability mission Batch B): the content hash of
+    # the SkillSnapshot actually used for this row, computed by
+    # app/skills/registry.py at enqueue time. skill_name/skill_version
+    # remain a human-readable label; skill_hash is the tamper-evident
+    # identity a cache lookup and the bridge's pre-execution check both
+    # key off of.
+    skill_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     generated_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     error_message: Mapped[str | None] = mapped_column(String, nullable=True)

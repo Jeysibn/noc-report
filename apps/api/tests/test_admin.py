@@ -250,3 +250,90 @@ def test_update_system_config(client, db_session, seeded):
 
     audit = client.get("/api/v1/admin/audit", headers=headers).json()
     assert any(e["action"] == "system_config.update" for e in audit)
+
+
+def test_list_skills_requires_permission(client, db_session, seeded):
+    make_user(db_session, "operator1", "NOC")
+    headers = auth_headers(client, "operator1")
+
+    resp = client.get("/api/v1/admin/skills", headers=headers)
+    assert resp.status_code == 403
+
+
+def test_list_skills_and_versions(client, db_session, seeded):
+    make_user(db_session, "root", "Admin")
+    headers = auth_headers(client, "root")
+
+    resp = client.get("/api/v1/admin/skills", headers=headers)
+    assert resp.status_code == 200
+    names = resp.json()
+    assert "log-triage-summary" in names
+    assert "daily-alert-report" in names
+
+    versions = client.get("/api/v1/admin/skills/log-triage-summary/versions", headers=headers)
+    assert versions.status_code == 200
+    body = versions.json()
+    assert len(body) == 1
+    assert body[0]["version_label"] == 1
+    assert body[0]["is_active"] is True
+
+
+def test_list_skill_versions_unknown_skill_404s(client, db_session, seeded):
+    make_user(db_session, "root", "Admin")
+    headers = auth_headers(client, "root")
+
+    resp = client.get("/api/v1/admin/skills/nonexistent-skill/versions", headers=headers)
+    assert resp.status_code == 404
+
+
+def test_activate_skill_version_rollback_and_audit(client, db_session, seeded, tmp_path):
+    make_user(db_session, "root", "Admin")
+    headers = auth_headers(client, "root")
+
+    # Establish version 1, then a version 2 directly against the registry
+    # (simulating a later on-disk content change) so there's something to
+    # roll back to.
+    from app.skills.registry import get_or_create_snapshot
+
+    v1 = get_or_create_snapshot(db_session, "log-triage-summary")
+    db_session.commit()
+
+    fake_skills_dir = tmp_path / "skills"
+    fake_skill = fake_skills_dir / "log-triage-summary"
+    fake_skill.mkdir(parents=True)
+    (fake_skill / "SKILL.md").write_text(v1.skill_md + "\nchanged")
+    (fake_skill / "output.schema.json").write_text(v1.output_schema_json)
+    (fake_skill / "skill.yaml").write_text(v1.manifest_yaml)
+
+    v2 = get_or_create_snapshot(db_session, "log-triage-summary", skills_dir=fake_skills_dir)
+    db_session.commit()
+    assert v2.version_label == 2
+    assert v2.is_active is True
+
+    resp = client.post(
+        f"/api/v1/admin/skills/log-triage-summary/versions/{v1.version_label}/activate",
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["version_label"] == 1
+    assert body["is_active"] is True
+
+    versions = client.get("/api/v1/admin/skills/log-triage-summary/versions", headers=headers).json()
+    active = {v["version_label"]: v["is_active"] for v in versions}
+    assert active[1] is True
+    assert active[2] is False
+
+    audit = client.get("/api/v1/admin/audit", headers=headers).json()
+    assert any(e["action"] == "skill.activate" for e in audit)
+
+
+def test_activate_skill_version_unknown_version_404s(client, db_session, seeded):
+    make_user(db_session, "root", "Admin")
+    headers = auth_headers(client, "root")
+
+    resp = client.post(
+        "/api/v1/admin/skills/log-triage-summary/versions/9999/activate",
+        headers=headers,
+    )
+    assert resp.status_code == 404

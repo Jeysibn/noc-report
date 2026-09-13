@@ -1,0 +1,7 @@
+# Skill manifest (Reliability mission Batch B) — see
+# skills/log-triage-summary/skill.yaml for the full rationale.
+name: daily-alert-report
+input_file: snapshot.json
+description: >
+  Produce the cross-incident, shift-level narrative for a daily alert
+  report from compact per-incident summaries.

@@ -1,0 +1,20 @@
+{
+  "job_durability": {
+    "before_crash_loses_job_if_crash_falls_within_seconds": 2.194501576013863e-05,
+    "after_crash_loses_job_window_seconds": 0.0,
+    "after_explanation": "Job + OutboxEvent commit atomically in one DB transaction; the RabbitMQ publish happens afterward from a durable row, so a crash before, during, or after that publish attempt never loses the job \u2014 the background dispatcher retries the same OutboxEvent row until it succeeds."
+  },
+  "failure_classification": {
+    "scenarios": 3,
+    "max_attempts": 5,
+    "before_wasted_retry_attempts": 12,
+    "after_wasted_retry_attempts": 0,
+    "retries_avoided": 12
+  },
+  "skill_drift_detection": {
+    "before": "drift silently executed the new content under the old version label",
+    "after_detected": true,
+    "after_detection_seconds": 9.737900109030306e-05,
+    "after_cost_of_running_the_stale_job_avoided": true
+  }
+}

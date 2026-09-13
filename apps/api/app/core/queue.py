@@ -51,6 +51,56 @@ def _queue_names(job_type: str) -> dict:
     }
 
 
+# Public alias — Reliability mission Batch A: app/jobs.py and app/outbox.py
+# both need queue name lookups (routing key at OutboxEvent-creation time,
+# main-queue name at dispatch time) without reaching into a "private"
+# helper.
+queue_names = _queue_names
+
+
+def build_job_message(
+    *,
+    job_id: uuid.UUID,
+    job_type: str,
+    incident_id: str | None,
+    object_refs: list[dict],
+    model: str,
+    effort: str,
+    skill_name: str,
+    skill_version: str,
+    correlation_id: str,
+    attempt: int = 1,
+    skill_hash: str | None = None,
+) -> dict:
+    """The exact message body `publish_job` used to build inline. Split
+    out (Reliability mission Batch A) so app/jobs.py can persist it into
+    an OutboxEvent.payload at Job-creation time — the dispatcher later
+    publishes this same dict verbatim, so the message on the wire is
+    identical to what it always was.
+
+    `skill_hash` (Reliability mission Batch B — Skill Registry) is the
+    content hash of the SkillSnapshot the API resolved at enqueue time;
+    the bridge recomputes its own local hash for the same skill_name
+    before executing the job and refuses to run on a mismatch (drift
+    protection — see bridge/noc_bridge/skill_registry.py). Optional/None
+    for callers that haven't been updated to pass it (tests, tooling)."""
+    if job_type not in JOB_TYPES:
+        raise ValueError(f"Unknown job_type: {job_type}")
+    return {
+        "job_id": str(job_id),
+        "job_type": job_type,
+        "incident_id": incident_id,
+        "object_refs": object_refs,
+        "model": model,
+        "effort": effort,
+        "skill_name": skill_name,
+        "skill_version": skill_version,
+        "skill_hash": skill_hash,
+        "correlation_id": correlation_id,
+        "attempt": attempt,
+    }
+
+
 def get_connection() -> pika.BlockingConnection:
     return pika.BlockingConnection(pika.URLParameters(settings.rabbitmq_url))
 
@@ -113,33 +163,61 @@ def publish_job(
     skill_version: str,
     correlation_id: str,
     attempt: int = 1,
+    skill_hash: str | None = None,
 ) -> None:
-    """Publish a job message. ADR-004: references only, never file bytes."""
-    if job_type not in JOB_TYPES:
-        raise ValueError(f"Unknown job_type: {job_type}")
-
+    """Publish a job message directly. ADR-004: references only, never
+    file bytes. Kept for tests/tools that want a one-shot publish without
+    going through the outbox; the real dispatch path (app/outbox.py) uses
+    publish_message with the routing_key/payload already persisted on the
+    OutboxEvent row."""
     names = _queue_names(job_type)
-    body = {
-        "job_id": str(job_id),
-        "job_type": job_type,
-        "incident_id": incident_id,
-        "object_refs": object_refs,
-        "model": model,
-        "effort": effort,
-        "skill_name": skill_name,
-        "skill_version": skill_version,
-        "correlation_id": correlation_id,
-        "attempt": attempt,
-    }
-    channel.confirm_delivery()
-    channel.basic_publish(
+    body = build_job_message(
+        job_id=job_id,
+        job_type=job_type,
+        incident_id=incident_id,
+        object_refs=object_refs,
+        model=model,
+        effort=effort,
+        skill_name=skill_name,
+        skill_version=skill_version,
+        correlation_id=correlation_id,
+        attempt=attempt,
+        skill_hash=skill_hash,
+    )
+    publish_message(
+        channel,
         exchange=JOBS_EXCHANGE,
         routing_key=names["routing_key"],
-        body=json.dumps(body).encode("utf-8"),
+        payload=body,
+        message_id=str(job_id),
+    )
+
+
+def publish_message(
+    channel,
+    *,
+    exchange: str,
+    routing_key: str,
+    payload: dict,
+    message_id: str | None = None,
+) -> None:
+    """Reliability mission Batch A: the one place that actually calls
+    `channel.basic_publish` with publisher confirms turned on, used both
+    by `publish_job` above and by the outbox dispatcher (which republishes
+    an OutboxEvent.payload verbatim). `channel.confirm_delivery()` makes
+    `basic_publish` raise on a nack/return from the broker, so the
+    dispatcher can tell a real publish failure apart from success and
+    leave the OutboxEvent unpublished (retryable) rather than mark it
+    published on a publish the broker never actually confirmed."""
+    channel.confirm_delivery()
+    channel.basic_publish(
+        exchange=exchange,
+        routing_key=routing_key,
+        body=json.dumps(payload).encode("utf-8"),
         properties=pika.BasicProperties(
             delivery_mode=pika.DeliveryMode.Persistent,
             content_type="application/json",
-            message_id=str(job_id),
+            message_id=message_id,
         ),
         mandatory=True,
     )

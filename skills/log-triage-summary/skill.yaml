@@ -1,0 +1,12 @@
+# Skill manifest (Reliability mission Batch B). This, SKILL.md, and
+# output.schema.json together are the complete, hashable identity of this
+# skill — apps/api/app/skills/registry.py and
+# bridge/noc_bridge/skill_registry.py both hash the three files' bytes to
+# produce the skill_hash that flows through Job/AnalysisRun/cache lookups
+# and is re-verified by the bridge before every job execution.
+name: log-triage-summary
+input_file: log.txt
+description: >
+  Summarize a NOC incident's attached log excerpt into a structured,
+  bilingual (Chinese/English) triage summary with a Key Finds/Secondary
+  Finds breakdown.
