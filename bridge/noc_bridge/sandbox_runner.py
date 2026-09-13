@@ -11,6 +11,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import os
 import pathlib
 import tempfile
 
@@ -56,10 +57,10 @@ def _grant_sandbox_uid_access(input_dir: pathlib.Path, output_dir: pathlib.Path)
         write result files; it does not need "other" read (the host
         process, as owner, already reads its own output back).
     """
-    input_dir.chmod(0o705)
+    input_dir.chmod(0o700)
     for child in input_dir.iterdir():
-        child.chmod(0o604)
-    output_dir.chmod(0o703)
+        child.chmod(0o600)
+    output_dir.chmod(0o700)
 
 
 def _build_context_hash() -> str:
@@ -145,11 +146,13 @@ def run_job_sandbox(
         str(output_dir): {"bind": "/output", "mode": "rw"},
     }
     volumes.update(extra_volumes or {})
+    if os.getuid() == 0:
+        raise RuntimeError("refusing to run sandbox as root; start the bridge as a dedicated non-root user")
 
     container = client.containers.run(
         SANDBOX_IMAGE,
         detach=True,
-        user="10001:10001",
+        user=f"{os.getuid()}:{os.getgid()}",
         read_only=True,
         tmpfs={"/tmp": "size=64m"},
         cap_drop=["ALL"],

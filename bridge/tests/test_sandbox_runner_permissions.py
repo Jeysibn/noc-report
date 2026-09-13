@@ -16,25 +16,23 @@ def _mode(path: Path) -> int:
     return stat.S_IMODE(path.stat().st_mode)
 
 
-def test_input_dir_grants_other_read_and_traverse_but_not_write():
+def test_input_dir_is_private_to_the_bridge_uid():
     with tempfile.TemporaryDirectory() as input_dir, tempfile.TemporaryDirectory() as output_dir:
         input_path = Path(input_dir)
         (input_path / "log.txt").write_text("hello")
 
         _grant_sandbox_uid_access(input_path, Path(output_dir))
 
-        assert _mode(input_path) == 0o705
-        assert _mode(input_path / "log.txt") == 0o604
+        assert _mode(input_path) == 0o700
+        assert _mode(input_path / "log.txt") == 0o600
 
 
-def test_output_dir_grants_other_write_and_traverse_but_not_read():
+def test_output_dir_is_private_to_the_bridge_uid():
     with tempfile.TemporaryDirectory() as input_dir, tempfile.TemporaryDirectory() as output_dir:
         _grant_sandbox_uid_access(Path(input_dir), Path(output_dir))
 
         mode = _mode(Path(output_dir))
-        assert mode == 0o703
-        assert not (mode & stat.S_IROTH)  # other=read must NOT be granted
-        assert mode & stat.S_IWOTH and mode & stat.S_IXOTH  # other=write+traverse required
+        assert mode == 0o700
 
 
 def test_neither_directory_grants_any_group_bit():
