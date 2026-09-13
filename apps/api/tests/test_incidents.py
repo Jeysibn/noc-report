@@ -1,5 +1,7 @@
+import uuid
 from datetime import datetime, timezone
 
+from app.models.models import Job, OutboxEvent
 from tests.conftest import auth_headers, make_user
 
 
@@ -93,6 +95,47 @@ def test_admin_can_delete_incident(client, db_session):
     assert resp.status_code == 204
 
     missing = client.get(f"/api/v1/incidents/{created['id']}", headers=headers)
+    assert missing.status_code == 404
+
+
+def test_admin_can_delete_incident_whose_job_has_an_outbox_event(client, db_session):
+    """Regression test: a real job (ADR 0006's outbox pattern) always has
+    at least one outbox_events row referencing it. delete_incident must
+    clear those rows before deleting the Job, or Postgres rejects the
+    delete with a ForeignKeyViolation — which the frontend surfaced to
+    the user as an opaque "Failed to fetch"."""
+    make_user(db_session, "root", "Admin")
+    headers = auth_headers(client, "root")
+
+    created = client.post(
+        "/api/v1/incidents", json=_incident_payload(), headers=headers
+    ).json()
+    incident_id = created["id"]
+
+    job = Job(
+        job_type="log_triage",
+        status="QUEUED",
+        incident_id=uuid.UUID(incident_id),
+        correlation_id="test-corr-id",
+    )
+    db_session.add(job)
+    db_session.flush()
+    db_session.add(
+        OutboxEvent(
+            event_type="job.dispatch",
+            aggregate_type="job",
+            aggregate_id=job.id,
+            job_id=job.id,
+            routing_key="noc.jobs.log-triage",
+            payload={},
+        )
+    )
+    db_session.commit()
+
+    resp = client.delete(f"/api/v1/incidents/{incident_id}", headers=headers)
+    assert resp.status_code == 204
+
+    missing = client.get(f"/api/v1/incidents/{incident_id}", headers=headers)
     assert missing.status_code == 404
 
 
