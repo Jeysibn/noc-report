@@ -34,6 +34,32 @@ class SkillJobResult:
     logs: str
 
 
+def _grant_sandbox_uid_access(input_dir: pathlib.Path, output_dir: pathlib.Path) -> None:
+    """Widen `input_dir`/`output_dir` permissions just enough for the
+    sandbox container's fixed non-root uid (10001:10001, §28) to read the
+    input mount and write the output mount, without the blanket
+    world-writable/world-readable `0o777`/`0o755` these directories used to
+    get.
+
+    The host process is neither the owner nor a group member of anything
+    the container's uid touches (Docker bind mounts don't remap uids), so
+    the only lever available without root/`chown` is the "other" bits —
+    this grants exactly the "other" bits each mount actually needs and
+    zeroes the "group" bits entirely (no other local user or group has any
+    reason to touch these ephemeral per-job directories):
+      - input: dir needs traverse+list (other=r-x) so the container can
+        read the files; each file needs other=r-- only (never write,
+        never execute).
+      - output: dir needs traverse+create (other=-wx) so the container can
+        write result files; it does not need "other" read (the host
+        process, as owner, already reads its own output back).
+    """
+    input_dir.chmod(0o705)
+    for child in input_dir.iterdir():
+        child.chmod(0o604)
+    output_dir.chmod(0o703)
+
+
 def ensure_image_built(client: docker.DockerClient) -> None:
     try:
         client.images.get(SANDBOX_IMAGE)
@@ -75,10 +101,7 @@ def run_job_sandbox(
     client = docker.from_env()
     ensure_image_built(client)
 
-    input_dir.chmod(0o755)
-    for child in input_dir.iterdir():
-        child.chmod(0o644)
-    output_dir.chmod(0o777)
+    _grant_sandbox_uid_access(input_dir, output_dir)
 
     volumes = {
         str(input_dir): {"bind": "/input", "mode": "ro"},
@@ -133,12 +156,9 @@ def run_skill_job(log_text: str, skills_dir: pathlib.Path) -> SkillJobResult:
             tempfile.TemporaryDirectory(prefix="noc-sandbox-output-") as output_dir:
         input_log = pathlib.Path(input_dir) / "log.txt"
         input_log.write_text(log_text)
-        # Container runs as uid 10001; temp dirs default to 0700 for the host
-        # user, so widen perms enough for the sandbox's non-root user to read
-        # the input/skill mounts and write the output mount.
-        pathlib.Path(input_dir).chmod(0o755)
-        input_log.chmod(0o644)
-        pathlib.Path(output_dir).chmod(0o777)
+        # See _grant_sandbox_uid_access's docstring: grant only the "other"
+        # bits the fixed-uid-10001 sandbox actually needs, not 0o777/0o755.
+        _grant_sandbox_uid_access(pathlib.Path(input_dir), pathlib.Path(output_dir))
 
         container = client.containers.run(
             SANDBOX_IMAGE,

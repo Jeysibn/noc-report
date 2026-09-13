@@ -29,11 +29,14 @@ def prepare_sandbox_credentials(source: pathlib.Path) -> pathlib.Path:
     tmp_dir = pathlib.Path(tempfile.mkdtemp(prefix="noc-bridge-claude-creds-"))
     # mkdtemp defaults to 0700, owned by the host user — that alone blocks
     # the sandbox's uid 10001 from traversing into the directory at all,
-    # regardless of the file's own mode. 0755 lets any uid traverse/list
-    # while still leaving only the host user able to write into it.
-    tmp_dir.chmod(0o755)
+    # regardless of the file's own mode. The container is neither the
+    # owner nor a group member, so only the "other" bits can grant it
+    # access; this holds a live OAuth credential, so grant exactly
+    # traverse+read for "other" (0o705/0o604) and zero "group" bits —
+    # no other local group has any reason to reach a copied secret.
+    tmp_dir.chmod(0o705)
     dest = tmp_dir / ".credentials.json"
     shutil.copy2(source, dest)
-    dest.chmod(0o644)  # readable by the sandbox's uid 10001, still not group/world-writable
+    dest.chmod(0o604)  # other=r for uid 10001; still not group/world-writable
     atexit.register(shutil.rmtree, tmp_dir, ignore_errors=True)
     return tmp_dir
