@@ -21,8 +21,9 @@ from app.core.config import settings
 from app.core.storage import get_object_bytes, sha256_of_bytes
 from app.db.session import get_db
 from app.deps import require_permission
-from app.jobs import enqueue_job, open_channel
+from app.jobs import enqueue_job
 from app.models.models import AnalysisRun, Evidence, Incident, Job, User
+from app.skills.registry import get_or_create_snapshot
 from app.schemas.schemas import AnalysisRequest, AnalysisRunOut
 
 router = APIRouter(tags=["analysis"])
@@ -62,7 +63,12 @@ CACHE_CONTRACT_VERSION = f"{ANALYSIS_SCHEMA_VERSION}.{PREPROCESSOR_VERSION}.{AI_
 
 
 def _find_cached_analysis_run(
-    db: Session, *, log_evidence: Evidence, requested_model: str | None, requested_effort: str | None
+    db: Session,
+    *,
+    log_evidence: Evidence,
+    requested_model: str | None,
+    requested_effort: str | None,
+    skill_hash: str,
 ) -> AnalysisRun | None:
     """Exact-match cache lookup: a prior *completed* log-triage-summary run
     against the same evidence checksum, produced under the same skill
@@ -78,13 +84,20 @@ def _find_cached_analysis_run(
     model/effort is not an equivalent result and must not be silently
     served in its place — that would defeat the whole point of asking for
     a higher effort tier. A request that leaves model/effort unset (the
-    common case) matches any cached run's model/effort."""
+    common case) matches any cached run's model/effort.
+
+    Skill Registry (Reliability mission Batch B): `skill_hash` is checked
+    alongside skill_name/skill_version/cache_contract_version — a prior
+    run produced under different SKILL.md/output.schema.json content
+    (even under the same skill_version label, e.g. because someone forgot
+    to bump it) is not reusable."""
     if not log_evidence.sha256:
         return None
     filters = [
         AnalysisRun.input_manifest_sha256 == log_evidence.sha256,
         AnalysisRun.skill_name == SKILL_NAME,
         AnalysisRun.skill_version == SKILL_VERSION,
+        AnalysisRun.skill_hash == skill_hash,
         AnalysisRun.cache_contract_version == CACHE_CONTRACT_VERSION,
         AnalysisRun.result_json.is_not(None),
     ]
@@ -245,13 +258,24 @@ def request_analysis(
         {"bucket": log_evidence.bucket, "key": log_evidence.object_key, "sha256": log_evidence.sha256}
     ]
 
+    # Skill Registry (Reliability mission Batch B): resolves (or creates)
+    # the immutable SkillSnapshot for the skill's *current* on-disk
+    # content — this is the tamper-evident identity threaded through the
+    # cache lookup, the Job/AnalysisRun rows, and the job message the
+    # bridge re-verifies before executing.
+    skill_snapshot = get_or_create_snapshot(db, SKILL_NAME)
+
     # AI cost-optimization mission Phase 6: an exact-match cache hit skips
     # RabbitMQ/the bridge/Claude entirely — the Job row is created already
     # COMPLETED and the AnalysisRun copies the cached result verbatim, so
     # the rest of this endpoint's contract (a Job + current AnalysisRun,
     # pollable exactly like a real run) is unchanged for callers.
     cached_run = _find_cached_analysis_run(
-        db, log_evidence=log_evidence, requested_model=body.model, requested_effort=body.effort
+        db,
+        log_evidence=log_evidence,
+        requested_model=body.model,
+        requested_effort=body.effort,
+        skill_hash=skill_snapshot.content_hash,
     )
 
     db.execute(update(AnalysisRun).where(AnalysisRun.incident_id == incident.id).values(current=False))
@@ -267,6 +291,7 @@ def request_analysis(
             effort=cached_run.effort,
             skill_name=SKILL_NAME,
             skill_version=SKILL_VERSION,
+            skill_hash=skill_snapshot.content_hash,
             correlation_id=str(uuid.uuid4()),
             started_at=now,
             completed_at=now,
@@ -285,6 +310,7 @@ def request_analysis(
             effort=cached_run.effort,
             skill_name=SKILL_NAME,
             skill_version=SKILL_VERSION,
+            skill_hash=skill_snapshot.content_hash,
             cache_contract_version=CACHE_CONTRACT_VERSION,
             input_manifest_sha256=log_evidence.sha256,
             output_sha256=cached_run.output_sha256,
@@ -306,19 +332,24 @@ def request_analysis(
         db.refresh(run)
         return _to_out(job, run)
 
-    with open_channel() as channel:
-        job = enqueue_job(
-            db,
-            channel,
-            job_type="log_triage",
-            requested_by=current_user.id,
-            incident_id=str(incident.id),
-            object_refs=object_refs,
-            model=body.model,
-            effort=body.effort,
-            skill_name=SKILL_NAME,
-            skill_version=SKILL_VERSION,
-        )
+    # Reliability mission Batch A: enqueue_job only writes Postgres (a Job
+    # row + an OutboxEvent describing the RabbitMQ message) — nothing is
+    # published to RabbitMQ here. The outbox dispatcher publishes it only
+    # after this whole transaction (Job + AnalysisRun + audit, below)
+    # commits, so a message can never reach the bridge for a job whose
+    # AnalysisRun doesn't durably exist yet.
+    job = enqueue_job(
+        db,
+        job_type="log_triage",
+        requested_by=current_user.id,
+        incident_id=str(incident.id),
+        object_refs=object_refs,
+        model=body.model,
+        effort=body.effort,
+        skill_name=SKILL_NAME,
+        skill_version=SKILL_VERSION,
+        skill_hash=skill_snapshot.content_hash,
+    )
 
     # §22.9: created immediately (not on completion) so input provenance
     # (which evidence, its checksum) is captured against what was
@@ -331,6 +362,7 @@ def request_analysis(
         effort=job.effort,
         skill_name=job.skill_name,
         skill_version=job.skill_version,
+        skill_hash=job.skill_hash,
         cache_contract_version=CACHE_CONTRACT_VERSION,
         input_manifest_sha256=log_evidence.sha256,
         current=True,

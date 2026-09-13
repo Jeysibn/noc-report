@@ -359,6 +359,36 @@ _NOC_SYSTEM_PROMPT = (
 
 
 def _invoke_claude(prompt: str, *, schema: dict, model: str, effort: str, max_budget: str) -> tuple[dict, dict]:
+    """Runs the `claude` CLI and returns (result, envelope).
+
+    Phase 13 (structured-output retry/accounting): a malformed/unparseable
+    structured result (`_parse_claude_result` raising `ValueError`) is
+    retried exactly once at the same model/effort before giving up — a
+    single bad JSON parse from the CLI shouldn't fail the whole job, but it
+    also shouldn't retry indefinitely. If the retry also fails to produce a
+    parseable structured result, raises a `RuntimeError` whose message
+    contains "structured_output_retry_exhausted" so
+    `bridge/noc_bridge/failures.py` can classify it as retryable-at-the-job-
+    level (a fresh job attempt gets its own two CLI invocations) rather than
+    terminal. A CLI-level failure (nonzero exit) is not retried here — that
+    is a distinct, immediate `RuntimeError`."""
+    last_error: ValueError | None = None
+    for attempt in range(2):
+        try:
+            return _invoke_claude_once(prompt, schema=schema, model=model, effort=effort, max_budget=max_budget)
+        except ValueError as exc:
+            last_error = exc
+            print(
+                f"claude CLI structured output attempt {attempt + 1}/2 failed: {exc}",
+                file=sys.stderr,
+            )
+    raise RuntimeError(
+        f"structured_output_retry_exhausted: claude CLI produced an unparseable/invalid "
+        f"structured result twice in a row: {last_error}"
+    ) from last_error
+
+
+def _invoke_claude_once(prompt: str, *, schema: dict, model: str, effort: str, max_budget: str) -> tuple[dict, dict]:
     """Runs the `claude` CLI once and returns (result, envelope). Raises on
     a CLI-level failure (nonzero exit) or an unparseable/non-dict result."""
     cmd = [

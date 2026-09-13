@@ -54,6 +54,7 @@ ALL_PERMISSIONS = [
     "system.read",
     "system.configure",
     "audit.read",
+    "skill.manage",
 ]
 
 NOC_PERMISSIONS = [

@@ -1,0 +1,15 @@
+{
+  "$comment": "Skill Registry (Reliability mission Batch B): single source of truth for daily-alert-report's output contract, mirroring log-triage-summary/output.schema.json's role.",
+  "type": "object",
+  "properties": {
+    "overview_en": {"type": "string"},
+    "overview_zh": {"type": "string"},
+    "cross_incident_findings_en": {"type": "string"},
+    "cross_incident_findings_zh": {"type": "string"}
+  },
+  "required": [
+    "overview_en", "overview_zh",
+    "cross_incident_findings_en", "cross_incident_findings_zh"
+  ],
+  "additionalProperties": false
+}

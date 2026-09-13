@@ -28,6 +28,7 @@ from app.schemas.schemas import (
     RoleUpdate,
     ShiftDefinitionOut,
     ShiftDefinitionUpdate,
+    SkillSnapshotOut,
     StorageBucketStatusOut,
     SystemConfigOut,
     SystemConfigUpdate,
@@ -36,6 +37,13 @@ from app.schemas.schemas import (
     UserUpdate,
 )
 from app.seed import SYSTEM_CONFIG_ID
+from app.skills.registry import (
+    SkillVersionNotFound,
+    get_or_create_snapshot,
+    list_skill_names,
+    list_snapshots,
+    set_active_snapshot,
+)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -336,6 +344,14 @@ def requeue_dlq(
             job.error_message = None
             job.started_at = None
             job.completed_at = None
+            # Reliability mission Batch A: clear any stale claim/lease so
+            # the idempotent job lifecycle module (bridge/noc_bridge/db.py's
+            # claim_job) is willing to claim this job again rather than
+            # treating it as still leased by whatever worker had it before.
+            job.claimed_at = None
+            job.claim_token = None
+            job.lease_expires_at = None
+            job.worker_id = None
 
     record_audit(
         db,
@@ -394,3 +410,69 @@ def list_audit(
             select(AuditLog).order_by(AuditLog.created_at.desc()).limit(limit).offset(offset)
         )
     )
+
+
+@router.get("/skills", response_model=list[str])
+def list_skills(
+    db: Session = Depends(get_db),
+    _: User = Depends(require_permission("skill.manage")),
+) -> list[str]:
+    """Every skill_name with at least one recorded snapshot. Ensures each
+    known skill (log-triage-summary, daily-alert-report) has a snapshot for
+    its current on-disk content before listing, so a skill that has never
+    been dispatched yet still shows up here."""
+    # Local imports: avoids importing every other router at module load
+    # time just for these two skill-name constants.
+    from app.api.v1.routers.analysis import SKILL_NAME as _LOG_TRIAGE_SKILL_NAME
+    from app.api.v1.routers.reports import SKILL_NAME as _DAILY_REPORT_SKILL_NAME
+
+    for skill_name in (_LOG_TRIAGE_SKILL_NAME, _DAILY_REPORT_SKILL_NAME):
+        get_or_create_snapshot(db, skill_name)
+    db.commit()
+    return list_skill_names(db)
+
+
+@router.get("/skills/{skill_name}/versions", response_model=list[SkillSnapshotOut])
+def list_skill_versions(
+    skill_name: str,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_permission("skill.manage")),
+) -> list[SkillSnapshotOut]:
+    snapshots = list_snapshots(db, skill_name)
+    if not snapshots:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"No snapshots recorded for skill {skill_name!r}")
+    return snapshots
+
+
+@router.post("/skills/{skill_name}/versions/{version_label}/activate", response_model=SkillSnapshotOut)
+def activate_skill_version(
+    skill_name: str,
+    version_label: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("skill.manage")),
+) -> SkillSnapshotOut:
+    """Phase 12: marks one snapshot version "active" for audit/bookkeeping
+    (see set_active_snapshot's docstring for exactly what this does and
+    does not control — it does not override what content a dispatched job
+    actually runs, which is always verified against current on-disk
+    content by the bridge)."""
+    try:
+        snapshot = set_active_snapshot(db, skill_name, version_label)
+    except SkillVersionNotFound as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+
+    record_audit(
+        db,
+        actor_user_id=current_user.id,
+        action="skill.activate",
+        resource_type="skill_snapshot",
+        resource_id=str(snapshot.id),
+        metadata={
+            "skill_name": skill_name,
+            "version_label": version_label,
+            "content_hash": snapshot.content_hash,
+        },
+    )
+    db.commit()
+    db.refresh(snapshot)
+    return snapshot

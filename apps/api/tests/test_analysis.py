@@ -8,6 +8,7 @@ would have written), syncs it into the AnalysisRun row on poll.
 """
 import hashlib
 import json
+import time
 from datetime import datetime, timezone
 
 import httpx
@@ -110,9 +111,18 @@ def test_request_analysis_enqueues_real_job(client, db_session):
     job_id = out["job_id"]
 
     # No fallback analyzer in the API — the real message actually landed
-    # on the real queue for a real bridge to pick up.
+    # on the real queue for a real bridge to pick up. Publishing is now
+    # deferred to the outbox dispatcher background thread (Reliability
+    # mission Batch A), which polls roughly once a second, so poll for the
+    # message instead of assuming it's there the instant the request
+    # returns.
     names = _queue_names("log_triage")
-    method, properties, body = channel.basic_get(names["main"], auto_ack=True)
+    method = properties = body = None
+    for _ in range(50):
+        method, properties, body = channel.basic_get(names["main"], auto_ack=True)
+        if method is not None:
+            break
+        time.sleep(0.2)
     assert method is not None
     payload = json.loads(body)
     assert payload["job_id"] == job_id
@@ -345,6 +355,14 @@ def test_request_analysis_exact_cache_hit_skips_queue(client, db_session):
     connection = get_connection()
     channel = connection.channel()
     declare_topology(channel)
+    # job_a's own enqueue publishes asynchronously via the background outbox
+    # dispatcher (two-phase enqueue-then-dispatch, Batch A) — without
+    # explicitly dispatching+draining it here first, that publish can race
+    # _purge_all below and land in the queue afterward, making the "no
+    # message was published" assertion further down flaky.
+    from app.outbox import dispatch_pending_events
+
+    dispatch_pending_events(db_session, channel)
     _purge_all(channel)
 
     incident_b = _create_incident(client, headers)
@@ -366,6 +384,15 @@ def test_request_analysis_exact_cache_hit_skips_queue(client, db_session):
     method, _properties, _body = channel.basic_get(names["main"], auto_ack=True)
     assert method is None
     connection.close()
+
+
+def _current_skill_hash(db_session) -> str:
+    from app.api.v1.routers import analysis as analysis_router
+    from app.skills.registry import get_or_create_snapshot
+
+    snapshot = get_or_create_snapshot(db_session, analysis_router.SKILL_NAME)
+    db_session.commit()
+    return snapshot.content_hash
 
 
 def _make_completed_run(db_session, incident_id, evidence_id, sha256, **overrides):
@@ -400,6 +427,7 @@ def _make_completed_run(db_session, incident_id, evidence_id, sha256, **override
         effort=overrides.get("effort", "low"),
         skill_name=analysis_router.SKILL_NAME,
         skill_version=overrides.get("skill_version", analysis_router.SKILL_VERSION),
+        skill_hash=overrides.get("skill_hash", _current_skill_hash(db_session)),
         cache_contract_version=overrides.get(
             "cache_contract_version", analysis_router.CACHE_CONTRACT_VERSION
         ),
@@ -428,7 +456,8 @@ def test_cached_analysis_run_lookup_matches_same_contract_version(client, db_ses
     _make_completed_run(db_session, incident, evidence["id"], log_evidence.sha256)
 
     hit = _find_cached_analysis_run(
-        db_session, log_evidence=log_evidence, requested_model=None, requested_effort=None
+        db_session, log_evidence=log_evidence, requested_model=None, requested_effort=None,
+        skill_hash=_current_skill_hash(db_session),
     )
     assert hit is not None
 
@@ -454,7 +483,8 @@ def test_cached_analysis_run_lookup_invalidated_by_cache_contract_version_mismat
     )
 
     hit = _find_cached_analysis_run(
-        db_session, log_evidence=log_evidence, requested_model=None, requested_effort=None
+        db_session, log_evidence=log_evidence, requested_model=None, requested_effort=None,
+        skill_hash=_current_skill_hash(db_session),
     )
     assert hit is None
 
@@ -476,7 +506,35 @@ def test_cached_analysis_run_lookup_invalidated_by_skill_version_mismatch(client
     )
 
     hit = _find_cached_analysis_run(
-        db_session, log_evidence=log_evidence, requested_model=None, requested_effort=None
+        db_session, log_evidence=log_evidence, requested_model=None, requested_effort=None,
+        skill_hash=_current_skill_hash(db_session),
+    )
+    assert hit is None
+
+
+def test_cached_analysis_run_lookup_invalidated_by_skill_hash_mismatch(client, db_session):
+    """Skill Registry (Reliability mission Batch B): a cached run produced
+    under *different skill content* (a different content hash) is not
+    reusable, even under the same skill_name/skill_version/cache_contract_
+    version labels — this is the drift the hash exists to catch."""
+    make_user(db_session, "operator4b", "NOC")
+    headers = auth_headers(client, "operator4b")
+    incident = _create_incident(client, headers)
+    evidence = _upload_log_evidence(client, headers, incident)
+
+    from app.api.v1.routers.analysis import _find_cached_analysis_run
+    from app.models.models import Evidence
+    import uuid as _uuid
+
+    log_evidence = db_session.get(Evidence, _uuid.UUID(evidence["id"]))
+    _make_completed_run(
+        db_session, incident, evidence["id"], log_evidence.sha256,
+        skill_hash="0" * 64,
+    )
+
+    hit = _find_cached_analysis_run(
+        db_session, log_evidence=log_evidence, requested_model=None, requested_effort=None,
+        skill_hash=_current_skill_hash(db_session),
     )
     assert hit is None
 
@@ -501,20 +559,24 @@ def test_cached_analysis_run_lookup_respects_explicit_higher_effort_override(cli
     )
 
     # Explicit request for "medium" must not match the cached "low" run.
+    skill_hash = _current_skill_hash(db_session)
     hit = _find_cached_analysis_run(
-        db_session, log_evidence=log_evidence, requested_model=None, requested_effort="medium"
+        db_session, log_evidence=log_evidence, requested_model=None, requested_effort="medium",
+        skill_hash=skill_hash,
     )
     assert hit is None
 
     # An unset (None) effort request still matches (the common case).
     hit_default = _find_cached_analysis_run(
-        db_session, log_evidence=log_evidence, requested_model=None, requested_effort=None
+        db_session, log_evidence=log_evidence, requested_model=None, requested_effort=None,
+        skill_hash=skill_hash,
     )
     assert hit_default is not None
 
     # Explicit request for the SAME effort as the cached run still matches.
     hit_same = _find_cached_analysis_run(
-        db_session, log_evidence=log_evidence, requested_model=None, requested_effort="low"
+        db_session, log_evidence=log_evidence, requested_model=None, requested_effort="low",
+        skill_hash=skill_hash,
     )
     assert hit_same is not None
 

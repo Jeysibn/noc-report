@@ -7,6 +7,7 @@ noc-reports (simulating what the bridge would have written), syncing it
 into the Report row on poll.
 """
 import json
+import time
 from datetime import datetime, timezone
 
 from app.core.config import settings
@@ -75,9 +76,17 @@ def test_generate_report_freezes_snapshot_and_enqueues_real_job(client, db_sessi
     job_id = out["job_id"]
 
     # No fallback generator — the real message actually landed on the
-    # real daily_report queue for a real bridge to pick up.
+    # real daily_report queue for a real bridge to pick up. Publishing is
+    # now deferred to the outbox dispatcher background thread
+    # (Reliability mission Batch A), so poll for it instead of assuming
+    # it's there the instant the request returns.
     names = _queue_names("daily_report")
-    method, properties, body = channel.basic_get(names["main"], auto_ack=True)
+    method = properties = body = None
+    for _ in range(50):
+        method, properties, body = channel.basic_get(names["main"], auto_ack=True)
+        if method is not None:
+            break
+        time.sleep(0.2)
     assert method is not None
     payload = json.loads(body)
     assert payload["job_id"] == job_id

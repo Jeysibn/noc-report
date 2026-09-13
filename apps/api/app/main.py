@@ -4,14 +4,27 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.routers import admin, analysis, analytics, auth, evidence, incidents, ocr, reports, search, shifts
+from app.core.config import assert_production_secrets_are_safe
 from app.core.storage import ensure_buckets
+from app.outbox_worker import start_background_thread
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    # Reliability mission Phase 17: refuse to start at all rather than
+    # silently serve a production deployment on dev-only credentials.
+    assert_production_secrets_are_safe()
     # Idempotent — mirrors app/seed.py's bootstrap-on-start approach.
     ensure_buckets()
+    # Reliability mission Batch A: dev-convenience in-process outbox
+    # dispatcher (see app/outbox_worker.py's docstring) — a real
+    # deployment should run `python -m app.outbox_worker` as its own
+    # process instead, same precedent as the Claude Bridge. Runs in a
+    # background thread and reconnects on its own; a RabbitMQ outage at
+    # startup never blocks the API from serving requests.
+    _thread, stop_event = start_background_thread()
     yield
+    stop_event.set()
 
 
 app = FastAPI(title="NOC Report Builder API", version="0.1.0", lifespan=lifespan)
