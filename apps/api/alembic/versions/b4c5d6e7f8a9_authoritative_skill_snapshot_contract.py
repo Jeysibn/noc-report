@@ -17,12 +17,10 @@ def upgrade() -> None:
     op.add_column("report_snapshots", sa.Column("skill_snapshot_id", postgresql.UUID(as_uuid=True), nullable=True))
     op.create_foreign_key("fk_report_snapshots_skill_snapshot_id", "report_snapshots", "skill_snapshots", ["skill_snapshot_id"], ["id"])
     op.add_column("analysis_runs", sa.Column("schema_hash", sa.String(length=64), nullable=True))
-    op.add_column("skill_snapshots", sa.Column("dependency_snapshot_ids", sa.JSON(), nullable=False, server_default=sa.text("'{}'")))
 
 
 def downgrade() -> None:
     op.drop_column("analysis_runs", "schema_hash")
-    op.drop_column("skill_snapshots", "dependency_snapshot_ids")
     op.drop_constraint("fk_report_snapshots_skill_snapshot_id", "report_snapshots", type_="foreignkey")
     op.drop_column("report_snapshots", "skill_snapshot_id")
     op.drop_constraint("fk_reports_skill_snapshot_id", "reports", type_="foreignkey")
