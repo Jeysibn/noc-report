@@ -90,6 +90,17 @@ def _build_snapshot(db: Session, shift: Shift) -> dict:
                     for e in screenshot_evidence
                 ],
                 "analysis": run.result_json if (run and run.result_json) else None,
+                # Skill Runtime mission Phase 7: exact per-incident
+                # dependency provenance, frozen into the snapshot
+                # alongside the analysis content itself — which
+                # AnalysisRun/SkillSnapshot/output produced this
+                # incident's analysis, so a report can always be traced
+                # back to the exact skill version and raw output that
+                # fed it, even after the incident's current run changes.
+                "analysis_run_id": str(run.id) if run else None,
+                "analysis_skill_snapshot_id": str(run.skill_snapshot_id) if (run and run.skill_snapshot_id) else None,
+                "analysis_skill_hash": run.skill_hash if run else None,
+                "analysis_output_sha256": run.output_sha256 if run else None,
             }
         )
     return {
