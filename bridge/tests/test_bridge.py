@@ -213,6 +213,30 @@ def test_validate_output_rejects_unknown_skill_missing_schema(tmp_path):
         validate_output("something_unknown", {"a": 1}, skill_name="nonexistent-skill", skills_dir=tmp_path)
 
 
+def test_validate_output_accepts_a_new_skill_owned_shape_without_runtime_changes(tmp_path):
+    skill_dir = tmp_path / "triage-v2"
+    skill_dir.mkdir()
+    (skill_dir / "output.schema.json").write_text(json.dumps({
+        "type": "object",
+        "required": ["executive_summary", "primary_failure", "actions"],
+        "properties": {
+            "executive_summary": {"type": "string"},
+            "primary_failure": {"type": "object"},
+            "actions": {"type": "array"},
+        },
+        "additionalProperties": False,
+    }))
+    # This deliberately shares no fields with log-triage-summary. The same
+    # generic validator accepts it solely because this skill supplies its
+    # own schema.
+    validate_output(
+        "log_triage",
+        {"executive_summary": "database saturation", "primary_failure": {}, "actions": []},
+        skill_name="triage-v2",
+        skills_dir=tmp_path,
+    )
+
+
 # -- Skill Runtime mission Phase 14: canonical job message protocol --------
 
 

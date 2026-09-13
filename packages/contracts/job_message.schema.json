@@ -19,6 +19,7 @@
   ],
   "additionalProperties": false,
   "properties": {
+    "protocol_version": { "type": "string", "minLength": 1 },
     "job_id": { "type": "string", "format": "uuid" },
     "job_type": { "type": "string", "minLength": 1 },
     "incident_id": { "type": ["string", "null"] },
@@ -41,6 +42,16 @@
     "skill_version": { "type": "string", "minLength": 1 },
     "skill_hash": { "type": ["string", "null"] },
     "skill_snapshot_id": { "type": ["string", "null"] },
+    "expected_output_type": { "type": "string", "minLength": 1 },
+    "ai_policy": {
+      "type": "object",
+      "properties": {
+        "model": { "type": "string", "minLength": 1 },
+        "effort": { "type": "string", "minLength": 1 },
+        "max_turns": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": true
+    },
     "correlation_id": { "type": "string", "minLength": 1 },
     "attempt": { "type": "integer", "minimum": 1 }
   }

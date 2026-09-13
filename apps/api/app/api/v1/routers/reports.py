@@ -32,6 +32,7 @@ from app.deps import require_permission
 from app.jobs import enqueue_job
 from app.models.models import AnalysisRun, Evidence, Incident, Job, Report, ReportSnapshot, Shift, User
 from app.skills.registry import resolve_active_snapshot
+from app.skills.runtime import declared_skill_version
 from app.schemas.schemas import (
     ReportDownloadUrlResponse,
     ReportGenerateRequest,
@@ -41,7 +42,6 @@ from app.schemas.schemas import (
 router = APIRouter(tags=["reports"])
 
 SKILL_NAME = "daily-alert-report"
-SKILL_VERSION = "1"
 
 
 def _get_shift_or_404(db: Session, shift_id: uuid.UUID) -> Shift:
@@ -237,7 +237,7 @@ def generate_report(
         model=body.model,
         effort=body.effort,
         skill_name=SKILL_NAME,
-        skill_version=SKILL_VERSION,
+        skill_version=declared_skill_version(skill_snapshot),
         skill_hash=skill_snapshot.content_hash,
         skill_snapshot_id=skill_snapshot.id,
     )

@@ -20,6 +20,7 @@ class SkillContractError(ValueError):
 
 
 SUPPORTED_RENDERER_PROFILES = {None, "daily_report_docx", "report-document-v1"}
+SUPPORTED_INPUT_CONTRACTS = {"log-evidence-v1", "daily-report-context-v1"}
 
 
 def load_snapshot(db: Session, snapshot_id) -> SkillSnapshot:
@@ -48,6 +49,14 @@ def load_schema(snapshot: SkillSnapshot) -> dict:
     return schema
 
 
+def declared_skill_version(snapshot: SkillSnapshot) -> str:
+    """Return the manifest's declared version, falling back only for old
+    snapshots created before manifests had a version field."""
+    manifest = load_manifest(snapshot)
+    value = manifest.get("version")
+    return str(value if value is not None else snapshot.version_label)
+
+
 def validate_snapshot(db: Session, snapshot: SkillSnapshot) -> None:
     if not snapshot.skill_md.strip():
         raise SkillContractError("skill instructions must not be empty")
@@ -58,7 +67,9 @@ def validate_snapshot(db: Session, snapshot: SkillSnapshot) -> None:
     if manifest.get("id", manifest.get("name")) != snapshot.skill_name:
         raise SkillContractError("manifest id does not match snapshot skill name")
     output_schema = manifest.get("output_schema")
-    if output_schema is not None and output_schema.get("file") != "output.schema.json":
+    if output_schema is not None and (
+        not isinstance(output_schema, dict) or output_schema.get("file") != "output.schema.json"
+    ):
         raise SkillContractError("manifest must declare output.schema.json")
     dependencies = manifest.get("dependencies", [])
     if not isinstance(dependencies, list):
@@ -72,20 +83,42 @@ def validate_snapshot(db: Session, snapshot: SkillSnapshot) -> None:
             raise SkillContractError("skill dependency must be a name or {id, version}")
         query = select(SkillSnapshot.id).where(SkillSnapshot.skill_name == dependency_name)
         if version is not None:
-            query = query.where(SkillSnapshot.version_label == int(version))
+            try:
+                version_label = int(version)
+            except (TypeError, ValueError) as exc:
+                raise SkillContractError(f"invalid dependency version: {dependency}") from exc
+            query = query.where(SkillSnapshot.version_label == version_label)
         if db.scalar(query) is None:
             raise SkillContractError(f"unresolvable skill dependency: {dependency}")
     renderer_profile = manifest.get("renderer_profile")
     if renderer_profile not in SUPPORTED_RENDERER_PROFILES:
         raise SkillContractError(f"unsupported renderer profile: {renderer_profile}")
     load_schema(snapshot)
+    # Activation is the contract publication boundary, so reject a
+    # snapshot whose declared input contract cannot be consumed before it
+    # becomes visible to new jobs.
+    validate_input(snapshot, {})
 
 
 def validate_input(snapshot: SkillSnapshot, payload: object) -> None:
-    # Input schemas are intentionally not embedded in generic code yet;
-    # manifests identify the input contract and skills may add one later.
     if payload is None:
         raise SkillContractError("skill input must not be null")
+    contract = load_manifest(snapshot).get("input_contract")
+    if isinstance(contract, str):
+        if contract not in SUPPORTED_INPUT_CONTRACTS:
+            raise SkillContractError(f"unsupported input contract: {contract}")
+        return
+    # Preserve registration of pre-Phase-5 snapshots.  New manifests are
+    # validated strictly; old snapshots remain executable from their frozen
+    # bytes and can be upgraded by publishing a new contract version.
+    if contract is None:
+        return
+    if not isinstance(contract, dict):
+        raise SkillContractError("manifest input_contract must be a supported name or object")
+    if not isinstance(contract.get("filename"), str) or not contract["filename"].strip():
+        raise SkillContractError("input contract filename is required")
+    if not isinstance(contract.get("intro_text"), str) or not contract["intro_text"].strip():
+        raise SkillContractError("input contract intro_text is required")
 
 
 def validate_output(snapshot: SkillSnapshot, result: object) -> None:

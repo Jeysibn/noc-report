@@ -340,6 +340,7 @@ class SkillSnapshot(Base):
     skill_md: Mapped[str] = mapped_column(String, nullable=False)
     output_schema_json: Mapped[str] = mapped_column(String, nullable=False)
     manifest_yaml: Mapped[str] = mapped_column(String, nullable=False)
+    dependency_snapshot_ids: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     # Skill Admin activation workflow (Phase 12, Batch D): the snapshot a
     # skill_name currently resolves to for *new* jobs. Exactly one active

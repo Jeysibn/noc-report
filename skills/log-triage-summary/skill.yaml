@@ -28,6 +28,13 @@ renderer_profile: null
 execution_policy:
   job_type: log_triage
   timeout_seconds: 900
+  quality_signals:
+    confidence_field: confidence
+    required_nonempty_list_field: key_finds
+    severity_field: severity_signal
+    critical_value: critical
+    confidence_threshold: 0.55
+    critical_confidence_threshold: 0.75
 dependencies: []
 description: >
   Summarize a NOC incident's attached log excerpt into a structured,

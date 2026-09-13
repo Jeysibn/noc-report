@@ -84,6 +84,9 @@ def build_job_message(
     attempt: int = 1,
     skill_hash: str | None = None,
     skill_snapshot_id: uuid.UUID | None = None,
+    protocol_version: str = "1",
+    expected_output_type: str | None = None,
+    ai_policy: dict | None = None,
 ) -> dict:
     """The exact message body `publish_job` used to build inline. Split
     out (Reliability mission Batch A) so app/jobs.py can persist it into
@@ -100,6 +103,7 @@ def build_job_message(
     if job_type not in JOB_TYPES:
         raise ValueError(f"Unknown job_type: {job_type}")
     message = {
+        "protocol_version": protocol_version,
         "job_id": str(job_id),
         "job_type": job_type,
         "incident_id": incident_id,
@@ -110,6 +114,8 @@ def build_job_message(
         "skill_version": skill_version,
         "skill_hash": skill_hash,
         "skill_snapshot_id": str(skill_snapshot_id) if skill_snapshot_id else None,
+        "expected_output_type": expected_output_type or f"{job_type}.result",
+        "ai_policy": ai_policy or {"model": model, "effort": effort},
         "correlation_id": correlation_id,
         "attempt": attempt,
     }

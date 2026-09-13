@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import hashlib
 import pathlib
+import yaml
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -135,6 +136,29 @@ def get_or_create_snapshot(
             other.is_active = False
 
     files = read_skill_files(skill_name, skills_dir=skills_dir)
+    # Materialize dependency history before validating a dependent snapshot,
+    # and capture the exact rows selected now. A name-only dependency must not
+    # resolve to a newer dependency when this job eventually runs.
+    manifest = yaml.safe_load(files["manifest_yaml"]) or {}
+    dependency_snapshot_ids = {}
+    for dependency in manifest.get("dependencies", []):
+        dependency_name = dependency if isinstance(dependency, str) else dependency.get("id")
+        if not dependency_name:
+            continue
+        if isinstance(dependency, dict) and dependency.get("version") is not None:
+            dependency_snapshot = db.scalar(select(SkillSnapshot).where(
+                SkillSnapshot.skill_name == dependency_name,
+                SkillSnapshot.version_label == int(dependency["version"]),
+            ))
+        else:
+            dependency_snapshot = db.scalar(select(SkillSnapshot).where(
+                SkillSnapshot.skill_name == dependency_name,
+                SkillSnapshot.is_active.is_(True),
+            ))
+        if dependency_snapshot is None:
+            dependency_snapshot = get_or_create_snapshot(db, dependency_name, skills_dir=skills_dir)
+        dependency_snapshot_ids[dependency_name] = str(dependency_snapshot.id)
+
     snapshot = SkillSnapshot(
         skill_name=skill_name,
         version_label=next_version,
@@ -142,6 +166,7 @@ def get_or_create_snapshot(
         skill_md=files["skill_md"],
         output_schema_json=files["output_schema_json"],
         manifest_yaml=files["manifest_yaml"],
+        dependency_snapshot_ids=dependency_snapshot_ids,
         is_active=should_activate,
     )
     # Validate the immutable contract before it can be persisted. Drafts are

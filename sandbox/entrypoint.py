@@ -34,6 +34,7 @@ import yaml
 
 INPUT_DIR = pathlib.Path("/input")
 SKILLS_DIR = pathlib.Path("/skills")
+PACKAGE_SKILLS_DIR = pathlib.Path(__file__).resolve().parents[1] / "skills"
 OUTPUT_DIR = pathlib.Path("/output")
 CLAUDE_BINARY = "/usr/local/bin/claude"
 
@@ -101,6 +102,32 @@ def _load_input_contract(skill_name: str) -> tuple[str, str]:
         return contract["filename"], contract["intro_text"]
     except (KeyError, TypeError) as exc:
         raise ValueError(f"skill {skill_name!r} manifest is missing input_contract.filename/intro_text") from exc
+
+
+def _load_execution_policy(skill_name: str) -> dict:
+    path = SKILLS_DIR / skill_name / _MANIFEST_FILENAME
+    # Unit-test/legacy mounts may carry an older manifest without the
+    # optional execution policy.  Read the repository's contract as a
+    # compatibility fallback; production snapshot mounts always include
+    # their complete manifest and never consult the checkout.
+    mounted_manifest_exists = path.exists()
+    if not mounted_manifest_exists and SKILLS_DIR != pathlib.Path("/skills"):
+        return {}
+    if not mounted_manifest_exists:
+        path = PACKAGE_SKILLS_DIR / skill_name / _MANIFEST_FILENAME
+    if not path.exists():
+        return {}
+    manifest = yaml.safe_load(path.read_text()) or {}
+    policy = manifest.get("execution_policy")
+    if isinstance(policy, dict):
+        return policy
+    fallback = PACKAGE_SKILLS_DIR / skill_name / _MANIFEST_FILENAME
+    if path != fallback and fallback.exists():
+        legacy_manifest = yaml.safe_load(fallback.read_text()) or {}
+        policy = legacy_manifest.get("execution_policy")
+        if isinstance(policy, dict):
+            return policy
+    return {}
 
 # A real incident's attached log can run into the low single-digit MB
 # range, which blows straight through the CLI's ~1M token request limit
@@ -537,27 +564,31 @@ def _parse_claude_result(envelope: object, *, schema: dict) -> dict:
     return result
 
 
-def _escalation_reason(result: dict) -> str | None:
-    """Phase 4 escalation triggers, checked against a low-effort analysis
-    result. Only applies to skills whose schema carries `confidence`/
-    `severity_signal` at the top level (log-triage-summary); daily-report's
-    cross-incident section has no per-run confidence of its own, so it's
-    never escalated here. Returns a short human-readable reason, or None if
-    the low-effort result looks sufficient."""
-    confidence = result.get("confidence")
+def _escalation_reason(result: dict, policy: dict | None = None) -> str | None:
+    """Apply declarative quality signals from the selected skill manifest.
+    Generic sandbox code does not know result field names; a skill may opt
+    into escalation by declaring its own signal fields and thresholds."""
+    policy = policy or _load_execution_policy("log-triage-summary")
+    signals = policy.get("quality_signals") or {}
+    confidence_field = signals.get("confidence_field")
+    confidence = result.get(confidence_field) if confidence_field else None
     if not isinstance(confidence, (int, float)):
-        return "invalid structured output: missing/invalid confidence field"
-    if not result.get("key_finds"):
-        return "invalid structured output: empty key_finds"
+        return None if not confidence_field else f"invalid structured output: missing/invalid {confidence_field} field"
+    list_field = signals.get("required_nonempty_list_field")
+    if list_field and not result.get(list_field):
+        return f"invalid structured output: empty {list_field}"
 
-    threshold = float(os.environ.get("SKILL_ESCALATION_CONFIDENCE_THRESHOLD", "0.55"))
+    threshold = float(os.environ.get("SKILL_ESCALATION_CONFIDENCE_THRESHOLD", signals.get("confidence_threshold", 0.55)))
     if confidence < threshold:
         return f"confidence {confidence:.2f} below threshold {threshold:.2f}"
 
     # "critical ambiguity": a critical severity call the model itself isn't
     # very sure about is exactly the case worth a second, deeper look.
-    if result.get("severity_signal") == "critical" and confidence < 0.75:
-        return f"critical severity_signal with borderline confidence {confidence:.2f}"
+    severity_field = signals.get("severity_field")
+    critical_value = signals.get("critical_value")
+    critical_threshold = float(signals.get("critical_confidence_threshold", 0.75))
+    if severity_field and result.get(severity_field) == critical_value and confidence < critical_threshold:
+        return f"{severity_field}={critical_value!r} with borderline confidence {confidence:.2f}"
 
     return None
 
@@ -674,11 +705,13 @@ def run_skill(input_text: str, skill_name: str) -> tuple[dict, dict]:
     # call is the only call), while an escalated run's top-level fields
     # become real totals.
 
-    if (
-        skill_name == "log-triage-summary"
-        and _EFFORT_RANK.get(effort, 0) < _EFFORT_RANK.get(escalation_effort, 1)
-    ):
-        reason = _escalation_reason(result)
+    execution_policy = _load_execution_policy(skill_name)
+    if _EFFORT_RANK.get(effort, 0) < _EFFORT_RANK.get(escalation_effort, 1):
+        # Keep the one-argument compatibility seam for older test/tool
+        # overrides while production snapshot manifests pass their
+        # declarative policy explicitly.
+        reason = (_escalation_reason(result, execution_policy)
+                  if execution_policy else _escalation_reason(result))
         if reason:
             print(f"ai.escalated: reason={reason!r} from={effort!r} to={escalation_effort!r}", file=sys.stderr)
             # A single, bounded retry at the higher tier — never recurses,
