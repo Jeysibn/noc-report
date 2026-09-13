@@ -1,11 +1,34 @@
-# Skill manifest (Reliability mission Batch B). This, SKILL.md, and
-# output.schema.json together are the complete, hashable identity of this
-# skill — apps/api/app/skills/registry.py and
-# bridge/noc_bridge/skill_registry.py both hash the three files' bytes to
-# produce the skill_hash that flows through Job/AnalysisRun/cache lookups
-# and is re-verified by the bridge before every job execution.
+# Skill manifest (Reliability mission Batch B; deepened under Skill
+# Runtime mission Phase 5). This, SKILL.md, and output.schema.json
+# together are the complete, hashable identity of this skill —
+# apps/api/app/skills/registry.py and bridge/noc_bridge/skill_registry.py
+# both hash the three files' bytes to produce the skill_hash that flows
+# through Job/AnalysisRun/cache lookups and is re-verified by the bridge
+# before every job execution.
+#
+# Phase 5: this manifest is no longer just hashed opaque bytes — it is
+# now parsed at runtime by sandbox/entrypoint.py to source the input
+# filename and prompt intro text, replacing what used to be a second,
+# hard-coded copy of the same facts in Python
+# (`_INPUT_FILE_BY_SKILL`/`_INPUT_FILENAME_BY_JOB_TYPE`). Structural
+# fields (kind/execution_policy/renderer_profile/dependencies) are
+# recorded now so later phases (report assembly, renderer profiles,
+# dependency-aware provenance) have a real place to read them from
+# instead of inventing new out-of-band config.
+id: log-triage-summary
 name: log-triage-summary
-input_file: log.txt
+version: "1"
+kind: analysis
+input_contract:
+  filename: log.txt
+  intro_text: "Here is the log excerpt to analyze:"
+output_schema:
+  file: output.schema.json
+renderer_profile: null
+execution_policy:
+  job_type: log_triage
+  timeout_seconds: 900
+dependencies: []
 description: >
   Summarize a NOC incident's attached log excerpt into a structured,
   bilingual (Chinese/English) triage summary with a Key Finds/Secondary

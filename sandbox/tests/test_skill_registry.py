@@ -65,14 +65,32 @@ def test_load_output_schema_reflects_a_materialized_snapshot_directory(tmp_path,
 
 
 def test_skill_manifests_exist_and_declare_input_file():
-    # No YAML parser dependency declared for sandbox/ (its Dockerfile
-    # installs nothing beyond the stdlib) — the manifest's two fields
-    # tested here are simple enough that a substring check avoids adding
-    # one just for this test.
+    # Skill Runtime mission Phase 5: skill.yaml is now actually parsed at
+    # run time (via entrypoint._load_input_contract), not just hashed
+    # opaque bytes — so this exercises the real loader against the real
+    # on-disk manifests, monkeypatching SKILLS_DIR the same way the other
+    # tests in this file do.
     for skill_name, expected_input in (
         ("log-triage-summary", "log.txt"),
         ("daily-alert-report", "snapshot.json"),
     ):
         manifest_text = (SKILLS_DIR / skill_name / "skill.yaml").read_text()
         assert f"name: {skill_name}" in manifest_text
-        assert f"input_file: {expected_input}" in manifest_text
+        assert f"filename: {expected_input}" in manifest_text
+
+
+def test_load_input_contract_parses_real_manifests(monkeypatch):
+    monkeypatch.setattr(entrypoint, "SKILLS_DIR", SKILLS_DIR)
+    filename, intro = entrypoint._load_input_contract("log-triage-summary")
+    assert filename == "log.txt"
+    assert intro
+
+    filename, intro = entrypoint._load_input_contract("daily-alert-report")
+    assert filename == "snapshot.json"
+    assert intro
+
+
+def test_load_input_contract_raises_for_unknown_skill(monkeypatch, tmp_path):
+    monkeypatch.setattr(entrypoint, "SKILLS_DIR", tmp_path)
+    with pytest.raises(ValueError, match="no skill manifest found"):
+        entrypoint._load_input_contract("nonexistent-skill")
