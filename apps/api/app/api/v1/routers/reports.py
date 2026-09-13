@@ -31,7 +31,7 @@ from app.db.session import get_db
 from app.deps import require_permission
 from app.jobs import enqueue_job
 from app.models.models import AnalysisRun, Evidence, Incident, Job, Report, ReportSnapshot, Shift, User
-from app.skills.registry import get_or_create_snapshot
+from app.skills.registry import resolve_active_snapshot
 from app.schemas.schemas import (
     ReportDownloadUrlResponse,
     ReportGenerateRequest,
@@ -198,7 +198,10 @@ def generate_report(
     # Skill Registry (Reliability mission Batch B): resolves/creates the
     # immutable SkillSnapshot for this skill's current on-disk content —
     # see analysis.py's request_analysis for the fuller rationale.
-    skill_snapshot = get_or_create_snapshot(db, SKILL_NAME)
+    # Skill Runtime mission Phase 2: resolve the *active* snapshot, not
+    # necessarily whatever is on disk right now — activation genuinely
+    # controls what new jobs run.
+    skill_snapshot = resolve_active_snapshot(db, SKILL_NAME)
 
     # Reliability mission Batch A: same transactional-outbox shape as
     # analysis.py's request_analysis — the ReportSnapshot above and the

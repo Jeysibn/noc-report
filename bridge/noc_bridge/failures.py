@@ -43,7 +43,7 @@ _RETRYABLE_MESSAGE_MARKERS = (
 def classify_failure(exc: BaseException) -> str:
     """Returns RETRYABLE or TERMINAL for a job failure raised from
     `BridgeService._process_job`."""
-    from noc_bridge.skill_registry import SkillHashMismatch
+    from noc_bridge.skill_registry import SkillHashMismatch, SkillSnapshotMissing
     from noc_bridge.storage import ChecksumMismatch
     from noc_bridge.validation import OutputValidationError
 
@@ -59,6 +59,11 @@ def classify_failure(exc: BaseException) -> str:
         # The skill's content has genuinely drifted since this job was
         # enqueued — retrying re-runs against the same (now-different)
         # skill content and reproduces the exact same mismatch.
+        return TERMINAL
+    if isinstance(exc, SkillSnapshotMissing):
+        # The immutable SkillSnapshot this job depends on doesn't exist —
+        # retrying re-attempts the same missing-row lookup and fails
+        # identically every time.
         return TERMINAL
     if isinstance(exc, ChecksumMismatch):
         # A checksum mismatch could mean tampered/corrupted evidence

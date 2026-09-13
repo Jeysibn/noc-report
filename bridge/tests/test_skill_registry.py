@@ -3,7 +3,14 @@ import pathlib
 
 import pytest
 
-from noc_bridge.skill_registry import SkillHashMismatch, compute_skill_hash, verify_skill_hash
+from noc_bridge.skill_registry import (
+    SkillHashMismatch,
+    SkillSnapshotMissing,
+    compute_skill_hash,
+    fetch_skill_snapshot,
+    materialize_snapshot,
+    verify_skill_hash,
+)
 
 SKILLS_DIR = pathlib.Path(__file__).resolve().parents[2] / "skills"
 
@@ -54,3 +61,83 @@ def test_classify_failure_treats_skill_hash_mismatch_as_terminal():
     from noc_bridge.failures import TERMINAL, classify_failure
 
     assert classify_failure(SkillHashMismatch("boom")) == TERMINAL
+
+
+class _FakeCursor:
+    """Minimal RealDictCursor-shaped stand-in — no real Postgres needed to
+    exercise fetch_skill_snapshot/materialize_snapshot's own logic."""
+
+    def __init__(self, row):
+        self._row = row
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+    def execute(self, query, params):
+        self._executed_hash = params[0]
+
+    def fetchone(self):
+        if self._row is not None and self._row["content_hash"] == self._executed_hash:
+            return dict(self._row)
+        return None
+
+
+class _FakeConn:
+    def __init__(self, row):
+        self._row = row
+
+    def cursor(self, cursor_factory=None):
+        return _FakeCursor(self._row)
+
+
+_FAKE_SNAPSHOT_ROW = {
+    "skill_name": "log-triage-summary",
+    "version_label": "3",
+    "content_hash": "abc123",
+    "skill_md": "# v3 prompt content",
+    "output_schema_json": '{"type": "object"}',
+    "manifest_yaml": "name: log-triage-summary\nversion: 3\n",
+}
+
+
+def test_fetch_skill_snapshot_returns_none_when_hash_not_found():
+    conn = _FakeConn(_FAKE_SNAPSHOT_ROW)
+    assert fetch_skill_snapshot(conn, "does-not-exist") is None
+
+
+def test_fetch_skill_snapshot_returns_matching_row():
+    conn = _FakeConn(_FAKE_SNAPSHOT_ROW)
+    row = fetch_skill_snapshot(conn, "abc123")
+    assert row["skill_md"] == "# v3 prompt content"
+
+
+def test_materialize_snapshot_writes_exact_db_content_not_live_disk(tmp_path):
+    """Core Skill Runtime mission requirement: the materialized files come
+    from the DB snapshot row, verbatim — regardless of what's on disk."""
+    conn = _FakeConn(_FAKE_SNAPSHOT_ROW)
+    dest_root = tmp_path / "job-scratch"
+
+    result_root = materialize_snapshot(
+        conn, "log-triage-summary", "abc123", dest_root=dest_root
+    )
+
+    assert result_root == dest_root
+    skill_dir = dest_root / "log-triage-summary"
+    assert (skill_dir / "SKILL.md").read_text() == "# v3 prompt content"
+    assert (skill_dir / "output.schema.json").read_text() == '{"type": "object"}'
+    assert (skill_dir / "skill.yaml").read_text() == "name: log-triage-summary\nversion: 3\n"
+
+
+def test_materialize_snapshot_raises_terminal_error_when_snapshot_missing(tmp_path):
+    conn = _FakeConn(None)
+    with pytest.raises(SkillSnapshotMissing):
+        materialize_snapshot(conn, "log-triage-summary", "some-hash", dest_root=tmp_path)
+
+
+def test_classify_failure_treats_missing_snapshot_as_terminal():
+    from noc_bridge.failures import TERMINAL, classify_failure
+
+    assert classify_failure(SkillSnapshotMissing("boom")) == TERMINAL
