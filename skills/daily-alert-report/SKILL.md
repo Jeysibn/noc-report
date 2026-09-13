@@ -1,42 +1,45 @@
 ---
 name: daily-alert-report
-description: Compile a shift's frozen incident/analysis snapshot into a structured, bilingual (Chinese/English) daily alert report.
+description: Produce the cross-incident, shift-level narrative for a daily alert report from compact per-incident summaries.
 ---
 
 # Daily Alert Report
 
-Given a JSON snapshot of one shift (`shift_id`, `shift_starts_at`,
-`shift_ends_at`, and a list of `incidents`, each with `display_id`, `title`,
-`service`, `environment`, `status`, `triggered_at`, `recovered_at`,
-`grafana_url`, `log_filename`, `screenshots` (a list of `{bucket,
-object_key, filename}`, may be empty), and an optional `analysis` object
-produced by the log-triage-summary skill — itself already bilingual with
-`summary_en`/`summary_zh`, `key_finds`, `secondary_finds`, `likely_cause_en`/
-`_zh`, `recommended_action_en`/`_zh`), produce a structured JSON report. The
-NOC team is bilingual — every human-readable field must be given in **both**
-Chinese and English.
+AI cost-optimization mission Phase 2, Issue 6: this skill no longer
+receives (or reproduces) each incident's full log-triage-summary analysis,
+screenshots, MinIO references, or Grafana/log-filename metadata — none of
+that is reasoning-dependent, so Python assembles it deterministically
+after this call (see `apps/api/app/api/v1/routers/reports.py`'s
+`_build_snapshot` and `bridge/noc_bridge/service.py`'s daily-report merge
+step). You only ever see a **compact** per-incident summary: `display_id`,
+`title`, `status`, `severity_signal`, `main_error` (the analysis's
+`likely_cause_en`, one line), `impact` (the analysis's `summary_en`, one
+line), `starts_at`, `ends_at`. An incident with no analysis yet is
+included with `severity_signal`/`main_error`/`impact` set to `null`.
 
-Output shape:
+Given the shift's `shift_starts_at`/`shift_ends_at` and this list of
+compact incident summaries, produce **only**:
 
-- `title` — short report title, e.g. "Daily Alert Report — Night Shift".
 - `overview_en` / `overview_zh` — one paragraph each, plain language,
-  summarizing the shift as a whole (incident count, overall severity mix,
-  anything recurring across incidents).
-- `sections` — one entry per incident in the snapshot, each with:
-  - `incident_display_id`
-  - `title`
-  - `status`
-  - `grafana_url` (nullable) — carried through from the snapshot as-is.
-  - `log_filename` (nullable) — carried through from the snapshot as-is.
-  - `screenshots` — carried through from the snapshot as-is (list, may be
-    empty); don't drop or reorder it.
-  - `analysis` — when the snapshot incident has an `analysis` object, carry
-    it through **unmodified** (don't re-derive or re-translate it — the
-    log-triage-summary skill already produced genuine bilingual analysis for
-    it); when absent, set this to `null` and note in the section that no
-    analysis was available yet.
+  summarizing the shift as a whole (incident count, overall severity mix).
+- `cross_incident_findings_en` / `cross_incident_findings_zh` — one
+  paragraph each identifying any real correlation, recurring pattern, or
+  shared root cause **across multiple incidents** in this shift (e.g. the
+  same downstream dependency failing in three unrelated services). If
+  there is no real cross-incident correlation, say so plainly (e.g. "No
+  cross-incident correlation was found; these incidents appear
+  unrelated.") in both languages — do not invent a connection that isn't
+  actually there.
+
+Do not restate each incident's own analysis (you were not given it in
+full, and it is merged back in deterministically afterward) — this output
+is reasoning that only makes sense across incidents, not a per-incident
+report.
 
 Output must be valid JSON matching this shape exactly — no prose outside
-the JSON object. This is the schema the Claude Bridge validates before
-converting the result to a DOCX file and uploading it to MinIO/Postgres
-(master plan §29, Daily Report Job Contract).
+the JSON object: `{overview_en, overview_zh, cross_incident_findings_en,
+cross_incident_findings_zh}`. This is the schema the Claude Bridge
+validates before deterministically merging it with the frozen shift
+snapshot's incident metadata, converting the merged result to a DOCX
+file, and uploading it to MinIO/Postgres (master plan §29, Daily Report
+Job Contract).

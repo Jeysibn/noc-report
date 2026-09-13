@@ -112,6 +112,17 @@ def render_daily_report_docx(
     doc.add_heading("English Summary", level=3)
     doc.add_paragraph(result.get("overview_en") or "")
 
+    # --- Cross-Incident Findings (AI cost-optimization mission Phase 2,
+    # Issue 6: the one piece of this report that is genuinely reasoning-
+    # dependent across incidents, so it's still Claude's own text, merged
+    # in verbatim by service.py's deterministic assembly step) ---------
+    if result.get("cross_incident_findings_en") or result.get("cross_incident_findings_zh"):
+        doc.add_heading("Cross-Incident Findings", level=1)
+        doc.add_heading("Chinese", level=3)
+        doc.add_paragraph(result.get("cross_incident_findings_zh") or "")
+        doc.add_heading("English", level=3)
+        doc.add_paragraph(result.get("cross_incident_findings_en") or "")
+
     # --- Log Analysis (per incident, bilingual) ---------------------
     doc.add_heading("Log Analysis", level=1)
     for section in sections:

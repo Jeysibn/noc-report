@@ -39,7 +39,7 @@ from noc_bridge.queue_topology import (
 from noc_bridge.docx_render import render_daily_report_docx
 from noc_bridge.sandbox_runner import run_job_sandbox
 from noc_bridge.storage import ChecksumMismatch, download_object, get_client, upload_artifact
-from noc_bridge.validation import OutputValidationError, validate_output
+from noc_bridge.validation import OutputValidationError, validate_output, validate_merged_daily_report
 
 # Skill name per job_type. Milestone 14 adds daily_report
 # (skills/daily-alert-report/SKILL.md).
@@ -56,6 +56,42 @@ _INPUT_FILENAME_BY_JOB_TYPE = {"log_triage": "log.txt", "daily_report": "snapsho
 logger = logging.getLogger("noc_bridge")
 
 MAX_ATTEMPTS = 1
+
+
+def _merge_daily_report(snapshot: dict, ai_output: dict) -> dict:
+    """AI cost-optimization mission Phase 2, Issue 6: deterministically
+    rebuilds the full report structure `_validate_daily_report` and
+    `render_daily_report_docx` expect, from (a) the frozen snapshot this
+    bridge downloaded before ever invoking the sandbox and (b) Claude's
+    compact 4-field output (overview_en/zh, cross_incident_findings_en/zh).
+    Per-incident fields (title/status/grafana_url/log_filename/
+    screenshots/existing analysis) are carried through verbatim — never
+    regenerated or round-tripped through Claude."""
+    shift_starts_at = snapshot.get("shift_starts_at")
+    shift_ends_at = snapshot.get("shift_ends_at")
+    title = f"Daily Alert Report — {shift_starts_at} to {shift_ends_at}"
+
+    sections = [
+        {
+            "incident_display_id": incident["display_id"],
+            "title": incident["title"],
+            "status": incident["status"],
+            "grafana_url": incident.get("grafana_url"),
+            "log_filename": incident.get("log_filename"),
+            "screenshots": incident.get("screenshots") or [],
+            "analysis": incident.get("analysis"),
+        }
+        for incident in snapshot.get("incidents", [])
+    ]
+
+    return {
+        "title": title,
+        "overview_en": ai_output["overview_en"],
+        "overview_zh": ai_output["overview_zh"],
+        "cross_incident_findings_en": ai_output["cross_incident_findings_en"],
+        "cross_incident_findings_zh": ai_output["cross_incident_findings_zh"],
+        "sections": sections,
+    }
 
 
 class UnsupportedJobType(RuntimeError):
@@ -186,7 +222,27 @@ class BridgeService:
                 raise RuntimeError(f"sandbox exited {result.exit_code}: {result.logs[-2000:]}")
 
             # §27 step 13: structured output validation, before upload.
+            # For daily_report this now validates the COMPACT AI output
+            # (see noc_bridge.validation._validate_daily_report_ai_output)
+            # — the full report is assembled and validated separately
+            # right below, once merged with the frozen snapshot.
             validate_output(job_type, result.output)
+
+            if job_type == "daily_report":
+                # AI cost-optimization mission Phase 2, Issue 6: Claude
+                # only ever saw/produced the compact 4-field output
+                # validated above. Everything else in the final report —
+                # title, per-incident sections (status/grafana_url/
+                # log_filename/screenshots/existing analysis) — is carried
+                # through verbatim from the frozen snapshot this bridge
+                # already downloaded to input_dir before invoking the
+                # sandbox, never regenerated or round-tripped through
+                # Claude. This is the deterministic-assembly step the
+                # mission requires: "Deterministic code computes facts.
+                # Claude interprets evidence."
+                snapshot = json.loads((input_dir / "snapshot.json").read_text())
+                result.output = _merge_daily_report(snapshot, result.output)
+                validate_merged_daily_report(result.output)
 
             # §27 step 14: upload the validated result. log_triage's
             # result *is* the artifact (raw JSON, into

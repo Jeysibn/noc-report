@@ -79,6 +79,27 @@ def _validate_log_triage(output: dict) -> None:
     _validate_analysis_object(output, "output")
 
 
+def _validate_daily_report_ai_output(output: dict) -> None:
+    """AI cost-optimization mission Phase 2, Issue 6: validates the
+    COMPACT output Claude actually produces now (see
+    skills/daily-alert-report/SKILL.md and sandbox/entrypoint.py's
+    _SCHEMAS["daily-alert-report"]) — just the shift-level overview and
+    any real cross-incident correlation, not the full merged report
+    (title/sections/screenshots/etc, which service.py assembles
+    deterministically afterward and validates separately via
+    `_validate_daily_report`)."""
+    required = [
+        "overview_en", "overview_zh",
+        "cross_incident_findings_en", "cross_incident_findings_zh",
+    ]
+    missing = [field for field in required if field not in output]
+    if missing:
+        raise OutputValidationError(f"daily_report AI output missing fields: {missing}")
+    for field in required:
+        if not isinstance(output[field], str) or not output[field].strip():
+            raise OutputValidationError(f"{field} must be a non-empty string")
+
+
 def _validate_daily_report(output: dict) -> None:
     required = ["title", "overview_en", "overview_zh", "sections"]
     missing = [field for field in required if field not in output]
@@ -111,8 +132,21 @@ def _validate_daily_report(output: dict) -> None:
 
 _VALIDATORS = {
     "log_triage": _validate_log_triage,
-    "daily_report": _validate_daily_report,
+    # AI cost-optimization mission Phase 2, Issue 6: this validates the
+    # sandbox's raw output — now the COMPACT AI output, not the full
+    # merged report. The full merged report (built deterministically in
+    # service.py from this plus the frozen snapshot) is validated
+    # separately via `validate_merged_daily_report` before rendering.
+    "daily_report": _validate_daily_report_ai_output,
 }
+
+
+def validate_merged_daily_report(output: dict) -> None:
+    """Validates the final, deterministically-merged daily report
+    structure (title/overview/sections, each carrying through screenshots/
+    links/existing analysis verbatim) — the same contract
+    bridge/noc_bridge/docx_render.py has always depended on."""
+    _validate_daily_report(output)
 
 
 def validate_output(job_type: str, output: dict | None) -> None:

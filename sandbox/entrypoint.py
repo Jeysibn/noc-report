@@ -80,51 +80,59 @@ _SCHEMAS = {
     # §29, Milestone 14): bilingual overview, sections carrying through
     # grafana_url/log_filename/screenshots and each incident's analysis
     # object in the same bilingual shape as log-triage-summary above.
+    # AI cost-optimization mission Phase 2, Issue 6: Claude no longer
+    # receives (or is asked to reproduce) each incident's full analysis,
+    # screenshots, or MinIO/Grafana references — none of that is
+    # reasoning-dependent. Its output is now just the shift-level overview
+    # and any real cross-incident correlation; everything else (existing
+    # per-incident analysis, screenshots, links, metadata) is merged back
+    # in deterministically by the bridge (see
+    # bridge/noc_bridge/service.py's daily-report merge step) using the
+    # frozen snapshot it already has on disk, not round-tripped through
+    # Claude. See skills/daily-alert-report/SKILL.md.
     "daily-alert-report": {
         "type": "object",
         "properties": {
-            "title": {"type": "string"},
             "overview_en": {"type": "string"},
             "overview_zh": {"type": "string"},
-            "sections": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "incident_display_id": {"type": "string"},
-                        "title": {"type": "string"},
-                        "status": {"type": "string"},
-                        "grafana_url": {"type": ["string", "null"]},
-                        "log_filename": {"type": ["string", "null"]},
-                        "screenshots": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "bucket": {"type": "string"},
-                                    "object_key": {"type": "string"},
-                                    "filename": {"type": "string"},
-                                },
-                                "required": ["bucket", "object_key", "filename"],
-                                "additionalProperties": False,
-                            },
-                        },
-                        "analysis": {
-                            "anyOf": [_ANALYSIS_SCHEMA, {"type": "null"}],
-                        },
-                    },
-                    "required": [
-                        "incident_display_id", "title", "status", "grafana_url",
-                        "log_filename", "screenshots", "analysis",
-                    ],
-                    "additionalProperties": False,
-                },
-            },
+            "cross_incident_findings_en": {"type": "string"},
+            "cross_incident_findings_zh": {"type": "string"},
         },
-        "required": ["title", "overview_en", "overview_zh", "sections"],
+        "required": [
+            "overview_en", "overview_zh",
+            "cross_incident_findings_en", "cross_incident_findings_zh",
+        ],
         "additionalProperties": False,
     },
 }
+
+
+def _compact_incident_summaries(snapshot: dict) -> list[dict]:
+    """AI cost-optimization mission Phase 2, Issue 6: reduces a full shift
+    snapshot's incidents (which carry the ENTIRE per-incident analysis
+    object, screenshots, MinIO refs, Grafana links, log filenames) down to
+    just what a cross-incident reasoning step actually needs: title,
+    status, severity, main error, impact, and the incident's time window.
+    Everything dropped here (screenshots, links, the full analysis object)
+    is still available to Python from the original snapshot and is merged
+    back into the final report deterministically — Claude never needs it
+    to write a shift-level overview or spot a cross-incident correlation."""
+    compact = []
+    for incident in snapshot.get("incidents", []):
+        analysis = incident.get("analysis")
+        compact.append(
+            {
+                "display_id": incident.get("display_id"),
+                "title": incident.get("title"),
+                "status": incident.get("status"),
+                "severity_signal": analysis.get("severity_signal") if analysis else None,
+                "main_error": analysis.get("likely_cause_en") if analysis else None,
+                "impact": analysis.get("summary_en") if analysis else None,
+                "starts_at": incident.get("triggered_at"),
+                "ends_at": incident.get("recovered_at"),
+            }
+        )
+    return compact
 
 # Per skill: which /input file it reads, and the phrase introducing it in
 # the prompt. Both skills take one input file per job.
@@ -533,6 +541,22 @@ def run_skill(input_text: str, skill_name: str) -> tuple[dict, dict]:
     raw_input_bytes = len(input_text.encode("utf-8"))
     if skill_name == "log-triage-summary":
         input_text = _compact_log_if_oversized(input_text)
+    elif skill_name == "daily-alert-report":
+        # AI cost-optimization mission Phase 2, Issue 6: send Claude only
+        # the compact per-incident summaries (title/status/severity/main
+        # error/impact/time window), never the full snapshot (which
+        # carries each incident's entire analysis object, screenshots, and
+        # MinIO/Grafana references) — that data has no bearing on the
+        # shift-level overview or cross-incident correlation this skill
+        # now produces, and would just be Claude reproducing input it was
+        # never asked to change.
+        snapshot = json.loads(input_text)
+        compact_snapshot = {
+            "shift_starts_at": snapshot.get("shift_starts_at"),
+            "shift_ends_at": snapshot.get("shift_ends_at"),
+            "incidents": _compact_incident_summaries(snapshot),
+        }
+        input_text = json.dumps(compact_snapshot, indent=2)
     evidence_bytes = len(input_text.encode("utf-8"))
     prompt = (
         f"{skill_md}\n\n"
