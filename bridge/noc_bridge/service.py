@@ -41,7 +41,22 @@ from noc_bridge.docx_render import render_daily_report_docx
 from noc_bridge.sandbox_runner import run_job_sandbox
 from noc_bridge.skill_registry import SkillHashMismatch, SkillSnapshotMissing, materialize_snapshot, verify_skill_hash
 from noc_bridge.storage import ChecksumMismatch, download_object, get_client, object_exists, upload_artifact
-from noc_bridge.validation import OutputValidationError, validate_output, validate_merged_daily_report
+from noc_bridge.validation import (
+    OutputValidationError,
+    validate_output,
+    validate_merged_daily_report,
+    validate_against_schema,
+)
+
+# Skill Runtime mission Phase 14: the job message protocol's single source
+# of truth — see packages/contracts/job_message.schema.json's own
+# docstring. apps/api validates the same file at message-build time
+# (app/core/queue.py::build_job_message); the bridge validates every
+# incoming delivery against it here before touching any of its keys, so a
+# protocol drift between producer and consumer fails loudly and
+# immediately instead of as a KeyError deep inside job processing.
+_JOB_MESSAGE_SCHEMA_PATH = pathlib.Path(__file__).resolve().parents[2] / "packages" / "contracts" / "job_message.schema.json"
+_job_message_schema = json.loads(_JOB_MESSAGE_SCHEMA_PATH.read_text())
 
 # Skill name per job_type. Milestone 14 adds daily_report
 # (skills/daily-alert-report/SKILL.md).
@@ -387,6 +402,22 @@ class BridgeService:
 
     def _handle_delivery(self, channel, method, properties, body, pg_conn, minio_client, job_type: str) -> None:
         payload = json.loads(body)
+
+        # Skill Runtime mission Phase 14: reject any message that doesn't
+        # conform to the canonical job message protocol before touching any
+        # of its keys. A poison-pill/drifted message is routed straight to
+        # this job_type's DLQ and acked, same as any other terminal
+        # failure — never left to crash the whole consumer loop as an
+        # uncaught exception (there's no reliable job_id to update in
+        # Postgres for a message this malformed).
+        try:
+            validate_against_schema(payload, _job_message_schema, label="job_message")
+        except OutputValidationError as exc:
+            logger.error("job message failed protocol validation, routing to DLQ: %s", exc)
+            send_to_dlq(channel, job_type=job_type, body=payload)
+            channel.basic_ack(delivery_tag=method.delivery_tag)
+            return
+
         job_id = payload["job_id"]
         job_uuid = uuid.UUID(job_id)
 
