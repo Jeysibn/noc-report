@@ -45,21 +45,48 @@ DEFAULT_BATCH_SIZE = 50
 
 def dispatch_pending_events(db: Session, channel, *, batch_size: int = DEFAULT_BATCH_SIZE) -> int:
     """Publishes up to `batch_size` unpublished OutboxEvent rows, oldest
-    first. `FOR UPDATE SKIP LOCKED` lets more than one dispatcher process
-    run concurrently (e.g. two API replicas) without both trying to
-    publish the same row. Returns the number of rows successfully
-    published in this pass."""
-    rows = list(
-        db.scalars(
+    first. Returns the number of rows successfully published in this
+    pass.
+
+    Skill Runtime mission Phase 11: this used to `SELECT ... FOR UPDATE
+    SKIP LOCKED LIMIT batch_size` once, then loop over the whole batch
+    committing after each row. That was a real race, not just a
+    theoretical one: a Postgres row lock is held for the lifetime of the
+    *transaction*, not the statement — so the very first `db.commit()`
+    inside the loop released the locks on every *other* row still in that
+    same SELECT's result set, not just the one just published. A second
+    concurrent dispatcher's own `FOR UPDATE SKIP LOCKED` could then claim
+    and publish one of those now-unlocked-but-not-yet-published rows,
+    duplicating the RabbitMQ message before this loop got to it.
+
+    Claiming one row per transaction (select-for-update, publish, mark
+    published, commit, repeat) closes that window: a row's lock is held
+    for exactly as long as it takes to publish and mark it, and is never
+    silently dropped on an unrelated row's commit. `FOR UPDATE SKIP
+    LOCKED` still lets more than one dispatcher process run concurrently
+    (e.g. two API replicas) without both trying to publish the same row."""
+    # A row that fails to publish this call stays published_at IS NULL
+    # (retried on the *next* dispatch pass) but must not be re-selected
+    # within this same call — with rows claimed one at a time, nothing
+    # else would stop a persistently-failing row (e.g. broker down) from
+    # being reselected every remaining iteration, starving every other
+    # pending row of a turn in this batch.
+    failed_ids: set = set()
+    published = 0
+    for _ in range(batch_size):
+        query = (
             select(OutboxEvent)
             .where(OutboxEvent.published_at.is_(None))
             .order_by(OutboxEvent.created_at.asc())
-            .limit(batch_size)
+            .limit(1)
             .with_for_update(skip_locked=True)
         )
-    )
-    published = 0
-    for row in rows:
+        if failed_ids:
+            query = query.where(OutboxEvent.id.not_in(failed_ids))
+        row = db.scalar(query)
+        if row is None:
+            break
+
         try:
             publish_message(
                 channel,
@@ -76,6 +103,7 @@ def dispatch_pending_events(db: Session, channel, *, batch_size: int = DEFAULT_B
                 .values(attempt_count=OutboxEvent.attempt_count + 1, last_error=str(exc)[:2000])
             )
             db.commit()
+            failed_ids.add(row.id)
             continue
 
         db.execute(
