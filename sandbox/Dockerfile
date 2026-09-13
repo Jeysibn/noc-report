@@ -10,6 +10,8 @@
 # takes effect on the next job without rebuilding this image at all.
 FROM python:3.12-slim
 
+RUN pip install --no-cache-dir "PyYAML>=6.0"
+
 RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin sandbox
 
 WORKDIR /app

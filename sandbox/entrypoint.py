@@ -30,6 +30,8 @@ import re
 import subprocess
 import sys
 
+import yaml
+
 INPUT_DIR = pathlib.Path("/input")
 SKILLS_DIR = pathlib.Path("/skills")
 OUTPUT_DIR = pathlib.Path("/output")
@@ -80,12 +82,25 @@ def _compact_incident_summaries(snapshot: dict) -> list[dict]:
         )
     return compact
 
-# Per skill: which /input file it reads, and the phrase introducing it in
-# the prompt. Both skills take one input file per job.
-_INPUT_FILE_BY_SKILL = {
-    "log-triage-summary": ("log.txt", "Here is the log excerpt to analyze:"),
-    "daily-alert-report": ("snapshot.json", "Here is the frozen shift snapshot to report on:"),
-}
+_MANIFEST_FILENAME = "skill.yaml"
+
+
+def _load_input_contract(skill_name: str) -> tuple[str, str]:
+    """Skill Runtime mission Phase 5: which /input file a skill reads, and
+    the phrase introducing it in the prompt, now comes from the skill's
+    own manifest (`input_contract.filename`/`input_contract.intro_text`
+    in skill.yaml) instead of a second, hard-coded Python dict that used
+    to duplicate — and could silently drift from — the same facts. A
+    skill can change its input contract by editing skill.yaml alone."""
+    manifest_path = SKILLS_DIR / skill_name / _MANIFEST_FILENAME
+    if not manifest_path.exists():
+        raise ValueError(f"no skill manifest found for skill {skill_name!r} at {manifest_path}")
+    manifest = yaml.safe_load(manifest_path.read_text())
+    try:
+        contract = manifest["input_contract"]
+        return contract["filename"], contract["intro_text"]
+    except (KeyError, TypeError) as exc:
+        raise ValueError(f"skill {skill_name!r} manifest is missing input_contract.filename/intro_text") from exc
 
 # A real incident's attached log can run into the low single-digit MB
 # range, which blows straight through the CLI's ~1M token request limit
@@ -511,7 +526,7 @@ def run_skill(input_text: str, skill_name: str) -> tuple[dict, dict]:
 
     schema = _load_output_schema(skill_name)
 
-    _, intro = _INPUT_FILE_BY_SKILL[skill_name]
+    _, intro = _load_input_contract(skill_name)
     raw_input_bytes = len(input_text.encode("utf-8"))
     if skill_name == "log-triage-summary":
         input_text = _compact_log_if_oversized(input_text)
@@ -652,11 +667,12 @@ def run_skill(input_text: str, skill_name: str) -> tuple[dict, dict]:
 
 def main() -> int:
     skill_name = os.environ.get("SKILL_NAME", "log-triage-summary")
-    if skill_name not in _INPUT_FILE_BY_SKILL:
-        print(f"no input-file mapping registered for skill: {skill_name}", file=sys.stderr)
+    try:
+        input_filename, _ = _load_input_contract(skill_name)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
         return 1
 
-    input_filename, _ = _INPUT_FILE_BY_SKILL[skill_name]
     input_file = INPUT_DIR / input_filename
     if not input_file.exists():
         print(f"missing input file: {input_file}", file=sys.stderr)
