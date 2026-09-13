@@ -4,6 +4,30 @@ Status: **in progress**, tracked across multiple work sessions. This ADR is
 the running log for the cost-optimization mission (see mission brief, not
 committed to the repo) so work can resume without re-deriving the plan.
 
+> **Correction (Phase 2 of this mission — see ADR 0005):** two claims below
+> did not hold up under a fresh mission (with its own explicit "inspect the
+> real current source, don't trust old docs" instruction) and are corrected
+> here rather than silently left standing:
+> - **"Phase 2/3 ... verified as already minimal, no code change made"**
+>   was wrong on the *session-persistence* and *system-prompt* dimensions
+>   specifically: the CLI invocation had no `--system-prompt` (so it used
+>   the CLI's own default coding-agent identity/preamble, real overhead
+>   this skill's structured single-turn output never needed) and no
+>   `--no-session-persistence` (so a transcript was written and kept for
+>   an analysis that is never resumed). Both are real, safe flags this
+>   CLI build supports and are now set — see ADR 0005 Issue 1.
+> - **"Phase 8 — daily report already reuses existing per-incident
+>   analyses unmodified ... no work needed"** was true only in the narrow
+>   sense that stale per-incident data wasn't being regenerated. It missed
+>   that the *daily-report skill's own schema* still round-tripped every
+>   incident's full analysis object, screenshots, and MinIO/Grafana
+>   references through the prompt/response even though none of that is
+>   reasoning-dependent — real, avoidable token cost. Fixed in ADR 0005
+>   Issue 6 (compact input, compact output, deterministic merge).
+>
+> Everything else below (Phases 0, 1, 4, 5, 6, 7, 9-13, and the benchmark
+> numbers) was re-checked against the current `main` and still holds.
+
 ## Phase checklist
 
 - [x] Phase 0 — inspect current pipeline (see "Pipeline map" below)
