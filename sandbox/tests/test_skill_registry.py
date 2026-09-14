@@ -34,7 +34,7 @@ def test_load_output_schema_reads_real_schema_file_for_daily_report(monkeypatch)
     schema = entrypoint._load_output_schema("daily-alert-report")
     on_disk = json.loads((SKILLS_DIR / "daily-alert-report" / "output.schema.json").read_text())
     assert schema == on_disk
-    assert "metadata" in schema["properties"]
+    assert "title" in schema["properties"]
     assert "blocks" in schema["properties"]
 
 

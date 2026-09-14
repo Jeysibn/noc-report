@@ -75,9 +75,12 @@ def _add_incident_evidence(doc: Document, block: IncidentEvidence, screenshot_fe
         doc.add_paragraph(f"Incident ID: {block.incident_id}")
     if block.metadata:
         doc.add_paragraph("  ·  ".join(f"{m.label}: {m.value}" for m in block.metadata))
+    links = list(block.links)
     if block.link:
-        doc.add_paragraph(block.link.label)
-        doc.add_paragraph(block.link.url)
+        links.insert(0, block.link)
+    for link in links:
+        doc.add_paragraph(link.label)
+        doc.add_paragraph(link.url)
     if block.log_file:
         doc.add_paragraph(f"Log File — File Name: {block.log_file.filename}")
     for shot in block.screenshots:
@@ -102,6 +105,8 @@ def _add_analysis_reference(
     doc.add_heading(block.heading, level=2)
     if block.analysis_run_id:
         doc.add_paragraph(f"Analysis reference: {block.analysis_run_id}")
+    for metadata in block.metadata:
+        doc.add_paragraph(f"{metadata.label}: {metadata.value}")
     if not block.available:
         doc.add_paragraph(block.unavailable_text or "No analysis available.")
         return

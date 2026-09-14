@@ -39,7 +39,7 @@ from noc_bridge.queue_topology import (
     send_to_dlq,
 )
 from noc_bridge.docx_render import render_daily_report_docx, render_document
-from noc_bridge.report_document import build_report_document
+from noc_bridge.report_composition import compose_report
 from noc_bridge.sandbox_runner import run_job_sandbox
 from noc_bridge.skill_registry import SkillHashMismatch, SkillSnapshotMissing, materialize_snapshot, verify_skill_hash
 from noc_bridge.storage import ChecksumMismatch, download_object, get_client, object_exists, upload_artifact
@@ -216,6 +216,7 @@ class BridgeService:
         # enqueuer/test that never went through the Skill Registry).
         skill_name = payload.get("skill_name") or _SKILL_NAME_BY_JOB_TYPE.get(job_type)
         skill_hash = payload.get("skill_hash") if skill_name else None
+        skill_execution_hash = payload.get("skill_execution_hash") if skill_name else None
         skill_snapshot_id = payload.get("skill_snapshot_id") if skill_name else None
         if job_type in _SKILL_NAME_BY_JOB_TYPE and skill_hash is None:
             # No skill_hash at all (older enqueuer/test): nothing to
@@ -264,6 +265,7 @@ class BridgeService:
                     skill_name,
                     skill_hash,
                     snapshot_id=skill_snapshot_id,
+                    execution_hash=skill_execution_hash,
                     dest_root=pathlib.Path(skill_dir_s),
                 )
 
@@ -371,7 +373,38 @@ class BridgeService:
             if job_type == "daily_report":
                 docx_path = output_dir / "report.docx"
                 if renderer_profile == "report-document-v1":
-                    render_document(build_report_document(result.output), docx_path)
+                    snapshot = json.loads((input_dir / "snapshot.json").read_text())
+                    allowed_screenshots = {
+                        (str(item.get("bucket")), str(item.get("object_key")))
+                        for incident in snapshot.get("incidents", [])
+                        for item in (incident.get("screenshots") or [])
+                        if item.get("bucket") and item.get("object_key")
+                    }
+
+                    def _fetch_trusted_screenshot(bucket: str, object_key: str, _client=minio_client) -> bytes | None:
+                        # The composition module creates screenshot blocks only
+                        # from this frozen allow-list. Keep this second guard
+                        # at the storage boundary so a future renderer call
+                        # cannot turn model output into an arbitrary MinIO
+                        # read.
+                        if (bucket, object_key) not in allowed_screenshots:
+                            logger.error("rejected non-frozen screenshot reference %s/%s", bucket, object_key)
+                            raise OutputValidationError(
+                                f"screenshot reference is outside the frozen report snapshot: {bucket}/{object_key}"
+                            )
+                        try:
+                            buf = io.BytesIO()
+                            _client.download_fileobj(bucket, object_key, buf)
+                            return buf.getvalue()
+                        except Exception:
+                            logger.warning("could not fetch trusted screenshot %s/%s for report", bucket, object_key)
+                            return None
+
+                    render_document(
+                        compose_report(result.output, snapshot),
+                        docx_path,
+                        screenshot_fetcher=_fetch_trusted_screenshot,
+                    )
                 elif renderer_profile == "daily_report_docx":
                     # The current daily-report skill returns a compact
                     # AI-owned shape. Deterministic incident data is merged

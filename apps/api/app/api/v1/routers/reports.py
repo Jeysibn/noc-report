@@ -31,7 +31,8 @@ from app.db.session import get_db
 from app.deps import require_permission
 from app.jobs import enqueue_job
 from app.models.models import AnalysisRun, Evidence, Incident, Job, Report, ReportSnapshot, Shift, User
-from app.skills.registry import resolve_active_snapshot
+from app.report_fragments import build_report_fragment
+from app.skills.registry import compute_execution_hash, resolve_active_snapshot
 from app.skills.runtime import declared_skill_version, execution_policy
 from app.schemas.schemas import (
     ReportDownloadUrlResponse,
@@ -51,7 +52,7 @@ def _get_shift_or_404(db: Session, shift_id: uuid.UUID) -> Shift:
     return shift
 
 
-def _build_snapshot(db: Session, shift: Shift) -> dict:
+def _build_snapshot(db: Session, shift: Shift, report_skill_snapshot) -> dict:
     """Real query over this shift's incidents and their current analysis
     run, frozen into one JSON document — this is what the skill actually
     sees, and what a completed Report's content is judged against later,
@@ -83,6 +84,8 @@ def _build_snapshot(db: Session, shift: Shift) -> dict:
                 "status": incident.status,
                 "triggered_at": incident.triggered_at.isoformat(),
                 "recovered_at": incident.recovered_at.isoformat() if incident.recovered_at else None,
+                "trigger_value": incident.trigger_value,
+                "teams_url": incident.teams_url,
                 "grafana_url": incident.grafana_url,
                 "log_filename": log_evidence.original_filename if log_evidence else None,
                 "screenshots": [
@@ -90,6 +93,7 @@ def _build_snapshot(db: Session, shift: Shift) -> dict:
                     for e in screenshot_evidence
                 ],
                 "analysis": run.result_json if (run and run.result_json) else None,
+                "report_fragment": build_report_fragment(run.result_json if run else None),
                 # Skill Runtime mission Phase 7: exact per-incident
                 # dependency provenance, frozen into the snapshot
                 # alongside the analysis content itself — which
@@ -100,6 +104,7 @@ def _build_snapshot(db: Session, shift: Shift) -> dict:
                 "analysis_run_id": str(run.id) if run else None,
                 "analysis_log_evidence_id": str(run.log_evidence_id) if (run and run.log_evidence_id) else None,
                 "analysis_skill_snapshot_id": str(run.skill_snapshot_id) if (run and run.skill_snapshot_id) else None,
+                "analysis_skill_execution_hash": run.skill_execution_hash if run else None,
                 "analysis_skill_hash": run.skill_hash if run else None,
                 "analysis_skill_version": run.skill_version if run else None,
                 "analysis_schema_hash": run.schema_hash if run else None,
@@ -125,6 +130,8 @@ def _build_snapshot(db: Session, shift: Shift) -> dict:
         "shift_id": str(shift.id),
         "shift_starts_at": shift.starts_at.isoformat(),
         "shift_ends_at": shift.ends_at.isoformat() if shift.ends_at else None,
+        "report_skill_snapshot_id": str(report_skill_snapshot.id),
+        "report_skill_execution_hash": compute_execution_hash(db, report_skill_snapshot),
         "incidents": incident_rows,
     }
 
@@ -147,6 +154,7 @@ def _to_out(report: Report, job: Job) -> ReportOut:
         skill_version=report.skill_version,
         skill_snapshot_id=report.skill_snapshot_id,
         skill_hash=report.skill_hash,
+        skill_execution_hash=report.skill_execution_hash,
         generated_by=report.generated_by,
         generated_at=report.generated_at,
         error_message=job.error_message,
@@ -192,7 +200,11 @@ def generate_report(
 ) -> ReportOut:
     shift = _get_shift_or_404(db, shift_id)
 
-    snapshot_json = _build_snapshot(db, shift)
+    # Resolve before freezing the snapshot so report composition and the Job
+    # carry one immutable report-skill identity from the same transaction.
+    skill_snapshot = resolve_active_snapshot(db, SKILL_NAME)
+    skill_execution_hash = compute_execution_hash(db, skill_snapshot)
+    snapshot_json = _build_snapshot(db, shift, skill_snapshot)
     snapshot_bytes = json.dumps(snapshot_json).encode("utf-8")
     snapshot_sha256 = sha256_of_bytes(snapshot_bytes)
 
@@ -200,7 +212,8 @@ def generate_report(
         shift_id=shift.id,
         snapshot_json=snapshot_json,
         sha256=snapshot_sha256,
-        skill_snapshot_id=None,
+        skill_snapshot_id=skill_snapshot.id,
+        skill_execution_hash=skill_execution_hash,
         created_by=current_user.id,
     )
     db.add(snapshot)
@@ -233,7 +246,6 @@ def generate_report(
     # Skill Runtime mission Phase 2: resolve the *active* snapshot, not
     # necessarily whatever is on disk right now — activation genuinely
     # controls what new jobs run.
-    skill_snapshot = resolve_active_snapshot(db, SKILL_NAME)
     snapshot.skill_snapshot_id = skill_snapshot.id
 
     # Reliability mission Batch A: same transactional-outbox shape as
@@ -254,6 +266,7 @@ def generate_report(
         skill_name=SKILL_NAME,
         skill_version=declared_skill_version(skill_snapshot),
         skill_hash=skill_snapshot.content_hash,
+        skill_execution_hash=skill_execution_hash,
         skill_snapshot_id=skill_snapshot.id,
         ai_policy=execution_policy(skill_snapshot),
     )
@@ -270,6 +283,7 @@ def generate_report(
         skill_version=job.skill_version,
         skill_hash=job.skill_hash,
         skill_snapshot_id=skill_snapshot.id,
+        skill_execution_hash=skill_execution_hash,
         generated_by=current_user.id,
     )
     db.add(report)

@@ -39,6 +39,15 @@ _SNAPSHOT = {
                 "severity_signal": "high",
                 "confidence": 0.8,
             },
+            "report_fragment": {
+                "contract": "report-fragment-v1",
+                "headline": "NullPointerException in PaymentWorker.charge",
+                "severity": "high",
+                "summary": {"zh": "支付服务空指针异常", "en": "NullPointerException in PaymentWorker.charge"},
+                "likely_cause": {"zh": "空指针解引用", "en": "null pointer dereference"},
+                "recommended_action": {"zh": "修复", "en": "patch"},
+                "findings": [],
+            },
         },
         {
             "display_id": "INC-002",
@@ -82,19 +91,15 @@ def test_manifest_projection_is_the_source_of_daily_report_context(monkeypatch):
     projected = entrypoint._project_snapshot(_SNAPSHOT, manifest["input_projection"])
     assert projected["shift_starts_at"] == _SNAPSHOT["shift_starts_at"]
     incident = projected["incidents"][0]
-    assert incident["summary_en"] == "NullPointerException in PaymentWorker.charge"
-    assert incident["likely_cause_en"] == "null pointer dereference"
-    assert incident["grafana_url"] == "https://grafana.example/d/abc"
-    assert incident["screenshots"] == _SNAPSHOT["incidents"][0]["screenshots"]
+    assert incident["report_fragment"]["summary"]["en"] == "NullPointerException in PaymentWorker.charge"
+    assert incident["report_fragment"]["likely_cause"]["en"] == "null pointer dereference"
+    assert "grafana_url" not in incident
+    assert "screenshots" not in incident
 
 
 def test_run_skill_sends_claude_only_the_compact_snapshot(monkeypatch, tmp_path):
-    """The core Issue 6 guarantee: the prompt actually handed to Claude for
-    daily-alert-report contains the compact fields, but never the full
-    per-incident analysis object, screenshots, or Grafana/log-filename
-    references — those are merged back in deterministically by the bridge
-    afterward (see bridge/noc_bridge/service.py's _merge_daily_report),
-    never sent to or reproduced by the model."""
+    """The ReportPlan prompt contains compact facts and no storage/evidence
+    authority. The bridge resolves references after the model responds."""
     captured_prompts = []
 
     def _fake_invoke(prompt, *, schema, model, effort, max_budget):

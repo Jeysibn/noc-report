@@ -25,26 +25,15 @@ input_projection:
         status: status
         service: service
         environment: environment
-        grafana_url: grafana_url
-        log_filename: log_filename
-        screenshots: screenshots
         starts_at: triggered_at
         ends_at: recovered_at
         analysis_run_id: analysis_run_id
-        summary_en: analysis.summary_en
-        summary_zh: analysis.summary_zh
-        key_finds: analysis.key_finds
-        secondary_finds: analysis.secondary_finds
-        likely_cause_en: analysis.likely_cause_en
-        likely_cause_zh: analysis.likely_cause_zh
-        recommended_action_en: analysis.recommended_action_en
-        recommended_action_zh: analysis.recommended_action_zh
-        severity_signal: analysis.severity_signal
+        report_fragment: report_fragment
 renderer_profile: report-document-v1
 execution_policy:
   job_type: daily_report
 dependencies:
   - log-triage-summary
 description: >
-  Produce a semantic daily alert ReportDocument from a frozen shift
-  snapshot and its exact incident/evidence provenance.
+  Produce a compact ReportPlan. References are IDs only; the application
+  resolves incident facts, evidence, storage paths, and analysis provenance.

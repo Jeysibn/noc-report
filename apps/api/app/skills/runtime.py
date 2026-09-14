@@ -21,6 +21,7 @@ class SkillContractError(ValueError):
 
 SUPPORTED_RENDERER_PROFILES = {None, "daily_report_docx", "report-document-v1"}
 SUPPORTED_INPUT_CONTRACTS = {"log-evidence-v1", "daily-report-context-v1"}
+SUPPORTED_REPORT_EXPORT_CONTRACTS = {"report-fragment-v1"}
 
 
 def load_snapshot(db: Session, snapshot_id) -> SkillSnapshot:
@@ -150,6 +151,9 @@ def validate_snapshot(db: Session, snapshot: SkillSnapshot) -> None:
     renderer_profile = manifest.get("renderer_profile")
     if renderer_profile not in SUPPORTED_RENDERER_PROFILES:
         raise SkillContractError(f"unsupported renderer profile: {renderer_profile}")
+    report_export_contract = manifest.get("report_export_contract")
+    if report_export_contract is not None and report_export_contract not in SUPPORTED_REPORT_EXPORT_CONTRACTS:
+        raise SkillContractError(f"unsupported report export contract: {report_export_contract}")
     policy = manifest.get("execution_policy")
     if policy is not None and not isinstance(policy, dict):
         raise SkillContractError("manifest execution_policy must be an object")

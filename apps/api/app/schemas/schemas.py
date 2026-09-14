@@ -227,6 +227,7 @@ class JobOut(BaseModel):
     skill_version: str | None
     skill_snapshot_id: uuid.UUID
     skill_hash: str | None = None
+    skill_execution_hash: str | None = None
     attempt: int
     correlation_id: str
     error_code: str | None
@@ -281,6 +282,7 @@ class AnalysisRunOut(BaseModel):
     # just the human-readable name/version label.
     skill_snapshot_id: uuid.UUID | None = None
     skill_hash: str | None = None
+    skill_execution_hash: str | None = None
     schema_hash: str | None = None
     input_contract_version: str | None = None
     preprocessor_version: str | None = None
@@ -362,6 +364,7 @@ class ReportOut(BaseModel):
     skill_version: str | None
     skill_snapshot_id: uuid.UUID | None = None
     skill_hash: str | None = None
+    skill_execution_hash: str | None = None
     generated_by: uuid.UUID | None
     generated_at: datetime | None
     error_message: str | None
