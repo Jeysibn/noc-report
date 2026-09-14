@@ -10,6 +10,7 @@ from docx import Document
 from noc_bridge.docx_render import render_document
 from noc_bridge.failures import EvidenceIntegrityError, EvidenceRetrievalError
 from noc_bridge.report_composition import compose_report
+from noc_bridge.report_document import BilingualText
 from noc_bridge.validation import OutputValidationError, validate_output
 
 
@@ -90,10 +91,12 @@ def test_plan_resolves_frozen_facts_and_embeds_only_trusted_screenshot(tmp_path)
     incident_block = next(b for b in document.blocks if isinstance(b, IncidentEvidence))
     assert incident_block.incident_id == "inc-001"
     assert {link.label for link in incident_block.links} == {"Teams", "Grafana"}
+    summary = next(b for b in document.blocks if isinstance(b, BilingualText))
+    assert (summary.heading_zh, summary.heading_en) == ("Chinese Summary", "English Summary")
 
     analysis = next(b for b in document.blocks if isinstance(b, AnalysisReference))
     assert analysis.analysis_run_id == "run-001"
-    assert any(item.label == "Execution Hash" for item in analysis.metadata)
+    assert any(item.label == "Execution Hash" for item in analysis.provenance)
 
     # Canonical section order: Alerts -> General Summary -> Log Analysis,
     # each separated by an explicit page break, regardless of how the plan
@@ -172,6 +175,15 @@ def test_full_analysis_presentation_keeps_all_findings_without_ai_echo(tmp_path)
     for value in ("Finding 1", "Finding 7", "Secondary 1", "Secondary 4", "Root cause", "Remediate", "7 / 70%"):
         assert value in text
 
+    from noc_bridge.report_document import FindList
+    analysis_block = next(block for block in document.blocks if block.__class__.__name__ == "AnalysisReference")
+    children = list(analysis_block.children)
+    headings = [child.text for child in children if hasattr(child, "text")]
+    assert headings.index("Chinese") < headings.index("English")
+    chinese_end = headings.index("English")
+    assert all(getattr(child, "language", None) == "Chinese" for child in children[:chinese_end] if isinstance(child, FindList))
+    assert all(getattr(child, "language", None) == "English" for child in children[chinese_end:] if isinstance(child, FindList))
+
 
 def test_canonical_profile_numbers_from_frozen_order_and_repeats_alert_evidence(tmp_path):
     snapshot = _snapshot()
@@ -193,7 +205,7 @@ def test_canonical_profile_numbers_from_frozen_order_and_repeats_alert_evidence(
     document = compose_report(plan, snapshot)
     from noc_bridge.report_document import AnalysisReference, IncidentEvidence
 
-    assert document.title == "Daily Alert Report — Monday, 14 September 2026 — MS"
+    assert document.title == "Daily Alert & Log Analysis Report"
     assert next(item.value for item in document.metadata if item.label == "Shift") == "MS"
     alerts = [b for b in document.blocks if isinstance(b, IncidentEvidence)]
     analyses = [b for b in document.blocks if isinstance(b, AnalysisReference)]
@@ -201,9 +213,10 @@ def test_canonical_profile_numbers_from_frozen_order_and_repeats_alert_evidence(
     assert [b.heading for b in analyses] == ["Alert #1 - Payment timeout", "Alert #2 - Cache errors"]
     assert len(alerts[0].screenshots) == 1
     assert len(analyses[0].screenshots) == 1
-
     destination = tmp_path / "canonical.docx"
     render_document(document, destination, screenshot_fetcher=lambda *_: _PNG)
+    rendered_text = "\n".join(paragraph.text for paragraph in Document(str(destination)).paragraphs)
+    assert "Execution Hash" not in rendered_text
     with zipfile.ZipFile(destination) as archive:
         relationships = archive.read("word/_rels/document.xml.rels").decode()
         assert "https://grafana.example/inc-001" in relationships

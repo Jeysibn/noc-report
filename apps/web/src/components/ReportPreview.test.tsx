@@ -93,4 +93,38 @@ describe("ReportPreview", () => {
       screen.getByText(/no structured preview is available/i),
     ).toBeInTheDocument();
   });
+
+  it("renders single-language findings in Chinese-before-English order", async () => {
+    getDocument.mockResolvedValue({
+      title: "Report",
+      metadata: [],
+      blocks: [
+        { type: "heading", text: "Log Analysis", level: 1 },
+        {
+          type: "analysis_reference",
+          heading: "Alert #1 - API",
+          available: true,
+          metadata: [],
+          children: [
+            { type: "heading", text: "Chinese", level: 3 },
+            { type: "find_list", heading: "Key Finds", language: "Chinese", finds: [{ label: "中文发现", detail: null, stat: null }] },
+            { type: "heading", text: "English", level: 3 },
+            { type: "find_list", heading: "Key Finds", language: "English", finds: [{ label: "English finding", detail: null, stat: null }] },
+          ],
+          screenshots: [],
+          log_file: null,
+          summary: null,
+          key_finds: null,
+          secondary_finds: null,
+          likely_cause: null,
+          recommended_action: null,
+        },
+      ],
+    });
+    render(<ReportPreview reportId="report-language" />);
+    await act(async () => {});
+    const chinese = screen.getByText("中文发现");
+    const english = screen.getByText("English finding");
+    expect(chinese.compareDocumentPosition(english) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
 });

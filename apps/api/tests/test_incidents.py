@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from app.models.models import Job, OutboxEvent
+from app.models.models import Incident, Job, OutboxEvent, Shift, ShiftDefinition
 from tests.conftest import auth_headers, make_user
 
 
@@ -51,6 +51,37 @@ def test_list_incidents_pagination(client, db_session):
     body = resp.json()
     assert body["total"] == 3
     assert len(body["items"]) == 2
+
+
+def test_list_incidents_can_use_the_canonical_shift_scope(client, db_session):
+    make_user(db_session, "operator1", "NOC")
+    headers = auth_headers(client, "operator1")
+    definition = ShiftDefinition(name="Day", start_time="06:00:00", end_time="14:00:00", timezone="Asia/Manila")
+    other_definition = ShiftDefinition(name="Night", start_time="22:00:00", end_time="06:00:00", timezone="Asia/Manila")
+    db_session.add_all([definition, other_definition])
+    db_session.flush()
+    shift_a = Shift(shift_definition_id=definition.id, starts_at=datetime.now(timezone.utc), state="active")
+    shift_b = Shift(shift_definition_id=other_definition.id, starts_at=datetime.now(timezone.utc), state="ended")
+    db_session.add_all([shift_a, shift_b])
+    db_session.flush()
+    for i in range(14):
+        db_session.add(Incident(
+            display_id=f"INC-A-{i}", shift_id=shift_a.id, title=f"A-{i}", service="api",
+            environment="production", status="open", triggered_at=datetime.now(timezone.utc),
+        ))
+    for i in range(6):
+        db_session.add(Incident(
+            display_id=f"INC-B-{i}", shift_id=shift_b.id, title=f"B-{i}", service="api",
+            environment="production", status="open", triggered_at=datetime.now(timezone.utc),
+        ))
+    db_session.commit()
+
+    response = client.get(f"/api/v1/incidents?shift_id={shift_a.id}&limit=0", headers=headers)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 14
+    assert len(body["items"]) == 14
+    assert all(item["shift_id"] == str(shift_a.id) for item in body["items"])
 
 
 def test_update_incident(client, db_session):

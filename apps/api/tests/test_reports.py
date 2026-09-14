@@ -16,6 +16,7 @@ from app.core.storage import get_client
 
 from tests.conftest import auth_headers, make_user
 from tests.test_shifts import _create_active_shift
+from app.models.models import Incident, Shift, ShiftDefinition
 
 
 def _purge_all(channel):
@@ -119,6 +120,41 @@ def test_generate_report_freezes_snapshot_and_enqueues_real_job(client, db_sessi
     assert listed.status_code == 200
     versions = [r["version"] for r in listed.json()]
     assert versions == [2, 1]
+
+
+def test_readiness_scope_and_report_snapshot_use_the_same_shift_incidents(client, db_session):
+    """The readiness query and the report freeze must agree even when
+    another shift has more recent incidents and the selected shift has more
+    than the old ten-row UI limit."""
+    make_user(db_session, "operator-scope", "NOC")
+    headers = auth_headers(client, "operator-scope")
+    shift_a = _create_active_shift(db_session)
+    definition_b = ShiftDefinition(name="Night", start_time="22:00:00", end_time="06:00:00", timezone="Asia/Manila")
+    db_session.add(definition_b)
+    db_session.flush()
+    shift_b = Shift(shift_definition_id=definition_b.id, starts_at=datetime.now(timezone.utc), state="ended")
+    db_session.add(shift_b)
+    db_session.flush()
+    for i in range(14):
+        db_session.add(Incident(
+            display_id=f"INC-SCOPE-A-{i}", shift_id=shift_a.id, title=f"A-{i}", service="api",
+            environment="production", status="open", triggered_at=datetime.now(timezone.utc),
+        ))
+    for i in range(6):
+        db_session.add(Incident(
+            display_id=f"INC-SCOPE-B-{i}", shift_id=shift_b.id, title=f"B-{i}", service="api",
+            environment="production", status="open", triggered_at=datetime.now(timezone.utc),
+        ))
+    db_session.commit()
+
+    readiness = client.get(f"/api/v1/incidents?shift_id={shift_a.id}&limit=0", headers=headers).json()
+    readiness_ids = {item["id"] for item in readiness["items"]}
+    assert readiness["total"] == 14
+
+    from app.api.v1.routers.reports import _build_snapshot
+    from app.skills.registry import resolve_active_snapshot
+    report_snapshot = _build_snapshot(db_session, shift_a, resolve_active_snapshot(db_session, "daily-alert-report"))
+    assert {item["id"] for item in report_snapshot["incidents"]} == readiness_ids
 
 
 def test_report_snapshot_carries_per_incident_analysis_provenance(client, db_session):

@@ -6,6 +6,7 @@ import type {
   ReportBilingualText,
   ReportBlock,
   ReportDocument,
+  ReportFindList,
   ReportIncidentEvidence,
   ReportLink,
   ReportLogFileReference,
@@ -103,6 +104,15 @@ function ReportBlockView({ block, reportId }: { block: ReportBlock; reportId: st
       return <hr className="my-2 border-t-2 border-dashed border-border" />;
     case "bilingual_text":
       return <BilingualTextView block={block} />;
+    case "bilingual_find_list":
+      return (
+        <div className="flex flex-col gap-3">
+          <FindListView block={{ type: "find_list", heading: block.heading_zh, language: "Chinese", finds: block.finds_zh }} />
+          <FindListView block={{ type: "find_list", heading: block.heading_en, language: "English", finds: block.finds_en }} />
+        </div>
+      );
+    case "find_list":
+      return <FindListView block={block} />;
     case "incident_evidence":
       return <IncidentEvidenceView block={block} reportId={reportId} />;
     case "analysis_reference":
@@ -123,33 +133,28 @@ function BilingualTextView({ block }: { block: ReportBilingualText }) {
   );
 }
 
-function FindListView({ block }: { block: ReportBilingualFindList }) {
+function FindListView({ block }: { block: ReportFindList }) {
   return (
-    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-      <div>
-        <h5 className="text-sm font-semibold">{block.heading_zh}</h5>
-        <ul className="mt-1 flex flex-col gap-2">
-          {block.finds_zh.map((find, i) => (
-            <li key={i} className="text-sm">
-              <span className="font-medium">{find.label}</span>
-              {find.stat && <span className="text-muted"> ({find.stat})</span>}
-              {find.detail && <p className="text-muted">{find.detail}</p>}
-            </li>
-          ))}
-        </ul>
-      </div>
-      <div>
-        <h5 className="text-sm font-semibold">{block.heading_en}</h5>
-        <ul className="mt-1 flex flex-col gap-2">
-          {block.finds_en.map((find, i) => (
-            <li key={i} className="text-sm">
-              <span className="font-medium">{find.label}</span>
-              {find.stat && <span className="text-muted"> ({find.stat})</span>}
-              {find.detail && <p className="text-muted">{find.detail}</p>}
-            </li>
-          ))}
-        </ul>
-      </div>
+    <div className="flex flex-col gap-2">
+      <h5 className="text-sm font-semibold">{block.heading}</h5>
+      <ul className="mt-1 flex flex-col gap-2">
+        {block.finds.map((find, i) => (
+          <li key={i} className="text-sm">
+            <span className="font-medium">{find.label}</span>
+            {find.stat && <span className="text-muted"> ({find.stat})</span>}
+            {find.detail && <p className="text-muted">{find.detail}</p>}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function BilingualFindListView({ block }: { block: ReportBilingualFindList }) {
+  return (
+    <div className="flex flex-col gap-3">
+      <FindListView block={{ type: "find_list", heading: block.heading_zh, language: "Chinese", finds: block.finds_zh }} />
+      <FindListView block={{ type: "find_list", heading: block.heading_en, language: "English", finds: block.finds_en }} />
     </div>
   );
 }
@@ -251,8 +256,8 @@ function AnalysisReferenceView({ block, reportId }: { block: ReportAnalysisRefer
             <ReportBlockView key={i} block={child} reportId={reportId} />
           ))}
           {block.summary && <BilingualTextView block={block.summary} />}
-          {block.key_finds && <FindListView block={block.key_finds} />}
-          {block.secondary_finds && <FindListView block={block.secondary_finds} />}
+          {block.key_finds && <BilingualFindListView block={block.key_finds} />}
+          {block.secondary_finds && <BilingualFindListView block={block.secondary_finds} />}
         </>
       )}
     </div>

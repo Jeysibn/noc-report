@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.audit import record_audit
 from app.db.session import get_db
 from app.deps import require_permission
+from app.incident_scope import shift_incident_statement
 from app.models.models import AnalysisRun, Evidence, Incident, Job, OcrRun, OutboxEvent, Shift, User
 from app.schemas.schemas import (
     IncidentCreate,
@@ -88,13 +89,16 @@ def _attach_derived(db: Session, incidents: list[Incident]) -> list[IncidentOut]
 def list_incidents(
     db: Session = Depends(get_db),
     _: User = Depends(require_permission("incident.read")),
-    limit: int = Query(default=25, le=200),
+    # A zero limit explicitly requests the complete report/readiness scope;
+    # ordinary incident lists retain the safe default page size.
+    limit: int = Query(default=25, ge=0, le=2000),
     offset: int = Query(default=0, ge=0),
+    shift_id: uuid.UUID | None = None,
     status_filter: str | None = Query(default=None, alias="status"),
     service: str | None = None,
     environment: str | None = None,
 ) -> IncidentPage:
-    stmt = select(Incident)
+    stmt = shift_incident_statement(shift_id) if shift_id else select(Incident)
     if status_filter:
         stmt = stmt.where(Incident.status == status_filter)
     if service:
@@ -103,9 +107,10 @@ def list_incidents(
         stmt = stmt.where(Incident.environment == environment)
 
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
-    items = list(
-        db.scalars(stmt.order_by(Incident.triggered_at.desc()).limit(limit).offset(offset))
-    )
+    stmt = stmt.order_by(None).order_by(Incident.created_at if shift_id else Incident.triggered_at.desc())
+    if limit:
+        stmt = stmt.limit(limit)
+    items = list(db.scalars(stmt.offset(offset)))
     return IncidentPage(items=_attach_derived(db, items), total=total)
 
 

@@ -94,10 +94,17 @@ export interface ReportBilingualFindList {
   finds_en: ReportFind[];
 }
 
+export interface ReportFindList {
+  type: "find_list";
+  heading: string;
+  language: string | null;
+  finds: ReportFind[];
+}
+
 export interface ReportIncidentEvidence {
   type: "incident_evidence";
   heading: string;
-  incident_id: string | null;
+  incident_id?: string | null;
   metadata: ReportMetadataItem[];
   links: ReportLink[];
   log_file: ReportLogFileReference | null;
@@ -108,10 +115,10 @@ export interface ReportAnalysisReference {
   type: "analysis_reference";
   heading: string;
   available: boolean;
-  incident_id: string | null;
-  analysis_run_id: string | null;
+  incident_id?: string | null;
+  analysis_run_id?: string | null;
   unavailable_text: string | null;
-  metadata: ReportMetadataItem[];
+  metadata?: ReportMetadataItem[];
   children: ReportBlock[];
   screenshots: ReportScreenshotRef[];
   log_file: ReportLogFileReference | null;
@@ -120,6 +127,7 @@ export interface ReportAnalysisReference {
   secondary_finds: ReportBilingualFindList | null;
   likely_cause: ReportBilingualText | null;
   recommended_action: ReportBilingualText | null;
+  provenance?: ReportMetadataItem[];
 }
 
 export type ReportBlock =
@@ -133,6 +141,7 @@ export type ReportBlock =
   | ReportScreenshotRef
   | ReportBilingualText
   | ReportBilingualFindList
+  | ReportFindList
   | ReportIncidentEvidence
   | ReportAnalysisReference;
 
@@ -140,4 +149,6 @@ export interface ReportDocument {
   title: string;
   metadata: ReportMetadataItem[];
   blocks: ReportBlock[];
+  /** Present only for an explicitly authorized audit payload; normal preview omits it. */
+  provenance?: ReportMetadataItem[];
 }

@@ -10,7 +10,10 @@ def test_login_success(client, db_session):
     assert resp.status_code == 200
     body = resp.json()
     assert body["access_token"]
-    assert body["refresh_token"]
+    assert "refresh_token" not in body
+    cookie = resp.cookies.get("noc_refresh")
+    assert cookie
+    assert "HttpOnly" in resp.headers["set-cookie"]
 
 
 def test_login_success_is_audited(client, db_session):
@@ -59,10 +62,10 @@ def test_refresh_and_me(client, db_session):
     login = client.post(
         "/api/v1/auth/login", json={"username": "operator1", "password": "pw123456"}
     )
-    refresh_token = login.json()["refresh_token"]
-
-    refreshed = client.post("/api/v1/auth/refresh", json={"refresh_token": refresh_token})
+    assert "refresh_token" not in login.json()
+    refreshed = client.post("/api/v1/auth/refresh")
     assert refreshed.status_code == 200
+    assert "refresh_token" not in refreshed.json()
     access_token = refreshed.json()["access_token"]
 
     me = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {access_token}"})
@@ -81,3 +84,28 @@ def test_me_requires_token(client):
 def test_logout_returns_no_content(client):
     resp = client.post("/api/v1/auth/logout")
     assert resp.status_code == 204
+
+
+def test_logout_revokes_refresh_session_and_rotation_rejects_reuse(client, db_session):
+    from app.models.models import RefreshSession
+
+    make_user(db_session, "operator1", "NOC")
+    login = client.post("/api/v1/auth/login", json={"username": "operator1", "password": "pw123456"})
+    old_cookie = login.cookies.get("noc_refresh")
+    assert old_cookie
+
+    rotated = client.post("/api/v1/auth/refresh")
+    assert rotated.status_code == 200
+    new_cookie = rotated.cookies.get("noc_refresh")
+    assert new_cookie and new_cookie != old_cookie
+
+    # Reusing the old token in a separate client must not be accepted.
+    from fastapi.testclient import TestClient
+    from app.main import app
+    with TestClient(app) as attacker:
+        attacker.cookies.set("noc_refresh", old_cookie, path="/api/v1/auth")
+        assert attacker.post("/api/v1/auth/refresh").status_code == 401
+
+    client.post("/api/v1/auth/logout")
+    assert client.post("/api/v1/auth/refresh").status_code == 401
+    assert db_session.query(RefreshSession).count() == 2

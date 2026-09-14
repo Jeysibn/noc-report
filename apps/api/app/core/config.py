@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 30
     refresh_token_expire_minutes: int = 60 * 24 * 7
+    refresh_cookie_name: str = "noc_refresh"
+    refresh_cookie_samesite: Literal["lax", "strict"] = "lax"
 
     # Milestone 9 — MinIO (S3-compatible object storage, master plan §25)
     minio_endpoint_url: str = "http://localhost:59000"

@@ -3,6 +3,7 @@ export type IncidentStatus = "open" | "investigating" | "recovered";
 export interface Incident {
   /** Real backend primary key (UUID) — used for all API calls. */
   id: string;
+  shiftId?: string | null;
   /** Human-facing id, e.g. "INC-1042" — what's shown in tables/URLs/labels. */
   displayId: string;
   title: string;

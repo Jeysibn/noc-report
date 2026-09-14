@@ -53,7 +53,7 @@ describe("ShiftReport", () => {
       version: 1,
       status: "QUEUED",
       model: "claude-sonnet-5",
-      effort: "medium",
+      effort: null,
       skillName: "daily-alert-report",
       skillVersion: "1",
       generatedBy: null,
@@ -75,10 +75,7 @@ describe("ShiftReport", () => {
     fireEvent.click(screen.getByRole("button", { name: /generate report/i }));
     await act(async () => {});
 
-    expect(generateReport).toHaveBeenCalledWith("shift-1", {
-      model: "claude-sonnet-5",
-      effort: "medium",
-    });
+    expect(generateReport).toHaveBeenCalledWith("shift-1", { model: "claude-sonnet-5" });
     expect(screen.getByText(/version 1/i)).toBeInTheDocument();
     expect(screen.getAllByText(/queued/i).length).toBeGreaterThan(0);
   });

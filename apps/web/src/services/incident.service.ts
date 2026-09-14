@@ -1,8 +1,10 @@
 import type { DashboardSummary, Incident, IncidentStatus } from "@/types/domain";
 
 export interface IncidentQuery {
+  /** 0 means all matching records; used by shift report readiness. */
   limit?: number;
   offset?: number;
+  shiftId?: string;
   status?: IncidentStatus;
   service?: string;
   environment?: string;

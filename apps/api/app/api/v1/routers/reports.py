@@ -30,6 +30,7 @@ from app.core.storage import (
 )
 from app.db.session import get_db
 from app.deps import require_permission
+from app.incident_scope import shift_incident_statement
 from app.jobs import enqueue_job
 from app.models.models import AnalysisRun, Evidence, Incident, Job, Report, ReportSnapshot, Shift, SkillSnapshot, User
 from app.report_fragments import build_report_fragment
@@ -61,7 +62,7 @@ def _build_snapshot(db: Session, shift: Shift, report_skill_snapshot) -> dict:
     report_manifest = load_manifest(report_skill_snapshot)
     shift_display_name = getattr(shift.definition, "name", None)
     incidents = list(
-        db.scalars(select(Incident).where(Incident.shift_id == shift.id).order_by(Incident.created_at))
+        db.scalars(shift_incident_statement(shift.id))
     )
     incident_rows = []
     for incident in incidents:

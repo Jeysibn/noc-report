@@ -3,6 +3,9 @@
 - Status: Accepted
 - Date: 2026-09-14
 
+Phase 9 hardens this profile’s effort policy, shift scope, provenance boundary,
+and bilingual presentation without changing its deterministic composition model.
+
 ## Decision
 
 The active Daily Report uses composition profile `noc-daily-report-v1`.

@@ -27,6 +27,7 @@ from noc_bridge.report_document import (
     BilingualText,
     Divider,
     Find,
+    FindList,
     Heading,
     IncidentEvidence,
     Link,
@@ -43,7 +44,7 @@ def _find_to_json(find: Find) -> dict:
     return {"label": find.label, "detail": find.detail, "stat": find.stat}
 
 
-def _block_to_json(block: Any, screenshots: list[dict]) -> dict:
+def _block_to_json(block: Any, screenshots: list[dict], *, include_provenance: bool = False) -> dict:
     if isinstance(block, Heading):
         return {"type": "heading", "text": block.text, "level": block.level}
     if isinstance(block, Paragraph):
@@ -84,6 +85,13 @@ def _block_to_json(block: Any, screenshots: list[dict]) -> dict:
             "finds_zh": [_find_to_json(f) for f in block.finds_zh],
             "finds_en": [_find_to_json(f) for f in block.finds_en],
         }
+    if isinstance(block, FindList):
+        return {
+            "type": "find_list",
+            "heading": block.heading,
+            "language": block.language,
+            "finds": [_find_to_json(f) for f in block.finds],
+        }
     if isinstance(block, IncidentEvidence):
         links = list(block.links)
         if block.link:
@@ -91,32 +99,35 @@ def _block_to_json(block: Any, screenshots: list[dict]) -> dict:
         return {
             "type": "incident_evidence",
             "heading": block.heading,
-            "incident_id": block.incident_id,
-            "metadata": [_block_to_json(m, screenshots) for m in block.metadata],
-            "links": [_block_to_json(item, screenshots) for item in links],
-            "log_file": _block_to_json(block.log_file, screenshots) if block.log_file else None,
-            "screenshots": [_block_to_json(s, screenshots) for s in block.screenshots],
+            "incident_id": block.incident_id if include_provenance else None,
+            "metadata": [_block_to_json(m, screenshots, include_provenance=include_provenance) for m in block.metadata],
+            "links": [_block_to_json(item, screenshots, include_provenance=include_provenance) for item in links],
+            "log_file": _block_to_json(block.log_file, screenshots, include_provenance=include_provenance) if block.log_file else None,
+            "screenshots": [_block_to_json(s, screenshots, include_provenance=include_provenance) for s in block.screenshots],
         }
     if isinstance(block, AnalysisReference):
-        return {
+        payload = {
             "type": "analysis_reference",
             "heading": block.heading,
             "available": block.available,
-            "incident_id": block.incident_id,
-            "analysis_run_id": block.analysis_run_id,
+            "incident_id": block.incident_id if include_provenance else None,
             "unavailable_text": block.unavailable_text,
-            "metadata": [_block_to_json(m, screenshots) for m in block.metadata],
-            "children": [_block_to_json(c, screenshots) for c in block.children],
-            "screenshots": [_block_to_json(s, screenshots) for s in block.screenshots],
-            "log_file": _block_to_json(block.log_file, screenshots) if block.log_file else None,
-            "summary": _block_to_json(block.summary, screenshots) if block.summary else None,
-            "key_finds": _block_to_json(block.key_finds, screenshots) if block.key_finds else None,
-            "secondary_finds": _block_to_json(block.secondary_finds, screenshots) if block.secondary_finds else None,
-            "likely_cause": _block_to_json(block.likely_cause, screenshots) if block.likely_cause else None,
+            "children": [_block_to_json(c, screenshots, include_provenance=include_provenance) for c in block.children],
+            "screenshots": [_block_to_json(s, screenshots, include_provenance=include_provenance) for s in block.screenshots],
+            "log_file": _block_to_json(block.log_file, screenshots, include_provenance=include_provenance) if block.log_file else None,
+            "summary": _block_to_json(block.summary, screenshots, include_provenance=include_provenance) if block.summary else None,
+            "key_finds": _block_to_json(block.key_finds, screenshots, include_provenance=include_provenance) if block.key_finds else None,
+            "secondary_finds": _block_to_json(block.secondary_finds, screenshots, include_provenance=include_provenance) if block.secondary_finds else None,
+            "likely_cause": _block_to_json(block.likely_cause, screenshots, include_provenance=include_provenance) if block.likely_cause else None,
             "recommended_action": (
-                _block_to_json(block.recommended_action, screenshots) if block.recommended_action else None
+                _block_to_json(block.recommended_action, screenshots, include_provenance=include_provenance) if block.recommended_action else None
             ),
         }
+        if include_provenance:
+            payload["analysis_run_id"] = block.analysis_run_id
+            payload["metadata"] = [_block_to_json(m, screenshots, include_provenance=True) for m in block.metadata]
+            payload["provenance"] = [_block_to_json(m, screenshots, include_provenance=True) for m in block.provenance]
+        return payload
     raise ValueError(f"report_document_json: unknown block type {type(block)!r}")
 
 
@@ -134,3 +145,19 @@ def document_to_preview_json(document: ReportDocument) -> tuple[dict, list[dict]
     metadata = [_block_to_json(item, screenshots) for item in document.metadata]
     payload = {"title": document.title, "metadata": metadata, "blocks": blocks}
     return payload, screenshots
+
+
+def document_to_audit_json(document: ReportDocument) -> dict:
+    """Serialize the complete internal document, including provenance.
+
+    This is intentionally separate from ``document_to_preview_json`` so an
+    operator-facing preview cannot accidentally become an audit data dump.
+    """
+    screenshots: list[dict] = []
+    return {
+        "title": document.title,
+        "metadata": [_block_to_json(item, screenshots, include_provenance=True) for item in document.metadata],
+        "provenance": [_block_to_json(item, screenshots, include_provenance=True) for item in document.provenance],
+        "blocks": [_block_to_json(block, screenshots, include_provenance=True) for block in document.blocks],
+        "screenshots": screenshots,
+    }

@@ -17,14 +17,18 @@ from noc_bridge.docx_render import render_daily_report_docx, render_document
 from noc_bridge.report_composition import compose_report
 from noc_bridge.report_document import (
     AnalysisReference,
+    BilingualFindList,
     BilingualText,
     Heading,
+    FindList,
+    Find,
     IncidentEvidence,
     Metadata,
     Paragraph,
     ReportDocument,
     build_report_document,
     build_daily_report_document,
+    DOCUMENT_BLOCK_TYPES,
 )
 from noc_bridge.validation import validate_output
 
@@ -125,6 +129,32 @@ def test_render_document_is_generic_over_a_synthetic_document_shape(tmp_path):
     assert "Hello" in all_text
 
 
+def test_every_documented_block_type_is_parsed_and_rendered(tmp_path):
+    raw_blocks = [
+        {"type": "heading", "text": "H", "level": 1},
+        {"type": "paragraph", "text": "P"},
+        {"type": "divider"},
+        {"type": "page_break"},
+        {"type": "metadata", "label": "M", "value": "V"},
+        {"type": "link", "label": "Grafana", "url": "https://example.test", "text": "Grafana"},
+        {"type": "log_file_reference", "filename": "log.json"},
+        {"type": "screenshot", "bucket": "b", "object_key": "k", "filename": "s.png"},
+        {"type": "bilingual_text", "zh": "中", "en": "En"},
+        {"type": "bilingual_find_list", "heading_zh": "重点", "heading_en": "Findings", "finds_zh": [], "finds_en": []},
+        {"type": "find_list", "heading": "Key Finds", "language": "Chinese", "finds": [{"label": "x", "detail": "d", "stat": "1 / 2%"}]},
+        {"type": "incident_evidence", "heading": "Alert", "metadata": [], "links": [], "screenshots": []},
+        {"type": "analysis_reference", "heading": "Analysis", "available": True, "children": []},
+    ]
+    assert {block["type"] for block in raw_blocks} == set(DOCUMENT_BLOCK_TYPES)
+    document = build_report_document({"metadata": {"title": "Contract"}, "blocks": raw_blocks})
+    assert len(document.blocks) == len(raw_blocks)
+    assert isinstance(document.blocks[9], BilingualFindList)
+    assert isinstance(document.blocks[10], FindList)
+    destination = tmp_path / "contract.docx"
+    render_document(document, destination, screenshot_fetcher=lambda *_: _PNG)
+    assert destination.exists()
+
+
 def test_materially_different_skill_layouts_use_same_docx_adapter(tmp_path):
     """Acceptance proof: section order and meaning come from each skill's
     declarative block result; render_document remains unchanged."""
@@ -171,7 +201,12 @@ def test_declarative_document_supports_metadata_and_analysis_references(tmp_path
     text = "\n".join(p.text for p in Document(str(destination)).paragraphs)
     assert "date: 2026-09-14" in text
     assert "Incident 1" in text
-    assert "Analysis reference: run-307" in text
+    assert "Analysis reference: run-307" not in text
+
+    audit_destination = tmp_path / "provenance-audit.docx"
+    render_document(build_report_document(result), audit_destination, include_provenance=True)
+    audit_text = "\n".join(p.text for p in Document(str(audit_destination)).paragraphs)
+    assert "Analysis reference: run-307" in audit_text
 
 
 def test_active_daily_report_document_contract_renders_nested_analysis_blocks(tmp_path):
@@ -214,8 +249,8 @@ def test_active_daily_report_document_contract_renders_nested_analysis_blocks(tm
     destination = tmp_path / "active-daily-report.docx"
     render_document(compose_report(result, snapshot), destination)
     text = "\n".join(p.text for p in Document(str(destination)).paragraphs)
-    assert "Incident ID: incident-1" in text
-    assert "Analysis reference: run-1" in text
+    assert "Incident ID: incident-1" not in text
+    assert "Analysis reference: run-1" not in text
     assert "Database timeout." in text
 
 

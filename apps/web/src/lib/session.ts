@@ -2,16 +2,15 @@ import { useSyncExternalStore } from "react";
 import type { CurrentUser, Role } from "@/types/admin";
 import {
   clearTokens,
-  getAccessToken,
   httpRequest,
-  setTokens,
+  setAccessToken,
 } from "@/lib/http";
 
 /**
  * Real session state (Milestone 13 frontend wiring — replaces the mock
  * in-memory role switcher this file used to hold). Backed by the real
- * `/api/v1/auth/*` endpoints; access/refresh tokens live in localStorage
- * (see lib/http.ts), the decoded user/roles/permissions live here as a
+ * `/api/v1/auth/*` endpoints; access tokens live in memory and the refresh
+ * session is an HttpOnly cookie (see lib/http.ts), the decoded user/roles/permissions live here as a
  * small observable store so components can react to login/logout.
  */
 
@@ -78,15 +77,12 @@ export function hasPermission(permission: string): boolean {
   return currentUser?.permissions.includes(permission) ?? false;
 }
 
-/** Populates the session from a stored access token, e.g. on app load after a refresh. */
+/** Populates the session from the in-memory access token, refreshing it through the API cookie when needed. */
 export async function restoreSession(): Promise<void> {
-  if (!getAccessToken()) {
-    currentUser = null;
-    initialized = true;
-    emit();
-    return;
-  }
   try {
+    // With memory-only access tokens, a reload starts without a bearer. The
+    // shared HTTP helper will perform one cookie-backed refresh after this
+    // expected 401, then retry /me.
     const raw = await httpRequest<RawUserOut>("/api/v1/auth/me");
     currentUser = toCurrentUser(raw);
   } catch {
@@ -100,13 +96,12 @@ export async function restoreSession(): Promise<void> {
 export async function login(username: string, password: string): Promise<void> {
   const tokens = await httpRequest<{
     access_token: string;
-    refresh_token: string;
   }>("/api/v1/auth/login", {
     method: "POST",
     auth: false,
     body: { username, password },
   });
-  setTokens(tokens.access_token, tokens.refresh_token);
+  setAccessToken(tokens.access_token);
   const raw = await httpRequest<RawUserOut>("/api/v1/auth/me");
   currentUser = toCurrentUser(raw);
   emit();
@@ -125,9 +120,8 @@ export function logout(): void {
   clearTokens();
   currentUser = null;
   emit();
-  // Best-effort — stateless JWTs mean the server has nothing to invalidate
-  // (see app/api/v1/routers/auth.py's logout), so we don't await this.
-  void httpRequest("/api/v1/auth/logout", { method: "POST" }).catch(
+  // The API revokes the server-side refresh session and clears its cookie.
+  void httpRequest("/api/v1/auth/logout", { method: "POST", auth: false }).catch(
     () => undefined,
   );
 }

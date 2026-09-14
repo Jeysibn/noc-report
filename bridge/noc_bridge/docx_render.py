@@ -32,6 +32,7 @@ from noc_bridge.report_document import (
     BilingualFindList,
     BilingualText,
     Divider,
+    FindList,
     Heading,
     IncidentEvidence,
     Link,
@@ -171,7 +172,7 @@ def _add_bilingual_text(doc: Document, block: BilingualText) -> None:
     doc.add_paragraph(block.text_en)
 
 
-def _add_incident_evidence(doc: Document, block: IncidentEvidence, screenshot_fetcher: ScreenshotFetcher | None) -> None:
+def _add_incident_evidence(doc: Document, block: IncidentEvidence, screenshot_fetcher: ScreenshotFetcher | None, *, include_provenance: bool = False) -> None:
     # Keep the alert heading glued to whatever paragraph follows it so Word's
     # automatic pagination does not strand "Alert #n - <title>" alone at the
     # bottom of a page with its evidence pushed to the next one.
@@ -188,7 +189,7 @@ def _add_incident_evidence(doc: Document, block: IncidentEvidence, screenshot_fe
         _add_link_paragraph(doc, link)
     if block.log_file:
         _add_log_file(doc, block.log_file)
-    if block.incident_id:
+    if include_provenance and block.incident_id:
         doc.add_paragraph(f"Incident ID: {block.incident_id}")
     if block.metadata:
         doc.add_paragraph("  ·  ".join(f"{m.label}: {m.value}" for m in block.metadata))
@@ -198,24 +199,27 @@ def _add_analysis_reference(
     doc: Document,
     block: AnalysisReference,
     screenshot_fetcher: ScreenshotFetcher | None,
+    *,
+    include_provenance: bool = False,
 ) -> None:
     heading = doc.add_heading(block.heading, level=2)
     heading.paragraph_format.keep_with_next = True
     if heading.runs:
         heading.runs[0].font.color.rgb = RGBColor(37, 99, 235)
-    if block.analysis_run_id:
-        doc.add_paragraph(f"Analysis reference: {block.analysis_run_id}")
     for shot in block.screenshots:
         _add_screenshot(doc, shot, screenshot_fetcher)
     if block.log_file:
         _add_log_file(doc, block.log_file)
-    for metadata in block.metadata:
-        doc.add_paragraph(f"{metadata.label}: {metadata.value}")
+    if include_provenance:
+        if block.analysis_run_id:
+            doc.add_paragraph(f"Analysis reference: {block.analysis_run_id}")
+        for metadata in (*block.metadata, *block.provenance):
+            doc.add_paragraph(f"{metadata.label}: {metadata.value}")
     if not block.available:
         doc.add_paragraph(block.unavailable_text or "No analysis available.")
         return
     for child in block.children:
-        _render_block(doc, child, screenshot_fetcher)
+        _render_block(doc, child, screenshot_fetcher, include_provenance=include_provenance)
     # Compatibility fields remain readable for historical daily-report
     # snapshots created before analysis_reference.children existed.
     if block.summary:
@@ -236,7 +240,7 @@ def _add_analysis_reference(
             doc.add_paragraph(block.recommended_action.text_en)
 
 
-def _render_block(doc: Document, block, screenshot_fetcher: ScreenshotFetcher | None) -> None:
+def _render_block(doc: Document, block, screenshot_fetcher: ScreenshotFetcher | None, *, include_provenance: bool = False) -> None:
     if isinstance(block, Heading):
         doc.add_heading(block.text, level=block.level)
     elif isinstance(block, Paragraph):
@@ -257,10 +261,12 @@ def _render_block(doc: Document, block, screenshot_fetcher: ScreenshotFetcher | 
         _add_bilingual_text(doc, block)
     elif isinstance(block, BilingualFindList):
         _add_bilingual_find_list(doc, block)
+    elif isinstance(block, FindList):
+        _add_finds(doc, block.heading, block.finds, zh=block.language == "Chinese")
     elif isinstance(block, IncidentEvidence):
-        _add_incident_evidence(doc, block, screenshot_fetcher)
+        _add_incident_evidence(doc, block, screenshot_fetcher, include_provenance=include_provenance)
     elif isinstance(block, AnalysisReference):
-        _add_analysis_reference(doc, block, screenshot_fetcher)
+        _add_analysis_reference(doc, block, screenshot_fetcher, include_provenance=include_provenance)
     else:
         raise ValueError(f"render_document: unknown block type {type(block)!r}")
 
@@ -269,6 +275,8 @@ def render_document(
     document: ReportDocument,
     dest_path: pathlib.Path,
     screenshot_fetcher: ScreenshotFetcher | None = None,
+    *,
+    include_provenance: bool = False,
 ) -> None:
     """Generic renderer: consumes only report_document's block types,
     never a skill's own field names. Any ReportDocument — regardless of
@@ -287,8 +295,13 @@ def render_document(
         paragraph.add_run(f"{metadata.label}: ").bold = True
         paragraph.add_run(metadata.value)
 
+    if include_provenance and document.provenance:
+        doc.add_heading("Audit Provenance", level=2)
+        for metadata in document.provenance:
+            doc.add_paragraph(f"{metadata.label}: {metadata.value}")
+
     for block in document.blocks:
-        _render_block(doc, block, screenshot_fetcher)
+        _render_block(doc, block, screenshot_fetcher, include_provenance=include_provenance)
 
     dest_path.parent.mkdir(parents=True, exist_ok=True)
     doc.save(str(dest_path))

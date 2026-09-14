@@ -2,7 +2,7 @@ import type { ReportDocument, ReportRun } from "@/types/report";
 
 export interface ReportGenerateInput {
   model: string;
-  effort: "low" | "medium" | "high";
+  effort?: "low" | "medium";
 }
 
 /**

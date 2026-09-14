@@ -100,6 +100,26 @@ class User(Base):
         return {perm.name for role in self.roles for perm in role.permissions}
 
 
+class RefreshSession(Base):
+    """Server-owned, rotatable refresh credential session.
+
+    Only a SHA-256 digest is stored. The raw credential exists solely in the
+    HttpOnly browser cookie and a refresh rotates the row before issuing its
+    replacement.
+    """
+
+    __tablename__ = "refresh_sessions"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 # --- Shifts (master plan §22.3, §22.4) --------------------------------------
 
 

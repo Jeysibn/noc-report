@@ -10,15 +10,16 @@ import type {
 import { mockIncidents } from "./fixtures/incidents";
 
 export class MockIncidentService implements IncidentService {
-  async list({ limit, offset = 0, status, service, environment, hasLog }: IncidentQuery): Promise<IncidentPage> {
+  async list({ limit, offset = 0, shiftId, status, service, environment, hasLog }: IncidentQuery): Promise<IncidentPage> {
     const filtered = mockIncidents.filter((incident) => {
+      if (shiftId && incident.shiftId !== shiftId) return false;
       if (status && incident.status !== status) return false;
       if (service && incident.service !== service) return false;
       if (environment && incident.environment !== environment) return false;
       if (typeof hasLog === "boolean" && incident.hasLog !== hasLog) return false;
       return true;
     });
-    const items = limit ? filtered.slice(offset, offset + limit) : filtered;
+    const items = limit ? filtered.slice(offset, offset + limit) : filtered.slice(offset);
     return { items, total: filtered.length };
   }
 

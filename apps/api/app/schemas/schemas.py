@@ -10,12 +10,12 @@ class LoginRequest(BaseModel):
 
 
 class RefreshRequest(BaseModel):
-    refresh_token: str
+    """Deprecated compatibility body; refresh credentials now use a cookie."""
+    pass
 
 
 class TokenPair(BaseModel):
     access_token: str
-    refresh_token: str
     token_type: str = "bearer"
 
 
@@ -234,6 +234,7 @@ class JobOut(BaseModel):
     error_message: str | None
     paid_ai_call_budget: int
     paid_ai_calls_reserved: int
+    paid_ai_calls_used: int
     queued_at: datetime
     started_at: datetime | None
     completed_at: datetime | None

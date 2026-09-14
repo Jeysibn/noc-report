@@ -19,6 +19,7 @@ interface RawIncident {
   triggered_at: string;
   has_log: boolean;
   analysis_status: Incident["analysisStatus"];
+  shift_id: string | null;
 }
 
 interface RawIncidentPage {
@@ -36,6 +37,7 @@ interface RawTimelineEvent {
 function toIncident(raw: RawIncident): Incident {
   return {
     id: raw.id,
+    shiftId: raw.shift_id,
     displayId: raw.display_id,
     title: raw.title,
     service: raw.service,
@@ -61,6 +63,7 @@ export class ApiIncidentService implements IncidentService {
       query: {
         limit: params.limit,
         offset: params.offset,
+        shift_id: params.shiftId,
         status: params.status,
         service: params.service,
         environment: params.environment,

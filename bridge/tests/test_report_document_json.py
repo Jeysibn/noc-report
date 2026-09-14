@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from noc_bridge.report_composition import compose_report
+from noc_bridge.report_document import DOCUMENT_BLOCK_TYPES, build_report_document
 from noc_bridge.report_document_json import document_to_preview_json
 
 
@@ -58,6 +59,8 @@ def test_screenshot_blocks_are_referenced_by_index_never_by_bucket_or_key():
         {"bucket": "noc-evidence", "object_key": "inc-001.png", "filename": "alert.png"},
         {"bucket": "noc-evidence", "object_key": "inc-001.png", "filename": "alert.png"},
     ]
+    assert "analysis_run_id" not in str(payload)
+    assert "Execution Hash" not in str(payload)
 
     def _find_screenshot_block(blocks):
         for block in blocks:
@@ -96,3 +99,24 @@ def test_preview_json_mirrors_canonical_section_order():
     last_incident_idx = max(i for i, t in enumerate(types_in_order) if t == "incident_evidence")
     first_analysis_idx = min(i for i, t in enumerate(types_in_order) if t == "analysis_reference")
     assert last_incident_idx < first_analysis_idx
+
+
+def test_preview_json_serializes_every_documented_block_type():
+    raw_blocks = [
+        {"type": "heading", "text": "H", "level": 1},
+        {"type": "paragraph", "text": "P"},
+        {"type": "divider"},
+        {"type": "page_break"},
+        {"type": "metadata", "label": "M", "value": "V"},
+        {"type": "link", "label": "Grafana", "url": "https://example.test", "text": "Grafana"},
+        {"type": "log_file_reference", "filename": "log.json"},
+        {"type": "screenshot", "bucket": "b", "object_key": "k", "filename": "s.png"},
+        {"type": "bilingual_text", "zh": "中", "en": "En"},
+        {"type": "bilingual_find_list", "heading_zh": "重点", "heading_en": "Findings", "finds_zh": [], "finds_en": []},
+        {"type": "find_list", "heading": "Key Finds", "language": "Chinese", "finds": []},
+        {"type": "incident_evidence", "heading": "Alert", "metadata": [], "links": [], "screenshots": []},
+        {"type": "analysis_reference", "heading": "Analysis", "available": True, "children": []},
+    ]
+    document = build_report_document({"metadata": {"title": "Contract"}, "blocks": raw_blocks})
+    payload, _ = document_to_preview_json(document)
+    assert {block["type"] for block in payload["blocks"]} == set(DOCUMENT_BLOCK_TYPES)

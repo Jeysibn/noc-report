@@ -28,6 +28,7 @@ from botocore.exceptions import ClientError
 import pika
 
 from noc_bridge import db, health
+from noc_bridge import ai_governance
 from noc_bridge.config import BridgeSettings, settings as default_settings
 from noc_bridge.credentials import prepare_sandbox_credentials
 from noc_bridge.failures import (
@@ -91,7 +92,8 @@ logger = logging.getLogger("noc_bridge")
 # declared quality signal requires it, a second effort-tier call. Reserve all
 # four permits once per Job so broker/storage retries cannot multiply paid
 # usage. The sandbox itself enforces the same value for its in-process calls.
-MAX_PAID_AI_CALLS_PER_JOB = 4
+# Compatibility export for callers/tests; policy lives in ai_governance.
+MAX_PAID_AI_CALLS_PER_JOB = ai_governance.MAX_PAID_AI_CALLS_PER_JOB
 
 # Reliability mission Batch A/Phase 3: was 1, which made the "retry"
 # branch below dead code — every first failure went straight to the DLQ.
@@ -334,9 +336,7 @@ class BridgeService:
                 if not skill_name:
                     raise UnsupportedJobType(f"no skill wired yet for job_type={job_type!r}")
 
-                paid_ai_budget = db.reserve_paid_ai_calls(
-                    pg_conn, job_id, requested=MAX_PAID_AI_CALLS_PER_JOB
-                )
+                paid_ai_budget = ai_governance.reserve(pg_conn, job_id)
                 if paid_ai_budget <= 0:
                     raise RuntimeError("paid AI retry budget exhausted")
 
@@ -383,7 +383,9 @@ class BridgeService:
                     # only supplies the fallback default, same precedent as
                     # the pre-existing claude_model_default fallback.
                     "SKILL_MODEL": payload.get("model") or config["default_model"],
-                    "SKILL_EFFORT": payload.get("effort") or config["default_effort"],
+                    "SKILL_EFFORT": ai_governance.effective_effort(
+                        payload.get("effort"), config["default_effort"]
+                    ),
                     "SKILL_EFFORT_ESCALATION": self.settings.claude_effort_escalation,
                     "SKILL_ESCALATION_CONFIDENCE_THRESHOLD": str(
                         self.settings.claude_escalation_confidence_threshold
@@ -401,7 +403,7 @@ class BridgeService:
                 # may use the remaining paid budget, while a crashed worker
                 # still leaves its reservation as a safety fence.
                 if result.telemetry is not None:
-                    db.record_paid_ai_calls(
+                    ai_governance.record(
                         pg_conn,
                         job_id,
                         result.telemetry.get("claude_calls", 0),

@@ -44,7 +44,7 @@ export class ApiReportService implements ReportService {
   async generate(shiftId: string, input: ReportGenerateInput): Promise<ReportRun> {
     const raw = await httpRequest<RawReportOut>(`/api/v1/shifts/${shiftId}/reports`, {
       method: "POST",
-      body: { model: input.model, effort: input.effort },
+      body: { model: input.model, ...(input.effort ? { effort: input.effort } : {}) },
     });
     return toRun(raw);
   }

@@ -73,13 +73,24 @@ def reserve_paid_ai_calls(conn, job_id: uuid.UUID, *, requested: int = 4) -> int
     with conn.cursor() as cur:
         cur.execute(
             """
-            UPDATE jobs
-            SET paid_ai_calls_reserved = paid_ai_calls_reserved + LEAST(
-                %(requested)s, paid_ai_call_budget - paid_ai_calls_reserved
+            WITH candidate AS (
+                SELECT id,
+                       LEAST(
+                           %(requested)s,
+                           GREATEST(0, paid_ai_call_budget - paid_ai_calls_reserved)
+                       ) AS permits
+                FROM jobs
+                WHERE id = %(job_id)s
+                  AND paid_ai_calls_reserved < paid_ai_call_budget
+                FOR UPDATE
+            ), updated AS (
+                UPDATE jobs AS j
+                SET paid_ai_calls_reserved = j.paid_ai_calls_reserved + c.permits
+                FROM candidate AS c
+                WHERE j.id = c.id AND c.permits > 0
+                RETURNING c.permits
             )
-            WHERE id = %(job_id)s
-              AND paid_ai_calls_reserved < paid_ai_call_budget
-            RETURNING paid_ai_call_budget - paid_ai_calls_used
+            SELECT permits FROM updated
             """,
             {"requested": requested, "job_id": str(job_id)},
         )
@@ -89,19 +100,51 @@ def reserve_paid_ai_calls(conn, job_id: uuid.UUID, *, requested: int = 4) -> int
 
 
 def record_paid_ai_calls(conn, job_id: uuid.UUID, calls: int) -> None:
-    """Persist actual Claude calls and release unused crash-fence permits."""
+    """Add one sandbox attempt's calls to the durable Job total.
+
+    ``paid_ai_calls_reserved`` is a high-water crash fence: while a sandbox
+    runs it contains the used total plus the current reservation. Once the
+    sandbox reports, unused permits are released by lowering the fence to the
+    new cumulative used value. The update is atomic and clamps consumption to
+    the configured budget, so a retry or duplicate delivery cannot buy more
+    capacity than the Job owns.
+    """
     calls = max(0, int(calls))
     with conn.cursor() as cur:
         cur.execute(
             """
             UPDATE jobs
-            SET paid_ai_calls_used = LEAST(paid_ai_call_budget, GREATEST(paid_ai_calls_used, %(calls)s)),
-                paid_ai_calls_reserved = LEAST(paid_ai_call_budget, GREATEST(paid_ai_calls_used, %(calls)s))
+            SET paid_ai_calls_used = LEAST(
+                paid_ai_call_budget,
+                    paid_ai_calls_used + LEAST(
+                        calls, GREATEST(0, paid_ai_calls_reserved - paid_ai_calls_used)
+                    )
+                ),
+                paid_ai_calls_reserved = LEAST(
+                paid_ai_call_budget,
+                    paid_ai_calls_used + LEAST(
+                        calls, GREATEST(0, paid_ai_calls_reserved - paid_ai_calls_used)
+                    )
+                )
             WHERE id = %(job_id)s
             """,
             {"calls": calls, "job_id": str(job_id)},
         )
     conn.commit()
+
+
+def remaining_paid_ai_calls(conn, job_id: uuid.UUID) -> int:
+    """Return the durable capacity not currently consumed or reserved."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT GREATEST(0, paid_ai_call_budget - paid_ai_calls_reserved)
+            FROM jobs WHERE id = %s
+            """,
+            (str(job_id),),
+        )
+        row = cur.fetchone()
+    return int(row[0]) if row else 0
 
 
 def fetch_job_row(conn, job_id: uuid.UUID) -> dict | None:

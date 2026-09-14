@@ -109,6 +109,21 @@ class BilingualFindList:
 
 
 @dataclass(frozen=True)
+class FindList:
+    """A single-language findings list.
+
+    ``BilingualFindList`` remains supported for older generic documents, but
+    new analysis presentations use two ordered FindList blocks so a complete
+    Chinese section can precede the complete English section in every
+    renderer.
+    """
+
+    heading: str
+    finds: tuple[Find, ...]
+    language: str | None = None
+
+
+@dataclass(frozen=True)
 class IncidentEvidence:
     """One incident's Alerts-style evidence block: its identifying
     metadata, an optional external link (e.g. Grafana), an optional
@@ -134,6 +149,7 @@ class AnalysisReference:
     analysis_run_id: str | None = None
     unavailable_text: str | None = None
     metadata: tuple[Metadata, ...] = ()
+    provenance: tuple[Metadata, ...] = ()
     children: tuple["Block", ...] = ()
     screenshots: tuple[Screenshot, ...] = ()
     log_file: LogFileReference | None = None
@@ -146,7 +162,13 @@ class AnalysisReference:
 
 Block = (
     Heading | Paragraph | Divider | PageBreak | Metadata | Link | LogFileReference |
-    Screenshot | BilingualText | IncidentEvidence | AnalysisReference
+    Screenshot | BilingualText | BilingualFindList | FindList | IncidentEvidence | AnalysisReference
+)
+
+DOCUMENT_BLOCK_TYPES = (
+    "heading", "paragraph", "divider", "page_break", "metadata", "link",
+    "log_file_reference", "screenshot", "bilingual_text", "bilingual_find_list",
+    "find_list", "incident_evidence", "analysis_reference",
 )
 
 
@@ -155,6 +177,7 @@ class ReportDocument:
     title: str
     blocks: tuple[Block, ...] = field(default_factory=tuple)
     metadata: tuple[Metadata, ...] = field(default_factory=tuple)
+    provenance: tuple[Metadata, ...] = field(default_factory=tuple)
 
 
 def build_report_document(result: dict) -> ReportDocument:
@@ -169,11 +192,18 @@ def build_report_document(result: dict) -> ReportDocument:
         for key, value in raw_metadata.items()
         if key != "title" and value is not None
     )
+    raw_provenance = result.get("provenance") or {}
+    provenance = tuple(
+        Metadata(str(key), str(value))
+        for key, value in raw_provenance.items()
+        if value is not None
+    )
     blocks.extend(_parse_blocks(result.get("blocks", [])))
     return ReportDocument(
         title=raw_metadata.get("title", "Report"),
         blocks=tuple(blocks),
         metadata=metadata,
+        provenance=provenance,
     )
 
 
@@ -195,6 +225,19 @@ def _parse_blocks(raw_blocks: list[dict]) -> list[Block]:
             parsed.append(LogFileReference(raw["filename"], raw.get("url")))
         elif kind == "screenshot":
             parsed.append(Screenshot(raw["bucket"], raw["object_key"], raw.get("filename")))
+        elif kind == "bilingual_find_list":
+            parsed.append(BilingualFindList(
+                heading_zh=str(raw["heading_zh"]),
+                heading_en=str(raw["heading_en"]),
+                finds_zh=tuple(_parse_find(item) for item in raw.get("finds_zh", [])),
+                finds_en=tuple(_parse_find(item) for item in raw.get("finds_en", [])),
+            ))
+        elif kind == "find_list":
+            parsed.append(FindList(
+                heading=str(raw["heading"]),
+                finds=tuple(_parse_find(item) for item in raw.get("finds", [])),
+                language=raw.get("language"),
+            ))
         elif kind == "incident_evidence":
             parsed.append(IncidentEvidence(
                 heading=raw["heading"],
@@ -226,13 +269,14 @@ def _parse_blocks(raw_blocks: list[dict]) -> list[Block]:
             analysis_run_id = raw.get("analysis_run_id")
             parsed.append(
                 AnalysisReference(
-                    heading=str(raw.get("label") or analysis_run_id or "Analysis"),
+                    heading=str(raw.get("heading") or raw.get("label") or analysis_run_id or "Analysis"),
                     available=bool(raw.get("available", True)),
                     incident_id=str(raw["incident_id"]) if raw.get("incident_id") is not None else None,
                     analysis_run_id=str(analysis_run_id) if analysis_run_id is not None else None,
                     unavailable_text=raw.get("unavailable_text"),
                     metadata=tuple(Metadata(str(item["label"]), str(item["value"])) for item in raw.get("metadata", [])),
-                    children=tuple(_parse_blocks(raw.get("blocks", []))),
+                    provenance=tuple(Metadata(str(item["label"]), str(item["value"])) for item in raw.get("provenance", [])),
+                    children=tuple(_parse_blocks(raw.get("children", raw.get("blocks", [])))),
                     screenshots=tuple(
                         Screenshot(s["bucket"], s["object_key"], s.get("filename"))
                         for s in raw.get("screenshots", [])
@@ -242,11 +286,31 @@ def _parse_blocks(raw_blocks: list[dict]) -> list[Block]:
                         if isinstance(raw.get("log_file"), dict)
                         else None
                     ),
+                    summary=_parse_optional_block(raw.get("summary"), BilingualText),
+                    key_finds=_parse_optional_block(raw.get("key_finds"), BilingualFindList),
+                    secondary_finds=_parse_optional_block(raw.get("secondary_finds"), BilingualFindList),
+                    likely_cause=_parse_optional_block(raw.get("likely_cause"), BilingualText),
+                    recommended_action=_parse_optional_block(raw.get("recommended_action"), BilingualText),
                 )
             )
         else:
             raise ValueError(f"unsupported ReportDocument block type: {kind!r}")
     return parsed
+
+
+def _parse_find(raw: dict) -> Find:
+    return Find(
+        label=str(raw.get("label") or ""),
+        detail=str(raw.get("detail")) if raw.get("detail") is not None else None,
+        stat=str(raw.get("stat")) if raw.get("stat") is not None else None,
+    )
+
+
+def _parse_optional_block(raw: dict | None, expected_type):
+    if not isinstance(raw, dict):
+        return None
+    parsed = _parse_blocks([raw])
+    return parsed[0] if parsed and isinstance(parsed[0], expected_type) else None
 
 
 def _find(entry: dict) -> Find:

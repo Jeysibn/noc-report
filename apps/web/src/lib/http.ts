@@ -4,39 +4,24 @@
  * didn't exist before this milestone — see `.env`. Handles JWT attachment
  * and a single silent refresh-and-retry on 401, per app/deps.py's
  * OAuth2PasswordBearer contract (`Authorization: Bearer <access_token>`).
+ * Access tokens are memory-only; the API owns the refresh credential in an
+ * HttpOnly cookie that JavaScript cannot read.
  */
 
 const BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "http://localhost:8000";
 
-const ACCESS_KEY = "noc.access_token";
-const REFRESH_KEY = "noc.refresh_token";
-
-function safeStorage() {
-  try {
-    return window.localStorage;
-  } catch {
-    return null;
-  }
-}
+let accessToken: string | null = null;
 
 export function getAccessToken(): string | null {
-  return safeStorage()?.getItem(ACCESS_KEY) ?? null;
+  return accessToken;
 }
 
-export function getRefreshToken(): string | null {
-  return safeStorage()?.getItem(REFRESH_KEY) ?? null;
-}
-
-export function setTokens(accessToken: string, refreshToken: string): void {
-  const storage = safeStorage();
-  storage?.setItem(ACCESS_KEY, accessToken);
-  storage?.setItem(REFRESH_KEY, refreshToken);
+export function setAccessToken(value: string): void {
+  accessToken = value;
 }
 
 export function clearTokens(): void {
-  const storage = safeStorage();
-  storage?.removeItem(ACCESS_KEY);
-  storage?.removeItem(REFRESH_KEY);
+  accessToken = null;
 }
 
 export class ApiError extends Error {
@@ -76,25 +61,27 @@ async function rawFetch(path: string, opts: RequestOptions, token: string | null
     body = JSON.stringify(opts.body);
   }
   if (opts.auth !== false && token) headers.Authorization = `Bearer ${token}`;
-  return fetch(buildUrl(path, opts.query), { method: opts.method ?? "GET", headers, body });
+  return fetch(buildUrl(path, opts.query), {
+    method: opts.method ?? "GET",
+    headers,
+    body,
+    credentials: "include",
+  });
 }
 
 let refreshInFlight: Promise<string | null> | null = null;
 
 async function refreshAccessToken(): Promise<string | null> {
-  const refreshToken = getRefreshToken();
-  if (!refreshToken) return null;
   const resp = await fetch(buildUrl("/api/v1/auth/refresh"), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ refresh_token: refreshToken }),
+    credentials: "include",
   });
   if (!resp.ok) {
     clearTokens();
     return null;
   }
-  const data = (await resp.json()) as { access_token: string; refresh_token: string };
-  setTokens(data.access_token, data.refresh_token);
+  const data = (await resp.json()) as { access_token: string };
+  setAccessToken(data.access_token);
   return data.access_token;
 }
 

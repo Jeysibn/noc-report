@@ -56,7 +56,7 @@ export function ShiftReport() {
   const [shift, setShift] = useState<Shift | null>(null);
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [model, setModel] = useState("claude-sonnet-5");
-  const [effort, setEffort] = useState<"low" | "medium" | "high">("medium");
+  const [effort, setEffort] = useState<"auto" | "low" | "medium">("auto");
   const [versions, setVersions] = useState<ReportRun[]>([]);
   const [requestError, setRequestError] = useState<string | null>(null);
   const [previewingId, setPreviewingId] = useState<string | null>(null);
@@ -72,7 +72,6 @@ export function ShiftReport() {
       .getCurrentShift()
       .then((s) => {
         setShift(s);
-        if (s) reportService.list(s.id).then(setVersions);
       })
       .catch((err) =>
         setRequestError(
@@ -81,10 +80,37 @@ export function ShiftReport() {
             : "Could not load the current shift.",
         ),
       );
-    incidentService
-      .list({ limit: 10 })
-      .then((page) => setIncidents(page.items));
   }, []);
+
+  const shiftId = shift?.id;
+
+  useEffect(() => {
+    if (!shiftId) {
+      setIncidents([]);
+      setVersions([]);
+      return;
+    }
+    let cancelled = false;
+    const refreshReadiness = () => {
+      incidentService
+        .list({ shiftId, limit: 0 })
+        .then((page) => {
+          if (!cancelled) setIncidents(page.items);
+        })
+        .catch((err) => {
+          if (!cancelled) setRequestError(err instanceof ApiError ? err.message : "Could not load incidents.");
+        });
+    };
+    refreshReadiness();
+    reportService.list(shiftId).then((items) => {
+      if (!cancelled) setVersions(items);
+    });
+    const readinessRefresh = setInterval(refreshReadiness, POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(readinessRefresh);
+    };
+  }, [shiftId]);
 
   const readinessRows = useMemo(
     () =>
@@ -125,7 +151,6 @@ export function ShiftReport() {
     try {
       const s = await shiftService.openShift();
       setShift(s);
-      reportService.list(s.id).then(setVersions);
     } catch (err) {
       setRequestError(
         err instanceof ApiError ? err.message : "Could not open a shift.",
@@ -139,7 +164,10 @@ export function ShiftReport() {
     if (!shift) return;
     setRequestError(null);
     try {
-      const run = await reportService.generate(shift.id, { model, effort });
+      const run = await reportService.generate(shift.id, {
+        model,
+        ...(effort === "auto" ? {} : { effort }),
+      });
       setVersions((prev) => [run, ...prev]);
     } catch (err) {
       setRequestError(
@@ -275,9 +303,9 @@ export function ShiftReport() {
                     onChange={(e) => setEffort(e.target.value as typeof effort)}
                     disabled={isBusy}
                   >
+                    <option value="auto">System default / Auto</option>
                     <option value="low">Low</option>
                     <option value="medium">Medium</option>
-                    <option value="high">High</option>
                   </Select>
                 </div>
               </div>

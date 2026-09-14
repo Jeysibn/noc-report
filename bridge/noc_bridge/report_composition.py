@@ -174,7 +174,7 @@ def _analysis_block(incident: dict, plan_node: dict, number: int) -> AnalysisRef
         available=True,
         incident_id=str(incident["id"]),
         analysis_run_id=str(run_id),
-        metadata=provenance,
+        provenance=provenance,
         screenshots=tuple(
             Screenshot(item["bucket"], item["object_key"], item.get("filename"))
             for item in (incident.get("screenshots") or [])
@@ -244,7 +244,8 @@ def compose_report(plan: dict, snapshot: dict) -> ReportDocument:
             elif kind == "bilingual_generated_text":
                 summary.append(BilingualText(
                     str(node.get("zh") or ""), str(node.get("en") or ""),
-                    node.get("heading_zh"), node.get("heading_en"),
+                    node.get("heading_zh") or "Chinese Summary",
+                    node.get("heading_en") or "English Summary",
                 ))
             elif kind == "incident_reference":
                 ref = str(node.get("incident_id") or "")
@@ -353,12 +354,18 @@ def compose_report(plan: dict, snapshot: dict) -> ReportDocument:
     except (TypeError, ValueError):
         pass
     shift_display = snapshot.get("shift_display_name") or snapshot.get("shift_code") or snapshot.get("shift_name") or "Shift"
-    title = f"Daily Alert Report — {display_date} — {shift_display}"
-    metadata_values = [
-        ("Date", display_date),
-        ("Shift", shift_display),
-        ("Skill Snapshot", snapshot.get("report_skill_snapshot_id")),
-        ("Execution Hash", snapshot.get("report_skill_execution_hash")),
-    ]
-    metadata = tuple(Metadata(label, str(value)) for label, value in metadata_values if value not in (None, ""))
-    return ReportDocument(title=title, blocks=tuple(parsed_blocks), metadata=metadata)
+    metadata = tuple(Metadata(label, str(value)) for label, value in (("Date", display_date), ("Shift", shift_display)))
+    provenance = tuple(
+        Metadata(label, str(value))
+        for label, value in (
+            ("Report Skill Snapshot", snapshot.get("report_skill_snapshot_id")),
+            ("Report Execution Hash", snapshot.get("report_skill_execution_hash")),
+        )
+        if value not in (None, "")
+    )
+    return ReportDocument(
+        title="Daily Alert & Log Analysis Report",
+        blocks=tuple(parsed_blocks),
+        metadata=metadata,
+        provenance=provenance,
+    )

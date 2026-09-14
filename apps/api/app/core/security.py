@@ -1,3 +1,5 @@
+import hashlib
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
@@ -35,3 +37,12 @@ def decode_token(token: str) -> dict:
         return jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
     except JWTError as exc:
         raise ValueError("Invalid or expired token") from exc
+
+
+def create_refresh_secret() -> str:
+    """Create an opaque refresh credential; it is never placed in JSON."""
+    return secrets.token_urlsafe(48)
+
+
+def hash_refresh_secret(secret: str) -> str:
+    return hashlib.sha256(secret.encode("utf-8")).hexdigest()
