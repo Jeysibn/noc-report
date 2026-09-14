@@ -144,6 +144,8 @@ def test_dispatch_pending_events_marks_row_published_and_returns_count(monkeypat
     db = TestSessionLocal()
     try:
         event = _make_pending_event(db)
+        event.last_error = "stale channel failure"
+        db.commit()
         published_payloads = []
         monkeypatch.setattr(
             "app.outbox.publish_message",
@@ -156,6 +158,7 @@ def test_dispatch_pending_events_marks_row_published_and_returns_count(monkeypat
         assert published_payloads == [{"job_id": str(event.job_id)}]
         db.refresh(event)
         assert event.published_at is not None
+        assert event.last_error is None
     finally:
         db.close()
 

@@ -22,6 +22,9 @@ class SkillContractError(ValueError):
 SUPPORTED_RENDERER_PROFILES = {None, "daily_report_docx", "report-document-v1"}
 SUPPORTED_INPUT_CONTRACTS = {"log-evidence-v1", "daily-report-context-v1"}
 SUPPORTED_REPORT_EXPORT_CONTRACTS = {"report-fragment-v1"}
+SUPPORTED_PRESENTATION_EXPORT_CONTRACTS = {"analysis-presentation-v1"}
+SUPPORTED_REASONING_EXPORT_ADAPTERS = {"log-triage-v1"}
+SUPPORTED_PRESENTATION_EXPORT_ADAPTERS = {"log-triage-v1"}
 
 
 def load_snapshot(db: Session, snapshot_id) -> SkillSnapshot:
@@ -154,9 +157,40 @@ def validate_snapshot(db: Session, snapshot: SkillSnapshot) -> None:
     report_export_contract = manifest.get("report_export_contract")
     if report_export_contract is not None and report_export_contract not in SUPPORTED_REPORT_EXPORT_CONTRACTS:
         raise SkillContractError(f"unsupported report export contract: {report_export_contract}")
+    exports = manifest.get("exports")
+    if exports is not None:
+        if not isinstance(exports, dict):
+            raise SkillContractError("manifest exports must be an object")
+        for kind in ("reasoning", "presentation"):
+            export = exports.get(kind)
+            if export is None:
+                continue
+            if not isinstance(export, dict) or not isinstance(export.get("contract"), str):
+                raise SkillContractError(f"manifest exports.{kind}.contract is required")
+            supported = SUPPORTED_REPORT_EXPORT_CONTRACTS if kind == "reasoning" else SUPPORTED_PRESENTATION_EXPORT_CONTRACTS
+            if export["contract"] not in supported:
+                raise SkillContractError(f"unsupported {kind} export contract: {export['contract']}")
+            adapter = export.get("adapter")
+            schema_properties = load_schema(snapshot).get("properties") or {}
+            if kind == "reasoning":
+                if adapter not in SUPPORTED_REASONING_EXPORT_ADAPTERS and "report_context" not in schema_properties:
+                    raise SkillContractError("reasoning export needs a supported adapter or report_context output")
+            elif adapter not in SUPPORTED_PRESENTATION_EXPORT_ADAPTERS and "report_presentation" not in schema_properties:
+                raise SkillContractError("presentation export needs a supported adapter or report_presentation output")
     policy = manifest.get("execution_policy")
     if policy is not None and not isinstance(policy, dict):
         raise SkillContractError("manifest execution_policy must be an object")
+    coverage = manifest.get("coverage")
+    if coverage is not None:
+        if not isinstance(coverage, dict):
+            raise SkillContractError("manifest coverage must be an object")
+        if coverage.get("incidents", "optional") not in {"all", "optional", "none"}:
+            raise SkillContractError("manifest coverage.incidents is invalid")
+        if coverage.get("analyses", "optional") not in {"all_available", "optional", "none"}:
+            raise SkillContractError("manifest coverage.analyses is invalid")
+        for key in ("allow_duplicate_incidents", "allow_duplicate_analyses"):
+            if key in coverage and not isinstance(coverage[key], bool):
+                raise SkillContractError(f"manifest coverage.{key} must be boolean")
     projection = manifest.get("input_projection")
     if projection is not None:
         if not isinstance(projection, dict):

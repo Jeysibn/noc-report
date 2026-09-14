@@ -109,7 +109,7 @@ def dispatch_pending_events(db: Session, channel, *, batch_size: int = DEFAULT_B
         db.execute(
             update(OutboxEvent)
             .where(OutboxEvent.id == row.id)
-            .values(published_at=func.now())
+            .values(published_at=func.now(), last_error=None)
         )
         db.commit()
         published += 1

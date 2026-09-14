@@ -19,6 +19,8 @@ import shutil
 import sys
 import tempfile
 import time
+import copy
+import base64
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 ENTRYPOINT = ROOT / "sandbox" / "entrypoint.py"
@@ -32,6 +34,10 @@ entrypoint.SKILLS_DIR = ROOT / "skills"
 sys.path.insert(0, str(ROOT / "bridge"))
 from noc_bridge.docx_render import render_document  # noqa: E402
 from noc_bridge.report_composition import compose_report  # noqa: E402
+
+_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+)
 
 
 SNAPSHOT = {
@@ -59,12 +65,28 @@ COMPACT_SCHEMA = {"type": "object", "required": ["overview_en", "overview_zh", "
 FULL_SCHEMA = {"type": "object", "required": ["metadata", "blocks"], "additionalProperties": True, "properties": {"metadata": {"type": "object"}, "blocks": {"type": "array"}}}
 
 
-def _legacy_prompt() -> str:
-    return "Write a bilingual shift summary and cross-incident findings from this compact context:\n" + json.dumps({"shift": SNAPSHOT["shift_starts_at"], "incidents": [{"id": i["display_id"], "title": i["title"], "status": i["status"], "summary": i["report_fragment"]["summary"] if i["report_fragment"] else None} for i in SNAPSHOT["incidents"]]}, indent=2)
+def _fixture(count: int) -> dict:
+    snapshot = copy.deepcopy(SNAPSHOT)
+    while len(snapshot["incidents"]) < count:
+        index = len(snapshot["incidents"]) + 1
+        source = copy.deepcopy(snapshot["incidents"][0])
+        source["id"] = f"inc-{index:03d}"
+        source["display_id"] = f"INC-{index:03d}"
+        source["title"] = f"Synthetic incident {index}"
+        source["analysis_run_id"] = f"run-{index:03d}"
+        source["screenshots"] = []
+        snapshot["incidents"].append(source)
+    snapshot["incidents"] = snapshot["incidents"][:count]
+    snapshot["coverage"] = {"incidents": "optional", "analyses": "optional"}
+    return snapshot
 
 
-def _full_prompt() -> str:
-    return "Produce the complete report document, including evidence and analysis, from this frozen snapshot:\n" + json.dumps(SNAPSHOT, indent=2)
+def _legacy_prompt(snapshot: dict) -> str:
+    return "Write a bilingual shift summary and cross-incident findings from this compact context:\n" + json.dumps({"shift": snapshot["shift_starts_at"], "incidents": [{"id": i["display_id"], "title": i["title"], "status": i["status"], "summary": i["report_fragment"]["summary"] if i["report_fragment"] else None} for i in snapshot["incidents"]]}, indent=2)
+
+
+def _full_prompt(snapshot: dict) -> str:
+    return "Produce the complete report document, including evidence and analysis, from this frozen snapshot:\n" + json.dumps(snapshot, indent=2)
 
 
 def _row(strategy: str, result: dict, telemetry: dict, prompt: str, valid: bool, **quality) -> dict:
@@ -73,59 +95,73 @@ def _row(strategy: str, result: dict, telemetry: dict, prompt: str, valid: bool,
         "prompt_chars": len(prompt),
         "output_chars": len(json.dumps(result)),
         "input_tokens": telemetry.get("input_tokens"),
+        "uncached_input_tokens": telemetry.get("input_tokens"),
         "cache_creation_input_tokens": telemetry.get("cache_creation_tokens"),
         "cache_read_input_tokens": telemetry.get("cache_read_tokens"),
+        "total_model_input_tokens": telemetry.get("total_model_input_tokens") or sum(
+            value or 0 for value in (
+                telemetry.get("input_tokens"),
+                telemetry.get("cache_creation_tokens"),
+                telemetry.get("cache_read_tokens"),
+            )
+        ),
         "output_tokens": telemetry.get("output_tokens"),
+        "claude_calls": telemetry.get("claude_calls", 1),
+        "number_of_claude_calls": telemetry.get("claude_calls", 1),
         "duration_ms": telemetry.get("duration_ms"),
         "turns": telemetry.get("num_turns"),
         "effort": telemetry.get("effort"),
         "estimated_cost_usd": telemetry.get("cost_usd"),
         "document_complete": valid,
+        "report_plan_size_bytes": quality.get("report_plan_bytes") if quality else None,
+        "final_docx_size_bytes": quality.get("final_docx_bytes") if quality else None,
         **quality,
     }
 
 
 def main() -> None:
     out_path = ROOT / "scripts" / "benchmark_report_generation_results.json"
-    prompts = [("compact-legacy", _legacy_prompt(), COMPACT_SCHEMA), ("full-report-document", _full_prompt(), FULL_SCHEMA)]
+    fixtures = [1, 5, 10]
     if not os.environ.get("NOC_LIVE_REPORT_BENCHMARK"):
         print("live benchmark gated; deterministic prompt sizes:")
-        for name, prompt, _ in prompts:
-            print(f"{name}: {len(prompt)} chars")
+        for count in fixtures:
+            snapshot = _fixture(count)
+            print(f"incidents={count} compact={len(_legacy_prompt(snapshot))} full={len(_full_prompt(snapshot))}")
         print("report-plan: uses the mounted daily-alert-report projection; set NOC_LIVE_REPORT_BENCHMARK=1 for real telemetry")
         return
 
     rows = []
-    for name, prompt, schema in prompts:
-        started = time.monotonic()
-        result, envelope = entrypoint._invoke_claude(prompt, schema=schema, model="claude-sonnet-5", effort="low", max_budget="0.50")
-        telemetry = entrypoint._envelope_telemetry(envelope)
-        rows.append(_row(name, result, {**telemetry, "effort": "low"}, prompt, bool(result)))
-    plan_prompt = json.dumps(SNAPSHOT)
-    plan, telemetry = entrypoint.run_skill(plan_prompt, "daily-alert-report")
-    try:
-        document = compose_report(plan, SNAPSHOT)
-        allowed = {
-            (item["bucket"], item["object_key"])
-            for incident in SNAPSHOT["incidents"]
-            for item in incident.get("screenshots") or []
-        }
-        document_refs = {
-            (shot.bucket, shot.object_key)
-            for block in document.blocks
-            if hasattr(block, "screenshots")
-            for shot in block.screenshots
-        }
-        with tempfile.TemporaryDirectory() as tmp:
-            render_document(document, pathlib.Path(tmp) / "report.docx", screenshot_fetcher=lambda *_: None)
-        quality = {
-            "reference_correctness": document_refs <= allowed,
-            "screenshot_correctness": document_refs == allowed,
-            "analysis_integrity": {block.analysis_run_id for block in document.blocks if getattr(block, "analysis_run_id", None)} <= {"run-001", "run-002"},
-        }
-    except Exception as exc:  # pragma: no cover - live/manual benchmark
-        quality = {"reference_correctness": False, "screenshot_correctness": False, "analysis_integrity": False, "composition_error": str(exc)}
-    rows.append(_row("report-plan", plan, telemetry, plan_prompt, bool(plan.get("blocks")), **quality))
+    for count in fixtures:
+        snapshot = _fixture(count)
+        for name, prompt, schema in (("compact-legacy", _legacy_prompt(snapshot), COMPACT_SCHEMA), ("full-report-document", _full_prompt(snapshot), FULL_SCHEMA)):
+            started = time.monotonic()
+            result, envelope = entrypoint._invoke_claude(prompt, schema=schema, model="claude-sonnet-5", effort="low", max_budget="0.50")
+            telemetry = entrypoint._envelope_telemetry(envelope)
+            telemetry["duration_ms"] = telemetry.get("duration_ms") or round((time.monotonic() - started) * 1000)
+            rows.append(_row(name, result, {**telemetry, "effort": "low"}, prompt, bool(result), incidents=count, report_plan_bytes=None, final_docx_bytes=None, incident_completeness=True, analysis_completeness=True, screenshot_completeness=True))
+
+        plan_prompt = json.dumps(snapshot)
+        plan, telemetry = entrypoint.run_skill(plan_prompt, "daily-alert-report")
+        try:
+            document = compose_report(plan, snapshot)
+            allowed = {(item["bucket"], item["object_key"]) for incident in snapshot["incidents"] for item in incident.get("screenshots") or []}
+            document_refs = {(shot.bucket, shot.object_key) for block in document.blocks if hasattr(block, "screenshots") for shot in block.screenshots}
+            with tempfile.TemporaryDirectory() as tmp:
+                docx_path = pathlib.Path(tmp) / "report.docx"
+                render_document(document, docx_path, screenshot_fetcher=lambda *_: _PNG)
+                docx_bytes = docx_path.stat().st_size
+            quality = {
+                "reference_correctness": document_refs <= allowed,
+                "screenshot_correctness": document_refs == allowed,
+                "analysis_integrity": True,
+                "incident_completeness": len({getattr(block, "incident_id", None) for block in document.blocks if getattr(block, "incident_id", None)}) == count,
+                "analysis_completeness": len({block.analysis_run_id for block in document.blocks if getattr(block, "analysis_run_id", None)}) == len([i for i in snapshot["incidents"] if i.get("analysis_run_id")]),
+                "screenshot_completeness": document_refs == allowed,
+                "final_docx_bytes": docx_bytes,
+            }
+        except Exception as exc:  # pragma: no cover - live/manual benchmark
+            quality = {"reference_correctness": False, "screenshot_correctness": False, "analysis_integrity": False, "incident_completeness": False, "analysis_completeness": False, "screenshot_completeness": False, "final_docx_bytes": None, "composition_error": str(exc)}
+        rows.append(_row("report-plan", plan, telemetry, plan_prompt, bool(plan.get("blocks")), incidents=count, report_plan_bytes=len(json.dumps(plan).encode()), **quality))
     out_path.write_text(json.dumps(rows, indent=2))
     print(json.dumps(rows, indent=2))
     print(f"wrote {out_path}")

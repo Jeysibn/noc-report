@@ -30,6 +30,11 @@ input_projection:
         analysis_run_id: analysis_run_id
         report_fragment: report_fragment
 renderer_profile: report-document-v1
+coverage:
+  incidents: all
+  analyses: all_available
+  allow_duplicate_incidents: false
+  allow_duplicate_analyses: false
 execution_policy:
   job_type: daily_report
 dependencies:

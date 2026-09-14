@@ -9,6 +9,7 @@ the ReportDocument layer.
 from __future__ import annotations
 
 import pathlib
+import base64
 
 from docx import Document
 
@@ -28,6 +29,9 @@ from noc_bridge.report_document import (
 from noc_bridge.validation import validate_output
 
 SKILLS_DIR = pathlib.Path(__file__).resolve().parents[2] / "skills"
+_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+)
 
 _RESULT = {
     "title": "Daily Alert Report — 2026-09-13",
@@ -221,7 +225,7 @@ def test_render_daily_report_docx_end_to_end_produces_a_valid_docx(tmp_path):
 
     def fetcher(bucket, object_key):
         fetched.append((bucket, object_key))
-        return None  # no real MinIO here; just proves the callback is invoked
+        return _PNG
 
     render_daily_report_docx(_RESULT, dest, screenshot_fetcher=fetcher)
     assert dest.exists()

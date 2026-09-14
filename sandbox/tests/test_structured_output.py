@@ -114,3 +114,22 @@ def test_invoke_claude_does_not_retry_cli_level_failure(monkeypatch):
     with pytest.raises(RuntimeError, match="some api error"):
         entrypoint._invoke_claude("prompt", schema=_SCHEMA, model="m", effort="low", max_budget="0.50")
     assert calls["n"] == 1
+
+
+def test_paid_ai_budget_stops_structured_retries(monkeypatch):
+    calls = []
+
+    def fake_invoke_once(prompt, *, schema, model, effort, max_budget):
+        calls.append(1)
+        raise ValueError("malformed")
+
+    monkeypatch.setattr(entrypoint, "_invoke_claude_once", fake_invoke_once)
+    budget_token = entrypoint._AI_CALL_BUDGET.set(1)
+    count_token = entrypoint._AI_CALL_COUNT.set(0)
+    try:
+        with pytest.raises(entrypoint.PaidAIBudgetExhausted, match="paid AI retry budget"):
+            entrypoint._invoke_claude("prompt", schema=_SCHEMA, model="m", effort="low", max_budget="0.50")
+    finally:
+        entrypoint._AI_CALL_COUNT.reset(count_token)
+        entrypoint._AI_CALL_BUDGET.reset(budget_token)
+    assert len(calls) == 1

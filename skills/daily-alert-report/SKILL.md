@@ -19,6 +19,11 @@ input. Use `analysis_reference` with the frozen `analysis_run_id`, or with
 an `incident_id` when no analysis exists. The application resolves all
 incident evidence and analysis content from the frozen snapshot.
 
+Include exactly one `incident_reference` for every incident in the input and
+one `analysis_reference` for every supplied `analysis_run_id`. Do not omit a
+lower-severity or already-recovered incident; ordering is yours, coverage is
+not.
+
 Never emit screenshots, bucket names, object keys, URLs, log filenames,
 copied incident metadata, or full analysis objects.
 

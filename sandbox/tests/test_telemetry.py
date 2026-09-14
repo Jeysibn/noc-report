@@ -36,6 +36,7 @@ def test_envelope_telemetry_extracts_known_fields():
         "output_tokens": 120,
         "cache_creation_tokens": 10,
         "cache_read_tokens": 0,
+        "total_model_input_tokens": 510,
     }
 
 

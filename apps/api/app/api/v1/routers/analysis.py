@@ -177,6 +177,7 @@ def _to_out(job: Job, run: AnalysisRun | None) -> AnalysisRunOut:
         used_cache=job.used_cache,
         cache_type=job.cache_type,
         input_tokens=run.input_tokens if run else None,
+        total_model_input_tokens=run.total_model_input_tokens if run else None,
         output_tokens=run.output_tokens if run else None,
         cache_creation_tokens=run.cache_creation_tokens if run else None,
         cache_read_tokens=run.cache_read_tokens if run else None,
@@ -245,7 +246,7 @@ def _sync_completed_job(db: Session, job: Job) -> AnalysisRun | None:
     except (ClientError, json.JSONDecodeError, ValueError):
         telemetry = {}
     for field in (
-        "input_tokens", "output_tokens", "cache_creation_tokens", "cache_read_tokens",
+        "input_tokens", "total_model_input_tokens", "output_tokens", "cache_creation_tokens", "cache_read_tokens",
         "duration_ms", "num_turns", "confidence", "escalation_reason",
         "raw_input_bytes", "evidence_bytes", "preprocessing_ratio",
         # AI cost-optimization mission Phase 2, Issue 4: cumulative

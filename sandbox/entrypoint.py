@@ -29,6 +29,7 @@ import pathlib
 import re
 import subprocess
 import sys
+from contextvars import ContextVar
 
 import yaml
 
@@ -37,6 +38,13 @@ SKILLS_DIR = pathlib.Path("/skills")
 PACKAGE_SKILLS_DIR = pathlib.Path(__file__).resolve().parents[1] / "skills"
 OUTPUT_DIR = pathlib.Path("/output")
 CLAUDE_BINARY = "/usr/local/bin/claude"
+
+_AI_CALL_BUDGET: ContextVar[int | None] = ContextVar("ai_call_budget", default=None)
+_AI_CALL_COUNT: ContextVar[int] = ContextVar("ai_call_count", default=0)
+
+
+class PaidAIBudgetExhausted(RuntimeError):
+    """The job-level paid Claude invocation budget has been consumed."""
 
 _SCHEMA_FILENAME = "output.schema.json"
 
@@ -467,6 +475,10 @@ def _invoke_claude(prompt: str, *, schema: dict, model: str, effort: str, max_bu
     is a distinct, immediate `RuntimeError`."""
     last_error: ValueError | None = None
     for attempt in range(2):
+        budget = _AI_CALL_BUDGET.get()
+        if budget is not None and _AI_CALL_COUNT.get() >= budget:
+            raise PaidAIBudgetExhausted("paid AI retry budget exhausted")
+        _AI_CALL_COUNT.set(_AI_CALL_COUNT.get() + 1)
         try:
             return _invoke_claude_once(prompt, schema=schema, model=model, effort=effort, max_budget=max_budget)
         except ValueError as exc:
@@ -640,18 +652,23 @@ def _envelope_telemetry(envelope: dict) -> dict:
     actually offers, pulled out by name so a missing/renamed field degrades
     to null rather than blowing up telemetry capture."""
     usage = envelope.get("usage") if isinstance(envelope.get("usage"), dict) else {}
+    input_tokens = usage.get("input_tokens")
+    cache_creation_tokens = usage.get("cache_creation_input_tokens")
+    cache_read_tokens = usage.get("cache_read_input_tokens")
+    token_parts = [value for value in (input_tokens, cache_creation_tokens, cache_read_tokens) if value is not None]
     return {
         "cost_usd": envelope.get("total_cost_usd"),
         "duration_ms": envelope.get("duration_ms"),
         "num_turns": envelope.get("num_turns"),
-        "input_tokens": usage.get("input_tokens"),
+        "input_tokens": input_tokens,
         "output_tokens": usage.get("output_tokens"),
-        "cache_creation_tokens": usage.get("cache_creation_input_tokens"),
-        "cache_read_tokens": usage.get("cache_read_input_tokens"),
+        "cache_creation_tokens": cache_creation_tokens,
+        "cache_read_tokens": cache_read_tokens,
+        "total_model_input_tokens": sum(token_parts) if token_parts else None,
     }
 
 
-def run_skill(input_text: str, skill_name: str) -> tuple[dict, dict]:
+def _run_skill_impl(input_text: str, skill_name: str) -> tuple[dict, dict]:
     """Returns (result, telemetry). `telemetry` is best-effort operational
     data about this run (Phase 1) — never allowed to fail the analysis
     itself; a missing sub-field is simply null."""
@@ -807,6 +824,9 @@ def run_skill(input_text: str, skill_name: str) -> tuple[dict, dict]:
             telemetry["cache_creation_tokens"] = _sum(
                 initial.get("cache_creation_tokens"), escalation.get("cache_creation_tokens")
             )
+            telemetry["total_model_input_tokens"] = _sum(
+                initial.get("total_model_input_tokens"), escalation.get("total_model_input_tokens")
+            )
             telemetry["duration_ms"] = _sum(initial.get("duration_ms"), escalation.get("duration_ms"))
             telemetry["cost_usd"] = _sum(initial.get("cost_usd"), escalation.get("cost_usd"))
             # num_turns is the escalated call's own turn count (turns
@@ -817,8 +837,29 @@ def run_skill(input_text: str, skill_name: str) -> tuple[dict, dict]:
             telemetry["num_turns"] = escalation.get("num_turns")
 
     telemetry["confidence"] = result.get("confidence")
+    telemetry["claude_calls"] = _AI_CALL_COUNT.get()
 
     return result, telemetry
+
+
+def run_skill(input_text: str, skill_name: str) -> tuple[dict, dict]:
+    """Run one skill under a job-level paid Claude call budget.
+
+    The bridge reserves the budget before launching the sandbox. RabbitMQ or
+    artifact retries therefore cannot reset it; a redelivery either reuses a
+    completed artifact or fails without purchasing another model call.
+    """
+    try:
+        budget = int(os.environ.get("SKILL_AI_CALL_BUDGET", "2"))
+    except ValueError as exc:
+        raise ValueError("SKILL_AI_CALL_BUDGET must be an integer") from exc
+    budget_token = _AI_CALL_BUDGET.set(max(0, budget))
+    count_token = _AI_CALL_COUNT.set(0)
+    try:
+        return _run_skill_impl(input_text, skill_name)
+    finally:
+        _AI_CALL_COUNT.reset(count_token)
+        _AI_CALL_BUDGET.reset(budget_token)
 
 
 def main() -> int:
