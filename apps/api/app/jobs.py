@@ -48,20 +48,22 @@ def enqueue_job(
     requested_by: uuid.UUID | None,
     incident_id: str | None,
     object_refs: list[dict],
-    model: str,
-    effort: str,
+    model: str | None,
+    effort: str | None,
     skill_name: str,
     skill_version: str,
+    skill_snapshot_id: uuid.UUID,
     skill_hash: str | None = None,
-    skill_snapshot_id: uuid.UUID | None = None,
+    ai_policy: dict | None = None,
 ) -> Job:
-    """`skill_hash` (Reliability mission Batch B — Skill Registry): pass
-    the content hash of the SkillSnapshot resolved via
-    `app/skills/registry.py::get_or_create_snapshot` at the call site.
-    Optional so existing callers/tests that haven't been updated still
-    work; a job enqueued without one just skips the bridge's drift check
-    (bridge/noc_bridge/skill_registry.py treats a missing hash as
-    "nothing to verify," not as a mismatch)."""
+    """Create an executable job stamped with its immutable SkillSnapshot.
+
+    `skill_hash` remains a useful integrity/display field, but the snapshot
+    foreign key is required for every application-created AI job. Direct
+    legacy publishing tools should use `build_job_message` until retired;
+    they do not create database Job rows.
+    """
+
     job = Job(
         job_type=job_type,
         status="QUEUED",
@@ -90,6 +92,7 @@ def enqueue_job(
         skill_version=skill_version,
         skill_hash=skill_hash,
         skill_snapshot_id=str(skill_snapshot_id) if skill_snapshot_id else None,
+        ai_policy=ai_policy,
         correlation_id=job.correlation_id,
     )
     names = queue_names(job_type)

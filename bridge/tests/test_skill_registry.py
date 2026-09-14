@@ -93,6 +93,42 @@ class _FakeConn:
         return _FakeCursor(self._row)
 
 
+class _GraphCursor:
+    def __init__(self, rows):
+        self._rows = rows
+        self._result = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+    def execute(self, query, params):
+        if "WHERE id" in query:
+            self._result = self._rows.get(("id", str(params[0])))
+        elif "WHERE content_hash" in query:
+            self._result = self._rows.get(("hash", params[0]))
+        else:
+            name = params[0]
+            version = params[1] if len(params) > 1 else None
+            matches = [row for row in self._rows.values() if row.get("skill_name") == name]
+            if version is not None:
+                matches = [row for row in matches if int(row["version_label"]) == int(version)]
+            self._result = max(matches, key=lambda row: int(row["version_label"])) if matches else None
+
+    def fetchone(self):
+        return dict(self._result) if self._result is not None else None
+
+
+class _GraphConn:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def cursor(self, cursor_factory=None):
+        return _GraphCursor(self._rows)
+
+
 _FAKE_SNAPSHOT_ROW = {
     "skill_name": "log-triage-summary",
     "version_label": "3",
@@ -162,6 +198,96 @@ def test_materialize_snapshot_grants_sandbox_uid_read_access(tmp_path):
     assert mode(skill_dir) == 0o705
     for filename in ("SKILL.md", "output.schema.json", "skill.yaml"):
         assert mode(skill_dir / filename) == 0o604
+
+
+def test_materialize_snapshot_recursively_freezes_transitive_dependencies(tmp_path):
+    rows = {}
+
+    def add(row):
+        rows[("id", row["id"])] = row
+        rows[("hash", row["content_hash"])] = row
+        rows[row["id"]] = row
+
+    add({
+        "id": "root-id",
+        "skill_name": "root-skill",
+        "version_label": "1",
+        "content_hash": "root-hash",
+        "skill_md": "root",
+        "output_schema_json": "{}",
+        "manifest_yaml": (
+            "name: root-skill\n"
+            "dependencies:\n"
+            "  - id: dependency-a\n"
+            "dependency_snapshot_ids:\n"
+            "  dependency-a: dependency-a-id\n"
+        ),
+        "dependency_snapshot_ids": {"dependency-a": "dependency-a-id"},
+    })
+    add({
+        "id": "dependency-a-id",
+        "skill_name": "dependency-a",
+        "version_label": "2",
+        "content_hash": "dependency-a-hash",
+        "skill_md": "dependency a",
+        "output_schema_json": "{}",
+        "manifest_yaml": "name: dependency-a\ndependencies:\n  - dependency-b\n",
+        "dependency_snapshot_ids": {"dependency-b": "dependency-b-id"},
+    })
+    add({
+        "id": "dependency-b-id",
+        "skill_name": "dependency-b",
+        "version_label": "3",
+        "content_hash": "dependency-b-hash",
+        "skill_md": "dependency b",
+        "output_schema_json": "{}",
+        "manifest_yaml": "name: dependency-b\ndependencies: []\n",
+        "dependency_snapshot_ids": {},
+    })
+
+    materialize_snapshot(
+        _GraphConn(rows), "root-skill", "root-hash", snapshot_id="root-id", dest_root=tmp_path
+    )
+
+    assert (tmp_path / "root-skill" / "SKILL.md").read_text() == "root"
+    assert (tmp_path / "dependency-a" / "SKILL.md").read_text() == "dependency a"
+    assert (tmp_path / "dependency-b" / "SKILL.md").read_text() == "dependency b"
+
+
+def test_materialize_snapshot_rejects_dependency_cycles(tmp_path):
+    rows = {}
+
+    def add(row):
+        rows[("id", row["id"])] = row
+        rows[("hash", row["content_hash"])] = row
+        rows[row["id"]] = row
+
+    add({
+        "id": "cycle-root",
+        "skill_name": "cycle-root",
+        "version_label": "1",
+        "content_hash": "cycle-root-hash",
+        "skill_md": "root",
+        "output_schema_json": "{}",
+        "manifest_yaml": "name: cycle-root\ndependencies:\n  - cycle-dep\n",
+        "dependency_snapshot_ids": {"cycle-dep": "cycle-dep-id"},
+    })
+    add({
+        "id": "cycle-dep-id",
+        "skill_name": "cycle-dep",
+        "version_label": "1",
+        "content_hash": "cycle-dep-hash",
+        "skill_md": "dep",
+        "output_schema_json": "{}",
+        "manifest_yaml": "name: cycle-dep\ndependencies:\n  - cycle-root\n",
+        "dependency_snapshot_ids": {"cycle-root": "cycle-root"},
+    })
+
+    with pytest.raises(SkillSnapshotMissing, match="cyclic skill dependency"):
+        materialize_snapshot(
+            _GraphConn(rows), "cycle-root", "cycle-root-hash",
+            snapshot_id="cycle-root", dest_root=tmp_path,
+        )
 
 
 def test_classify_failure_treats_missing_snapshot_as_terminal():

@@ -28,6 +28,12 @@ committed to the repo) so work can resume without re-deriving the plan.
 > Everything else below (Phases 0, 1, 4, 5, 6, 7, 9-13, and the benchmark
 > numbers) was re-checked against the current `main` and still holds.
 
+> **Phase 5 runtime note:** the historical cache and skill-version wording
+> below predates authoritative `SkillSnapshot` execution. Current jobs use
+> `skill_snapshot_id`/content hash as the immutable identity; the old
+> `skill_name` + `skill_version` descriptions are retained only as historical
+> implementation notes. See ADR 0011 for the current contract.
+
 ## Phase checklist
 
 - [x] Phase 0 — inspect current pipeline (see "Pipeline map" below)

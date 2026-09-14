@@ -112,6 +112,7 @@ class IncidentEvidence:
     reference to its attached log file, and any screenshots."""
 
     heading: str
+    incident_id: str | None = None
     metadata: tuple[Metadata, ...] = ()
     link: Link | None = None
     log_file: LogFileReference | None = None
@@ -125,7 +126,9 @@ class AnalysisReference:
 
     heading: str
     available: bool
+    analysis_run_id: str | None = None
     unavailable_text: str | None = None
+    children: tuple["Block", ...] = ()
     summary: BilingualText | None = None
     key_finds: BilingualFindList | None = None
     secondary_finds: BilingualFindList | None = None
@@ -143,6 +146,7 @@ Block = (
 class ReportDocument:
     title: str
     blocks: tuple[Block, ...] = field(default_factory=tuple)
+    metadata: tuple[Metadata, ...] = field(default_factory=tuple)
 
 
 def build_report_document(result: dict) -> ReportDocument:
@@ -151,37 +155,65 @@ def build_report_document(result: dict) -> ReportDocument:
     report section names. Skill-specific assemblers may still produce the
     typed IR directly, as the daily-report assembler does."""
     blocks = []
-    for raw in result.get("blocks", []):
+    raw_metadata = result.get("metadata") or {}
+    metadata = tuple(
+        Metadata(str(key), str(value))
+        for key, value in raw_metadata.items()
+        if key != "title" and value is not None
+    )
+    blocks.extend(_parse_blocks(result.get("blocks", [])))
+    return ReportDocument(
+        title=raw_metadata.get("title", "Report"),
+        blocks=tuple(blocks),
+        metadata=metadata,
+    )
+
+
+def _parse_blocks(raw_blocks: list[dict]) -> list[Block]:
+    parsed: list[Block] = []
+    for raw in raw_blocks:
         kind = raw.get("type")
         if kind == "heading":
-            blocks.append(Heading(raw["text"], int(raw.get("level", 1))))
+            parsed.append(Heading(raw["text"], int(raw.get("level", 1))))
         elif kind == "paragraph":
-            blocks.append(Paragraph(raw["text"], raw.get("style")))
+            parsed.append(Paragraph(raw["text"], raw.get("style")))
         elif kind == "bilingual_text":
-            blocks.append(BilingualText(raw.get("zh", ""), raw.get("en", ""), raw.get("heading_zh"), raw.get("heading_en")))
+            parsed.append(BilingualText(raw.get("zh", ""), raw.get("en", ""), raw.get("heading_zh"), raw.get("heading_en")))
         elif kind == "metadata":
-            blocks.append(Metadata(raw["label"], str(raw["value"])))
+            parsed.append(Metadata(raw["label"], str(raw["value"])))
         elif kind == "link":
-            blocks.append(Link(raw["label"], raw["url"]))
+            parsed.append(Link(raw["label"], raw["url"]))
         elif kind == "log_file_reference":
-            blocks.append(LogFileReference(raw["filename"]))
+            parsed.append(LogFileReference(raw["filename"]))
         elif kind == "screenshot":
-            blocks.append(Screenshot(raw["bucket"], raw["object_key"], raw.get("filename")))
+            parsed.append(Screenshot(raw["bucket"], raw["object_key"], raw.get("filename")))
         elif kind == "incident_evidence":
-            blocks.append(IncidentEvidence(
+            parsed.append(IncidentEvidence(
                 heading=raw["heading"],
+                incident_id=raw.get("incident_id"),
                 metadata=tuple(Metadata(str(item["label"]), str(item["value"])) for item in raw.get("metadata", [])),
                 link=Link(raw["link"]["label"], raw["link"]["url"]) if raw.get("link") else None,
                 log_file=LogFileReference(raw["log_file"]) if raw.get("log_file") else None,
                 screenshots=tuple(Screenshot(s["bucket"], s["object_key"], s.get("filename")) for s in raw.get("screenshots", [])),
             ))
         elif kind == "divider":
-            blocks.append(Divider())
+            parsed.append(Divider())
         elif kind == "page_break":
-            blocks.append(PageBreak())
+            parsed.append(PageBreak())
+        elif kind == "analysis_reference":
+            analysis_run_id = raw.get("analysis_run_id")
+            parsed.append(
+                AnalysisReference(
+                    heading=str(raw.get("label") or analysis_run_id or "Analysis"),
+                    available=bool(raw.get("available", True)),
+                    analysis_run_id=str(analysis_run_id) if analysis_run_id is not None else None,
+                    unavailable_text=raw.get("unavailable_text"),
+                    children=tuple(_parse_blocks(raw.get("blocks", []))),
+                )
+            )
         else:
             raise ValueError(f"unsupported ReportDocument block type: {kind!r}")
-    return ReportDocument(title=result.get("metadata", {}).get("title", "Report"), blocks=tuple(blocks))
+    return parsed
 
 
 def _find(entry: dict) -> Find:

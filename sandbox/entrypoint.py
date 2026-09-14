@@ -86,6 +86,51 @@ def _compact_incident_summaries(snapshot: dict) -> list[dict]:
 _MANIFEST_FILENAME = "skill.yaml"
 
 
+def _load_manifest(skill_name: str) -> dict:
+    manifest_path = SKILLS_DIR / skill_name / _MANIFEST_FILENAME
+    if not manifest_path.exists():
+        raise ValueError(f"no skill manifest found for skill {skill_name!r} at {manifest_path}")
+    manifest = yaml.safe_load(manifest_path.read_text()) or {}
+    if not isinstance(manifest, dict):
+        raise ValueError(f"skill {skill_name!r} manifest must be an object")
+    return manifest
+
+
+def _path_value(value: object, path: str) -> object:
+    """Read a dotted JSON path used by a manifest-owned projection."""
+    for part in path.split("."):
+        if not isinstance(value, dict):
+            return None
+        value = value.get(part)
+    return value
+
+
+def _project_snapshot(snapshot: dict, projection: dict) -> dict:
+    """Apply a declarative, skill-owned input projection.
+
+    The generic sandbox understands only JSON paths and collection shape;
+    which facts matter is declared by the selected skill manifest.
+    """
+    projected = {
+        output_name: _path_value(snapshot, source_path)
+        for output_name, source_path in (projection.get("fields") or {}).items()
+    }
+    for output_name, collection in (projection.get("collections") or {}).items():
+        source_path = collection.get("source")
+        source_items = _path_value(snapshot, source_path) if isinstance(source_path, str) else None
+        if not isinstance(source_items, list):
+            projected[output_name] = []
+            continue
+        projected[output_name] = [
+            {
+                field_name: _path_value(item, field_path)
+                for field_name, field_path in (collection.get("fields") or {}).items()
+            }
+            for item in source_items
+        ]
+    return projected
+
+
 def _load_input_contract(skill_name: str) -> tuple[str, str]:
     """Skill Runtime mission Phase 5: which /input file a skill reads, and
     the phrase introducing it in the prompt, now comes from the skill's
@@ -93,10 +138,7 @@ def _load_input_contract(skill_name: str) -> tuple[str, str]:
     in skill.yaml) instead of a second, hard-coded Python dict that used
     to duplicate — and could silently drift from — the same facts. A
     skill can change its input contract by editing skill.yaml alone."""
-    manifest_path = SKILLS_DIR / skill_name / _MANIFEST_FILENAME
-    if not manifest_path.exists():
-        raise ValueError(f"no skill manifest found for skill {skill_name!r} at {manifest_path}")
-    manifest = yaml.safe_load(manifest_path.read_text())
+    manifest = _load_manifest(skill_name)
     try:
         contract = manifest["input_contract"]
         return contract["filename"], contract["intro_text"]
@@ -621,6 +663,13 @@ def run_skill(input_text: str, skill_name: str) -> tuple[dict, dict]:
     schema = _load_output_schema(skill_name)
 
     _, intro = _load_input_contract(skill_name)
+    try:
+        manifest = _load_manifest(skill_name)
+    except ValueError:
+        # Direct unit callers may provide a synthetic skill directory and
+        # mock `_load_input_contract` without a manifest. The real `main()`
+        # path has already required one before invoking run_skill.
+        manifest = {}
     raw_input_bytes = len(input_text.encode("utf-8"))
     if skill_name == "log-triage-summary":
         if len(input_text) > MAX_LOG_CHARS:
@@ -632,15 +681,18 @@ def run_skill(input_text: str, skill_name: str) -> tuple[dict, dict]:
             appendix = _deterministic_stats_appendix(input_text)
             if appendix:
                 input_text = f"{input_text}\n\n{appendix}"
+    elif isinstance(manifest.get("input_projection"), dict):
+        try:
+            snapshot = json.loads(input_text)
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise ValueError(f"skill {skill_name!r} input projection requires JSON input") from exc
+        input_text = json.dumps(_project_snapshot(snapshot, manifest["input_projection"]), indent=2)
     elif skill_name == "daily-alert-report":
         # AI cost-optimization mission Phase 2, Issue 6: send Claude only
-        # the compact per-incident summaries (title/status/severity/main
-        # error/impact/time window), never the full snapshot (which
-        # carries each incident's entire analysis object, screenshots, and
-        # MinIO/Grafana references) — that data has no bearing on the
-        # shift-level overview or cross-incident correlation this skill
-        # now produces, and would just be Claude reproducing input it was
-        # never asked to change.
+        # the compact per-incident summaries for pre-projection snapshots.
+        # New snapshots declare this projection in skill.yaml, so the
+        # changing list of report facts is skill-owned rather than encoded
+        # in the generic sandbox.
         snapshot = json.loads(input_text)
         compact_snapshot = {
             "shift_starts_at": snapshot.get("shift_starts_at"),

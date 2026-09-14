@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -41,7 +43,7 @@ class Settings(BaseSettings):
     # app.outbox_worker` process ("external"). A real deployment running
     # its own dispatcher process should set this to "external" so it isn't
     # also racing an embedded copy inside every API replica.
-    outbox_mode: str = "embedded"
+    outbox_mode: Literal["embedded", "external"] = "embedded"
 
     # Milestone 17 gap follow-up ("limits"): evidence uploads go straight
     # from the browser to MinIO via a presigned PUT URL (§25), so there's

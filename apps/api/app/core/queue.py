@@ -76,8 +76,8 @@ def build_job_message(
     job_type: str,
     incident_id: str | None,
     object_refs: list[dict],
-    model: str,
-    effort: str,
+    model: str | None,
+    effort: str | None,
     skill_name: str,
     skill_version: str,
     correlation_id: str,
@@ -115,7 +115,10 @@ def build_job_message(
         "skill_hash": skill_hash,
         "skill_snapshot_id": str(skill_snapshot_id) if skill_snapshot_id else None,
         "expected_output_type": expected_output_type or f"{job_type}.result",
-        "ai_policy": ai_policy or {"model": model, "effort": effort},
+        "ai_policy": ai_policy if ai_policy is not None else {
+            key: value for key, value in {"model": model, "effort": effort}.items()
+            if value is not None
+        },
         "correlation_id": correlation_id,
         "attempt": attempt,
     }
@@ -184,8 +187,8 @@ def publish_job(
     job_type: str,
     incident_id: str | None,
     object_refs: list[dict],
-    model: str,
-    effort: str,
+    model: str | None,
+    effort: str | None,
     skill_name: str,
     skill_version: str,
     correlation_id: str,

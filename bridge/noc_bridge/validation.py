@@ -55,7 +55,7 @@ def validate_output(
     schema_path = skills_dir / skill_name / "output.schema.json"
     try:
         schema = json.loads(schema_path.read_text())
-    except FileNotFoundError as exc:
+    except (FileNotFoundError, OSError, json.JSONDecodeError) as exc:
         raise OutputValidationError(f"no output schema found for skill {skill_name!r} at {schema_path}") from exc
     validate_against_schema(output, schema, label=f"{job_type} output")
 

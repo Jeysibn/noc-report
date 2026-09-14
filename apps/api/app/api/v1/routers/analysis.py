@@ -27,7 +27,7 @@ from app.deps import require_permission
 from app.jobs import enqueue_job
 from app.models.models import AnalysisRun, Evidence, Incident, Job, User
 from app.skills.registry import resolve_active_snapshot
-from app.skills.runtime import declared_skill_version
+from app.skills.runtime import declared_skill_version, execution_policy, input_contract_version
 from app.schemas.schemas import AnalysisRequest, AnalysisRunOut
 
 router = APIRouter(tags=["analysis"])
@@ -45,16 +45,11 @@ SKILL_VERSION = str((yaml.safe_load(_SOURCE_MANIFEST.read_text()) or {}).get("ve
 # The manifest-declared version is descriptive; immutable snapshot identity
 # is the execution/cache identity. This avoids an unrelated hard-coded
 # version string diverging from the active skill.
-# The old SKILL_VERSION label conflated several independently-changing axes into
-# one number, so a change to any one of them (e.g. a preprocessing fix)
-# forced a version bump that also (correctly, but by accident) invalidated
-# unrelated cache entries, with no record of *why*. These are now tracked
-# separately and combined into CACHE_CONTRACT_VERSION, the actual value
-# stored on AnalysisRun.cache_contract_version and checked on cache lookup.
+# The old SKILL_VERSION label conflated independently-changing axes into one
+# number. Snapshot content now covers the skill-owned prompt/schema/manifest;
+# these constants cover only application-owned preprocessing and AI policy.
+# They are stored separately on AnalysisRun and combined for the cache query.
 # Bump the specific constant that actually changed:
-#   ANALYSIS_SCHEMA_VERSION  — sandbox/entrypoint.py's _ANALYSIS_SCHEMA
-#                              (the JSON Schema Claude's output is
-#                              validated against) changes shape/semantics.
 #   PREPROCESSOR_VERSION     — sandbox/entrypoint.py's log-compaction/
 #                              structured-evidence-extraction behavior
 #                              changes what evidence Claude actually sees
@@ -65,14 +60,11 @@ SKILL_VERSION = str((yaml.safe_load(_SOURCE_MANIFEST.read_text()) or {}).get("ve
 #                              model) in a way that could change what a
 #                              given input produces even with an unchanged
 #                              schema and preprocessor.
-# SKILL_VERSION is kept separately (it identifies the SKILL.md prose
-# itself — the actual instructions given to Claude — which is a fourth,
-# independent axis: prose can change without the output schema, the
-# preprocessor, or the model/effort policy changing at all).
-ANALYSIS_SCHEMA_VERSION = "1"
+# SKILL_VERSION remains a compatibility display alias for older API clients;
+# the immutable snapshot hash, not this label, selects execution or cache data.
 PREPROCESSOR_VERSION = "1"
 AI_POLICY_VERSION = "1"
-CACHE_CONTRACT_VERSION = f"{ANALYSIS_SCHEMA_VERSION}.{PREPROCESSOR_VERSION}.{AI_POLICY_VERSION}"
+CACHE_CONTRACT_VERSION = f"{PREPROCESSOR_VERSION}.{AI_POLICY_VERSION}"
 
 
 def _find_cached_analysis_run(
@@ -117,7 +109,6 @@ def _find_cached_analysis_run(
     if not log_evidence.sha256:
         return None
     filters = [
-        AnalysisRun.input_manifest_sha256 == log_evidence.sha256,
         AnalysisRun.skill_name == SKILL_NAME,
         AnalysisRun.skill_hash == skill_hash,
         AnalysisRun.cache_contract_version == CACHE_CONTRACT_VERSION,
@@ -138,6 +129,15 @@ def _snapshot_schema_hash(snapshot) -> str:
     return hashlib.sha256(snapshot.output_schema_json.encode("utf-8")).hexdigest()
 
 
+def _snapshot_runtime_provenance(snapshot) -> dict:
+    return {
+        "input_contract_version": input_contract_version(snapshot),
+        "preprocessor_version": PREPROCESSOR_VERSION,
+        "ai_policy_version": AI_POLICY_VERSION,
+        "ai_policy_json": execution_policy(snapshot),
+    }
+
+
 def _get_incident_or_404(db: Session, incident_id: uuid.UUID) -> Incident:
     incident = db.get(Incident, incident_id)
     if incident is None:
@@ -155,6 +155,12 @@ def _to_out(job: Job, run: AnalysisRun | None) -> AnalysisRunOut:
         skill_name=job.skill_name,
         skill_version=job.skill_version,
         skill_snapshot_id=run.skill_snapshot_id if run else None,
+        skill_hash=run.skill_hash if run else None,
+        schema_hash=run.schema_hash if run else None,
+        input_contract_version=run.input_contract_version if run else None,
+        preprocessor_version=run.preprocessor_version if run else None,
+        ai_policy_version=run.ai_policy_version if run else None,
+        ai_policy_json=run.ai_policy_json if run else None,
         attempt=job.attempt,
         error_code=job.error_code,
         error_message=job.error_message,
@@ -315,6 +321,7 @@ def request_analysis(
 
     if cached_run is not None:
         now = datetime.now(timezone.utc)
+        provenance = _snapshot_runtime_provenance(skill_snapshot)
         job = Job(
             job_type="log_triage",
             status="COMPLETED",
@@ -347,6 +354,7 @@ def request_analysis(
             skill_hash=skill_snapshot.content_hash,
             skill_snapshot_id=skill_snapshot.id,
             schema_hash=_snapshot_schema_hash(skill_snapshot),
+            **provenance,
             cache_contract_version=CACHE_CONTRACT_VERSION,
             input_manifest_sha256=log_evidence.sha256,
             output_sha256=cached_run.output_sha256,
@@ -386,6 +394,7 @@ def request_analysis(
         skill_version=declared_skill_version(skill_snapshot),
         skill_hash=skill_snapshot.content_hash,
         skill_snapshot_id=skill_snapshot.id,
+        ai_policy=execution_policy(skill_snapshot),
     )
 
     # §22.9: created immediately (not on completion) so input provenance
@@ -402,6 +411,7 @@ def request_analysis(
         skill_hash=job.skill_hash,
         skill_snapshot_id=skill_snapshot.id,
         schema_hash=_snapshot_schema_hash(skill_snapshot),
+        **_snapshot_runtime_provenance(skill_snapshot),
         cache_contract_version=CACHE_CONTRACT_VERSION,
         input_manifest_sha256=log_evidence.sha256,
         current=True,

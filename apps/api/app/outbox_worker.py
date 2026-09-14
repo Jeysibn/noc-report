@@ -8,9 +8,12 @@ an in-process background thread started from `app.main`'s lifespan (dev
 convenience, so `uvicorn app.main:app` alone is enough to see a job
 actually reach RabbitMQ without a second process running).
 
-Safe to run more than one instance of concurrently: `dispatch_pending_events`
-uses `SELECT ... FOR UPDATE SKIP LOCKED`, so two dispatchers never publish
-the same OutboxEvent twice.
+Multiple instances can run concurrently: `dispatch_pending_events` uses
+`SELECT ... FOR UPDATE SKIP LOCKED` and one-row transactions, so concurrent
+dispatchers do not claim the same row during normal operation. RabbitMQ is
+still at-least-once: a process crash after publish but before the commit can
+cause a duplicate, which consumers must tolerate through their existing
+idempotent job claim.
 """
 
 from __future__ import annotations

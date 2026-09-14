@@ -141,6 +141,7 @@ def test_report_snapshot_carries_per_incident_analysis_provenance(client, db_ses
         skill_name=analysis_router.SKILL_NAME,
         skill_version=analysis_router.SKILL_VERSION,
         skill_hash=active_snapshot.content_hash,
+        skill_snapshot_id=active_snapshot.id,
         correlation_id=str(_uuid.uuid4()),
         completed_at=datetime.now(timezone.utc),
     )

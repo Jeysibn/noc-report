@@ -36,8 +36,8 @@
         "additionalProperties": true
       }
     },
-    "model": { "type": "string", "minLength": 1 },
-    "effort": { "type": "string", "minLength": 1 },
+    "model": { "type": ["string", "null"], "minLength": 1 },
+    "effort": { "type": ["string", "null"], "minLength": 1 },
     "skill_name": { "type": "string", "minLength": 1 },
     "skill_version": { "type": "string", "minLength": 1 },
     "skill_hash": { "type": ["string", "null"] },

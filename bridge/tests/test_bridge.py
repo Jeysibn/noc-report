@@ -63,14 +63,63 @@ def mq_channel():
     connection.close()
 
 
-def _insert_job_row(pg_conn, job_id: uuid.UUID, job_type: str) -> None:
+_SKILL_NAME_BY_JOB_TYPE = {
+    "log_triage": "log-triage-summary",
+    "daily_report": "daily-alert-report",
+}
+
+
+def _ensure_test_snapshot(pg_conn, skill_name: str) -> tuple[str, str]:
+    from noc_bridge.skill_registry import compute_skill_hash
+
+    content_hash = compute_skill_hash(skill_name, skills_dir=SKILLS_DIR)
     with pg_conn.cursor() as cur:
         cur.execute(
-            "INSERT INTO jobs (id, job_type, status, attempt, correlation_id) "
-            "VALUES (%s, %s, %s, %s, %s)",
-            (str(job_id), job_type, "QUEUED", 1, str(uuid.uuid4())),
+            "SELECT id, content_hash FROM skill_snapshots WHERE content_hash = %s",
+            (content_hash,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            skill_dir = SKILLS_DIR / skill_name
+            cur.execute(
+                "INSERT INTO skill_snapshots "
+                "(id, skill_name, version_label, content_hash, skill_md, "
+                "output_schema_json, manifest_yaml, dependency_snapshot_ids, is_active) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id, content_hash",
+                (
+                    str(uuid.uuid4()),
+                    skill_name,
+                    1,
+                    content_hash,
+                    (skill_dir / "SKILL.md").read_text(),
+                    (skill_dir / "output.schema.json").read_text(),
+                    (skill_dir / "skill.yaml").read_text(),
+                    "{}",
+                    True,
+                ),
+            )
+            row = cur.fetchone()
+    return str(row[0]), row[1]
+
+
+def _insert_job_row(pg_conn, job_id: uuid.UUID, job_type: str) -> tuple[str, str]:
+    skill_name = _SKILL_NAME_BY_JOB_TYPE[job_type]
+    if job_type == "daily_report":
+        _ensure_test_snapshot(pg_conn, "log-triage-summary")
+    snapshot_id, content_hash = _ensure_test_snapshot(pg_conn, skill_name)
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO jobs "
+            "(id, job_type, status, attempt, correlation_id, skill_name, "
+            "skill_version, skill_hash, skill_snapshot_id) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (
+                str(job_id), job_type, "QUEUED", 1, str(uuid.uuid4()),
+                skill_name, "1", content_hash, snapshot_id,
+            ),
         )
     pg_conn.commit()
+    return snapshot_id, content_hash
 
 
 def _delete_job_row(pg_conn, job_id: uuid.UUID) -> None:
@@ -303,7 +352,7 @@ def test_handle_delivery_routes_a_malformed_message_to_dlq_without_crashing(pg_c
 )
 def test_end_to_end_log_triage_job(pg_conn, minio_client, mq_channel):
     job_id = uuid.uuid4()
-    _insert_job_row(pg_conn, job_id, "log_triage")
+    snapshot_id, skill_hash = _insert_job_row(pg_conn, job_id, "log_triage")
 
     bucket = SETTINGS.minio_bucket_evidence
     key = f"jobs-test/{job_id}/log.txt"
@@ -324,6 +373,8 @@ def test_end_to_end_log_triage_job(pg_conn, minio_client, mq_channel):
         "effort": "medium",
         "skill_name": "log-triage-summary",
         "skill_version": "1",
+        "skill_hash": skill_hash,
+        "skill_snapshot_id": snapshot_id,
         "correlation_id": str(uuid.uuid4()),
         "attempt": 1,
     }
@@ -406,7 +457,7 @@ def test_end_to_end_unsupported_job_type_goes_to_dlq(pg_conn, minio_client, mq_c
     )
 
     job_id = uuid.uuid4()
-    _insert_job_row(pg_conn, job_id, "log_triage")
+    snapshot_id, skill_hash = _insert_job_row(pg_conn, job_id, "log_triage")
 
     payload = {
         "job_id": str(job_id),
@@ -415,9 +466,10 @@ def test_end_to_end_unsupported_job_type_goes_to_dlq(pg_conn, minio_client, mq_c
         "object_refs": [],
         "model": "claude-sonnet-5",
         "effort": "high",
-        "skill_name": "not-a-real-skill",
+        "skill_name": "log-triage-summary",
         "skill_version": "1",
-        "skill_hash": None,
+        "skill_hash": skill_hash,
+        "skill_snapshot_id": snapshot_id,
         "correlation_id": str(uuid.uuid4()),
         "attempt": 1,
     }
@@ -464,7 +516,7 @@ def test_end_to_end_unsupported_job_type_goes_to_dlq(pg_conn, minio_client, mq_c
 )
 def test_end_to_end_daily_report_job(pg_conn, minio_client, mq_channel):
     job_id = uuid.uuid4()
-    _insert_job_row(pg_conn, job_id, "daily_report")
+    snapshot_id, skill_hash = _insert_job_row(pg_conn, job_id, "daily_report")
 
     bucket = SETTINGS.minio_bucket_reports
     key = f"jobs-test/{job_id}/snapshot.json"
@@ -508,6 +560,8 @@ def test_end_to_end_daily_report_job(pg_conn, minio_client, mq_channel):
         "effort": "medium",
         "skill_name": "daily-alert-report",
         "skill_version": "1",
+        "skill_hash": skill_hash,
+        "skill_snapshot_id": snapshot_id,
         "correlation_id": str(uuid.uuid4()),
         "attempt": 1,
     }

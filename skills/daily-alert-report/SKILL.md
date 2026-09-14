@@ -5,41 +5,32 @@ description: Produce the cross-incident, shift-level narrative for a daily alert
 
 # Daily Alert Report
 
-AI cost-optimization mission Phase 2, Issue 6: this skill no longer
-receives (or reproduces) each incident's full log-triage-summary analysis,
-screenshots, MinIO references, or Grafana/log-filename metadata — none of
-that is reasoning-dependent, so Python assembles it deterministically
-after this call (see `apps/api/app/api/v1/routers/reports.py`'s
-`_build_snapshot` and `bridge/noc_bridge/service.py`'s daily-report merge
-step). You only ever see a **compact** per-incident summary: `display_id`,
-`title`, `status`, `severity_signal`, `main_error` (the analysis's
-`likely_cause_en`, one line), `impact` (the analysis's `summary_en`, one
-line), `starts_at`, `ends_at`. An incident with no analysis yet is
-included with `severity_signal`/`main_error`/`impact` set to `null`.
+The frozen input contains the shift window and projected incident facts.
+Use those facts to write the report's semantic structure. The result is a
+`ReportDocument` contract: section order and wording belong to this skill;
+the bridge only renders the typed blocks into DOCX.
 
-Given the shift's `shift_starts_at`/`shift_ends_at` and this list of
-compact incident summaries, produce **only**:
+Create metadata with:
 
-- `overview_en` / `overview_zh` — one paragraph each, plain language,
-  summarizing the shift as a whole (incident count, overall severity mix).
-- `cross_incident_findings_en` / `cross_incident_findings_zh` — one
-  paragraph each identifying any real correlation, recurring pattern, or
-  shared root cause **across multiple incidents** in this shift (e.g. the
-  same downstream dependency failing in three unrelated services). If
-  there is no real cross-incident correlation, say so plainly (e.g. "No
-  cross-incident correlation was found; these incidents appear
-  unrelated.") in both languages — do not invent a connection that isn't
-  actually there.
+- `title`: `Daily Alert Report — <shift start> to <shift end>`
+- `date`: the shift date
+- `shift`: the shift time window
 
-Do not restate each incident's own analysis (you were not given it in
-full, and it is merged back in deterministically afterward) — this output
-is reasoning that only makes sense across incidents, not a per-incident
-report.
+Create blocks in this order:
 
-Output must be valid JSON matching this shape exactly — no prose outside
-the JSON object: `{overview_en, overview_zh, cross_incident_findings_en,
-cross_incident_findings_zh}`. This is the schema the Claude Bridge
-validates before deterministically merging it with the frozen shift
-snapshot's incident metadata, converting the merged result to a DOCX
-file, and uploading it to MinIO/Postgres (master plan §29, Daily Report
-Job Contract).
+1. `heading`: `Alerts`
+2. One `incident_evidence` block per incident. Copy its `incident_id`, title,
+   status, Grafana URL, log filename, and screenshot references exactly from
+   the input. Do not invent or remove evidence references.
+3. `heading`: `General Summary`, followed by one `bilingual_text` block
+   summarizing the shift as a whole.
+4. `heading`: `Cross-Incident Findings`, followed by one `bilingual_text`
+   block identifying real correlations across incidents. If none exists, say
+   so plainly in both languages.
+5. `heading`: `Log Analysis`, followed by one `analysis_reference` block per
+   incident. Copy the analysis run ID exactly. If analysis is unavailable,
+   set `available` to false. Otherwise use nested bilingual text and
+   paragraphs for the available summary, findings, likely cause, and action.
+
+For bilingual text, provide both `zh` and `en`. Keep Chinese before English.
+Return JSON only. Every block must match `output.schema.json`.

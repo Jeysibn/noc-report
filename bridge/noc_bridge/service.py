@@ -363,55 +363,36 @@ class BridgeService:
             except (OSError, yaml.YAMLError) as exc:
                 raise RuntimeError(f"could not load renderer profile for {skill_name}: {exc}") from exc
 
-            if job_type == "daily_report" and renderer_profile == "report-document-v1":
-                # A report skill may return a completely different semantic
-                # layout.  Its result is translated to the generic IR and
-                # rendered by the same adapter; no report field names belong
-                # in this worker branch.
-                docx_path = output_dir / "report.docx"
-                render_document(build_report_document(result.output), docx_path)
-                upload_artifact(
-                    minio_client,
-                    bucket=self.settings.minio_bucket_reports,
-                    object_key=f"reports/{job_id}/report.docx",
-                    src_path=docx_path,
-                )
-            elif job_type == "daily_report" and renderer_profile == "daily_report_docx":
-                # AI cost-optimization mission Phase 2, Issue 6: Claude
-                # only ever saw/produced the compact 4-field output
-                # validated above. Everything else in the final report —
-                # title, per-incident sections (status/grafana_url/
-                # log_filename/screenshots/existing analysis) — is carried
-                # through verbatim from the frozen snapshot this bridge
-                # already downloaded to input_dir before invoking the
-                # sandbox, never regenerated or round-tripped through
-                # Claude. This is the deterministic-assembly step the
-                # mission requires: "Deterministic code computes facts.
-                # Claude interprets evidence."
-                snapshot = json.loads((input_dir / "snapshot.json").read_text())
-                result.output = _merge_daily_report(snapshot, result.output)
-                validate_merged_daily_report(result.output)
-
-            # §27 step 14: upload the validated result. log_triage's
-            # result *is* the artifact (raw JSON, into
-            # noc-job-artifacts); daily_report's validated JSON gets
-            # rendered to DOCX first (master plan §29: "... ->
-            # daily-alert-report -> DOCX -> MinIO -> UI download") and
-            # that DOCX is the artifact, uploaded into noc-reports at the
-            # deterministic key app/api/v1/routers/reports.py polls for.
+            # §27 step 14: select exactly one artifact path from the
+            # snapshot's renderer profile.  A declarative ReportDocument
+            # result must not fall through to the legacy daily-report
+            # assembler after it has already been accepted by the generic
+            # schema and adapter.
             if job_type == "daily_report":
                 docx_path = output_dir / "report.docx"
+                if renderer_profile == "report-document-v1":
+                    render_document(build_report_document(result.output), docx_path)
+                elif renderer_profile == "daily_report_docx":
+                    # The current daily-report skill returns a compact
+                    # AI-owned shape. Deterministic incident data is merged
+                    # by its compatibility assembler before rendering.
+                    snapshot = json.loads((input_dir / "snapshot.json").read_text())
+                    result.output = _merge_daily_report(snapshot, result.output)
+                    validate_merged_daily_report(result.output)
 
-                def _fetch_screenshot(bucket: str, object_key: str, _client=minio_client) -> bytes | None:
-                    try:
-                        buf = io.BytesIO()
-                        _client.download_fileobj(bucket, object_key, buf)
-                        return buf.getvalue()
-                    except Exception:
-                        logger.warning("could not fetch screenshot %s/%s for report", bucket, object_key)
-                        return None
+                    def _fetch_screenshot(bucket: str, object_key: str, _client=minio_client) -> bytes | None:
+                        try:
+                            buf = io.BytesIO()
+                            _client.download_fileobj(bucket, object_key, buf)
+                            return buf.getvalue()
+                        except Exception:
+                            logger.warning("could not fetch screenshot %s/%s for report", bucket, object_key)
+                            return None
 
-                render_daily_report_docx(result.output, docx_path, screenshot_fetcher=_fetch_screenshot)
+                    render_daily_report_docx(result.output, docx_path, screenshot_fetcher=_fetch_screenshot)
+                else:
+                    raise RuntimeError(f"unsupported renderer profile: {renderer_profile!r}")
+
                 object_key = f"reports/{job_id}/report.docx"
                 upload_artifact(
                     minio_client,
@@ -419,8 +400,6 @@ class BridgeService:
                     object_key=object_key,
                     src_path=docx_path,
                 )
-            elif job_type == "daily_report":
-                raise RuntimeError(f"unsupported renderer profile: {renderer_profile!r}")
             else:
                 result_path = output_dir / "result.json"
                 object_key = f"jobs/{job_id}/result.json"
@@ -474,6 +453,11 @@ class BridgeService:
             send_to_dlq(channel, job_type=job_type, body=payload)
             channel.basic_ack(delivery_tag=method.delivery_tag)
             return
+        if payload.get("job_type") != job_type:
+            logger.error("job message type %r arrived on %r queue", payload.get("job_type"), job_type)
+            send_to_dlq(channel, job_type=job_type, body=payload)
+            channel.basic_ack(delivery_tag=method.delivery_tag)
+            return
 
         job_id = payload["job_id"]
         job_uuid = uuid.UUID(job_id)
@@ -498,6 +482,16 @@ class BridgeService:
         # transit or by an operator; never execute a different snapshot.
         if existing.get("skill_snapshot_id") is not None and payload.get("skill_snapshot_id") != str(existing["skill_snapshot_id"]):
             logger.error("job %s snapshot reference does not match its database row", job_id)
+            send_to_dlq(channel, job_type=job_type, body=payload)
+            channel.basic_ack(delivery_tag=method.delivery_tag)
+            return
+        if existing.get("skill_snapshot_id") is None and payload.get("skill_snapshot_id") is not None:
+            logger.error("job %s message adds a snapshot reference absent from its database row", job_id)
+            send_to_dlq(channel, job_type=job_type, body=payload)
+            channel.basic_ack(delivery_tag=method.delivery_tag)
+            return
+        if existing.get("skill_hash") is not None and payload.get("skill_hash") != existing["skill_hash"]:
+            logger.error("job %s skill hash does not match its database row", job_id)
             send_to_dlq(channel, job_type=job_type, body=payload)
             channel.basic_ack(delivery_tag=method.delivery_tag)
             return
