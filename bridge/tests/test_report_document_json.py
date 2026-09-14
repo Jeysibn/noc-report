@@ -54,7 +54,10 @@ def test_screenshot_blocks_are_referenced_by_index_never_by_bucket_or_key():
     assert "noc-evidence" not in dumped
     assert "inc-001.png" not in dumped  # object_key never leaks into the browser payload
 
-    assert screenshot_index == [{"bucket": "noc-evidence", "object_key": "inc-001.png", "filename": "alert.png"}]
+    assert screenshot_index == [
+        {"bucket": "noc-evidence", "object_key": "inc-001.png", "filename": "alert.png"},
+        {"bucket": "noc-evidence", "object_key": "inc-001.png", "filename": "alert.png"},
+    ]
 
     def _find_screenshot_block(blocks):
         for block in blocks:

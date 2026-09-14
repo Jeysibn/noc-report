@@ -63,11 +63,12 @@ def bump_attempt(conn, job_id: uuid.UUID, attempt: int) -> None:
 def reserve_paid_ai_calls(conn, job_id: uuid.UUID, *, requested: int = 4) -> int:
     """Atomically reserve the remaining paid-call permits for one Job.
 
-    Reservation is intentionally conservative: unused permits are not
-    returned after a sandbox exits. That makes a worker crash or RabbitMQ
-    redelivery unable to buy another Claude budget. Artifact reconciliation
-    still bypasses this function entirely after Claude has already produced
-    the deterministic artifact.
+    ``paid_ai_calls_reserved`` is a crash fence: it prevents a second worker
+    from buying another budget while the first sandbox may still be running.
+    ``paid_ai_calls_used`` is the durable accounting value. A completed
+    sandbox releases unused reservations through ``record_paid_ai_calls``;
+    an abandoned sandbox leaves its reservation in place and cannot be
+    retried into an unbounded paid-call loop.
     """
     with conn.cursor() as cur:
         cur.execute(
@@ -78,13 +79,29 @@ def reserve_paid_ai_calls(conn, job_id: uuid.UUID, *, requested: int = 4) -> int
             )
             WHERE id = %(job_id)s
               AND paid_ai_calls_reserved < paid_ai_call_budget
-            RETURNING paid_ai_calls_reserved
+            RETURNING paid_ai_call_budget - paid_ai_calls_used
             """,
             {"requested": requested, "job_id": str(job_id)},
         )
         row = cur.fetchone()
     conn.commit()
     return int(row[0]) if row else 0
+
+
+def record_paid_ai_calls(conn, job_id: uuid.UUID, calls: int) -> None:
+    """Persist actual Claude calls and release unused crash-fence permits."""
+    calls = max(0, int(calls))
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE jobs
+            SET paid_ai_calls_used = LEAST(paid_ai_call_budget, GREATEST(paid_ai_calls_used, %(calls)s)),
+                paid_ai_calls_reserved = LEAST(paid_ai_call_budget, GREATEST(paid_ai_calls_used, %(calls)s))
+            WHERE id = %(job_id)s
+            """,
+            {"calls": calls, "job_id": str(job_id)},
+        )
+    conn.commit()
 
 
 def fetch_job_row(conn, job_id: uuid.UUID) -> dict | None:

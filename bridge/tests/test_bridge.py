@@ -163,15 +163,19 @@ def test_claim_lease_covers_configured_job_timeout_plus_safety_margin(pg_conn):
         _delete_job_row(pg_conn, job_id)
 
 
-def test_paid_ai_call_budget_is_reserved_once_per_job(pg_conn):
+def test_paid_ai_call_budget_tracks_actual_calls_and_retry_remainder(pg_conn):
     job_id = uuid.uuid4()
     _insert_job_row(pg_conn, job_id, "log_triage")
     try:
         assert db.reserve_paid_ai_calls(pg_conn, job_id, requested=4) == 4
-        assert db.reserve_paid_ai_calls(pg_conn, job_id, requested=4) == 0
+        # A normally completed sandbox reports the one Claude call it used;
+        # the next infrastructure attempt receives only the remainder.
+        db.record_paid_ai_calls(pg_conn, job_id, 1)
+        assert db.reserve_paid_ai_calls(pg_conn, job_id, requested=4) == 3
         row = db.fetch_job_row(pg_conn, job_id)
         assert row["paid_ai_call_budget"] == 4
         assert row["paid_ai_calls_reserved"] == 4
+        assert row["paid_ai_calls_used"] == 1
     finally:
         _delete_job_row(pg_conn, job_id)
 

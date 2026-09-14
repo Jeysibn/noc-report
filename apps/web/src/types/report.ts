@@ -35,12 +35,15 @@ export interface ReportMetadataItem {
 export interface ReportLink {
   type: "link";
   label: string;
+  prefix: string | null;
   url: string;
+  text: string | null;
 }
 
 export interface ReportLogFileReference {
   type: "log_file_reference";
   filename: string;
+  url: string | null;
 }
 
 export interface ReportScreenshotRef {
@@ -105,10 +108,13 @@ export interface ReportAnalysisReference {
   type: "analysis_reference";
   heading: string;
   available: boolean;
+  incident_id: string | null;
   analysis_run_id: string | null;
   unavailable_text: string | null;
   metadata: ReportMetadataItem[];
   children: ReportBlock[];
+  screenshots: ReportScreenshotRef[];
+  log_file: ReportLogFileReference | null;
   summary: ReportBilingualText | null;
   key_finds: ReportBilingualFindList | null;
   secondary_finds: ReportBilingualFindList | null;

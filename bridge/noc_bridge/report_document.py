@@ -27,7 +27,7 @@ logic at all.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 
 @dataclass(frozen=True)
@@ -64,11 +64,14 @@ class Metadata:
 class Link:
     label: str
     url: str
+    text: str | None = None
+    prefix: str | None = None
 
 
 @dataclass(frozen=True)
 class LogFileReference:
     filename: str
+    url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -127,10 +130,13 @@ class AnalysisReference:
 
     heading: str
     available: bool
+    incident_id: str | None = None
     analysis_run_id: str | None = None
     unavailable_text: str | None = None
     metadata: tuple[Metadata, ...] = ()
     children: tuple["Block", ...] = ()
+    screenshots: tuple[Screenshot, ...] = ()
+    log_file: LogFileReference | None = None
     summary: BilingualText | None = None
     key_finds: BilingualFindList | None = None
     secondary_finds: BilingualFindList | None = None
@@ -184,9 +190,9 @@ def _parse_blocks(raw_blocks: list[dict]) -> list[Block]:
         elif kind == "metadata":
             parsed.append(Metadata(raw["label"], str(raw["value"])))
         elif kind == "link":
-            parsed.append(Link(raw["label"], raw["url"]))
+            parsed.append(Link(raw["label"], raw["url"], raw.get("text"), raw.get("prefix")))
         elif kind == "log_file_reference":
-            parsed.append(LogFileReference(raw["filename"]))
+            parsed.append(LogFileReference(raw["filename"], raw.get("url")))
         elif kind == "screenshot":
             parsed.append(Screenshot(raw["bucket"], raw["object_key"], raw.get("filename")))
         elif kind == "incident_evidence":
@@ -194,9 +200,22 @@ def _parse_blocks(raw_blocks: list[dict]) -> list[Block]:
                 heading=raw["heading"],
                 incident_id=raw.get("incident_id"),
                 metadata=tuple(Metadata(str(item["label"]), str(item["value"])) for item in raw.get("metadata", [])),
-                link=Link(raw["link"]["label"], raw["link"]["url"]) if raw.get("link") else None,
-                links=tuple(Link(item["label"], item["url"]) for item in raw.get("links", [])),
-                log_file=LogFileReference(raw["log_file"]) if raw.get("log_file") else None,
+                link=(
+                    Link(
+                        raw["link"]["label"], raw["link"]["url"],
+                        raw["link"].get("text"), raw["link"].get("prefix"),
+                    )
+                    if raw.get("link") else None
+                ),
+                links=tuple(
+                    Link(item["label"], item["url"], item.get("text"), item.get("prefix"))
+                    for item in raw.get("links", [])
+                ),
+                log_file=(
+                    LogFileReference(raw["log_file"]["filename"], raw["log_file"].get("url"))
+                    if isinstance(raw.get("log_file"), dict)
+                    else None
+                ),
                 screenshots=tuple(Screenshot(s["bucket"], s["object_key"], s.get("filename")) for s in raw.get("screenshots", [])),
             ))
         elif kind == "divider":
@@ -209,10 +228,20 @@ def _parse_blocks(raw_blocks: list[dict]) -> list[Block]:
                 AnalysisReference(
                     heading=str(raw.get("label") or analysis_run_id or "Analysis"),
                     available=bool(raw.get("available", True)),
+                    incident_id=str(raw["incident_id"]) if raw.get("incident_id") is not None else None,
                     analysis_run_id=str(analysis_run_id) if analysis_run_id is not None else None,
                     unavailable_text=raw.get("unavailable_text"),
                     metadata=tuple(Metadata(str(item["label"]), str(item["value"])) for item in raw.get("metadata", [])),
                     children=tuple(_parse_blocks(raw.get("blocks", []))),
+                    screenshots=tuple(
+                        Screenshot(s["bucket"], s["object_key"], s.get("filename"))
+                        for s in raw.get("screenshots", [])
+                    ),
+                    log_file=(
+                        LogFileReference(raw["log_file"]["filename"], raw["log_file"].get("url"))
+                        if isinstance(raw.get("log_file"), dict)
+                        else None
+                    ),
                 )
             )
         else:
@@ -273,6 +302,16 @@ def _analysis_reference(section: dict) -> AnalysisReference:
     return AnalysisReference(
         heading=heading,
         available=True,
+        incident_id=section.get("incident_id"),
+        screenshots=tuple(
+            Screenshot(s["bucket"], s["object_key"], s.get("filename"))
+            for s in (section.get("screenshots") or [])
+        ),
+        log_file=(
+            LogFileReference(section["log_filename"], section.get("log_file_url"))
+            if section.get("log_filename")
+            else None
+        ),
         summary=BilingualText(
             text_zh=analysis.get("summary_zh") or "",
             text_en=analysis.get("summary_en") or "",
@@ -313,7 +352,11 @@ def build_daily_report_document(result: dict) -> ReportDocument:
         blocks.append(Paragraph("No incidents in this shift."))
     for i, section in enumerate(sections, start=1):
         metadata = (Metadata("Incident", section["incident_display_id"]), Metadata("Status", section["status"]))
-        link = Link("Grafana Link", section["grafana_url"]) if section.get("grafana_url") else None
+        link = (
+            Link("Grafana", section["grafana_url"], text="Grafana", prefix="Grafana Link")
+            if section.get("grafana_url")
+            else None
+        )
         log_file = LogFileReference(section["log_filename"]) if section.get("log_filename") else None
         screenshots = tuple(
             Screenshot(bucket=s["bucket"], object_key=s["object_key"], filename=s.get("filename"))
@@ -329,6 +372,7 @@ def build_daily_report_document(result: dict) -> ReportDocument:
             )
         )
 
+    blocks.append(PageBreak())
     blocks.append(Heading("General Summary", level=1))
     blocks.append(
         BilingualText(
@@ -340,7 +384,7 @@ def build_daily_report_document(result: dict) -> ReportDocument:
     )
 
     if result.get("cross_incident_findings_en") or result.get("cross_incident_findings_zh"):
-        blocks.append(Heading("Cross-Incident Findings", level=1))
+        blocks.append(Heading("Cross-Incident Findings", level=3))
         blocks.append(
             BilingualText(
                 text_zh=result.get("cross_incident_findings_zh") or "",
@@ -350,8 +394,11 @@ def build_daily_report_document(result: dict) -> ReportDocument:
             )
         )
 
+    blocks.append(PageBreak())
     blocks.append(Heading("Log Analysis", level=1))
-    for section in sections:
-        blocks.append(_analysis_reference(section))
+    for i, section in enumerate(sections, start=1):
+        analysis_block = _analysis_reference({**section, "incident_id": section.get("incident_id")})
+        analysis_block = replace(analysis_block, heading=f"Alert #{i} - {section['title']}")
+        blocks.append(analysis_block)
 
     return ReportDocument(title=result["title"], blocks=tuple(blocks))

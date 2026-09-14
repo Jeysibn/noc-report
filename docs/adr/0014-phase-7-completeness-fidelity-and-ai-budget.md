@@ -24,12 +24,18 @@ failure to retrieve a declared object is retryable for transient storage
 errors and terminal for permanent loss/corruption. The DOCX renderer never
 turns either into a successful silent omission.
 
+Phase 8 deepens this contract with the `noc-daily-report-v1` composition
+profile: Alert and Log Analysis numbering/order come from the frozen snapshot,
+Alerts flow across any number of pages, and each analysis block repeats its
+trusted screenshot and exact frozen log filename.
+
 Each Job has a persisted paid Claude-call budget separate from infrastructure
 attempts. The bridge atomically reserves the budget before sandbox launch,
-passes it into the sandbox, and the sandbox counts structured-output and
-escalation calls in one bounded context. Artifact reconciliation avoids a new
-Claude call after a downstream finalization failure whenever the artifact is
-already durable.
+passes it into the sandbox, persists actual calls separately from the
+reservation fence, and the sandbox counts structured-output and escalation
+calls in one bounded context. Artifact reconciliation avoids a new Claude call
+after a downstream finalization failure whenever the durable ReportPlan or
+final artifact is already available.
 
 ## Consequences
 

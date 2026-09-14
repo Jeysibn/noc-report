@@ -289,6 +289,7 @@ class Job(Base):
     # one bounded LOW->MEDIUM escalation (which can itself use two tries).
     paid_ai_call_budget: Mapped[int] = mapped_column(Integer, nullable=False, default=4)
     paid_ai_calls_reserved: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    paid_ai_calls_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     # Reliability mission Batch A (idempotent job lifecycle): a claim/lease
     # so the bridge can tell "am I the one allowed to execute this job right

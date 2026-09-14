@@ -133,7 +133,10 @@ def main() -> None:
     rows = []
     for count in fixtures:
         snapshot = _fixture(count)
-        for name, prompt, schema in (("compact-legacy", _legacy_prompt(snapshot), COMPACT_SCHEMA), ("full-report-document", _full_prompt(snapshot), FULL_SCHEMA)):
+        for name, prompt, schema in (
+            ("A-historical-compact", _legacy_prompt(snapshot), COMPACT_SCHEMA),
+            ("B-full-ai-report-document", _full_prompt(snapshot), FULL_SCHEMA),
+        ):
             started = time.monotonic()
             result, envelope = entrypoint._invoke_claude(prompt, schema=schema, model="claude-sonnet-5", effort="low", max_budget="0.50")
             telemetry = entrypoint._envelope_telemetry(envelope)
@@ -161,7 +164,7 @@ def main() -> None:
             }
         except Exception as exc:  # pragma: no cover - live/manual benchmark
             quality = {"reference_correctness": False, "screenshot_correctness": False, "analysis_integrity": False, "incident_completeness": False, "analysis_completeness": False, "screenshot_completeness": False, "final_docx_bytes": None, "composition_error": str(exc)}
-        rows.append(_row("report-plan", plan, telemetry, plan_prompt, bool(plan.get("blocks")), incidents=count, report_plan_bytes=len(json.dumps(plan).encode()), **quality))
+        rows.append(_row("C-report-plan-deterministic-composition", plan, telemetry, plan_prompt, bool(plan.get("blocks")), incidents=count, report_plan_bytes=len(json.dumps(plan).encode()), **quality))
     out_path.write_text(json.dumps(rows, indent=2))
     print(json.dumps(rows, indent=2))
     print(f"wrote {out_path}")

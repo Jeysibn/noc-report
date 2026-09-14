@@ -58,6 +58,8 @@ def _build_snapshot(db: Session, shift: Shift, report_skill_snapshot) -> dict:
     run, frozen into one JSON document — this is what the skill actually
     sees, and what a completed Report's content is judged against later,
     however the underlying incidents change afterward."""
+    report_manifest = load_manifest(report_skill_snapshot)
+    shift_display_name = getattr(shift.definition, "name", None)
     incidents = list(
         db.scalars(select(Incident).where(Incident.shift_id == shift.id).order_by(Incident.created_at))
     )
@@ -142,12 +144,19 @@ def _build_snapshot(db: Session, shift: Shift, report_skill_snapshot) -> dict:
         "shift_id": str(shift.id),
         "shift_starts_at": shift.starts_at.isoformat(),
         "shift_ends_at": shift.ends_at.isoformat() if shift.ends_at else None,
+        # ShiftDefinition is mutable, so freeze the configured display value
+        # into the immutable snapshot rather than resolving it while polling
+        # or rendering the report later.
+        "shift_name": shift_display_name,
+        "shift_code": shift_display_name,
+        "shift_display_name": shift_display_name,
         "report_skill_snapshot_id": str(report_skill_snapshot.id),
         "report_skill_execution_hash": compute_execution_hash(db, report_skill_snapshot),
         # Coverage is part of the immutable report-skill contract. The
         # bridge must validate against this frozen policy, never the current
         # checkout or a later activation.
-        "coverage": load_manifest(report_skill_snapshot).get("coverage") or {},
+        "composition_profile": report_manifest.get("composition_profile"),
+        "coverage": report_manifest.get("coverage") or {},
         "incidents": incident_rows,
     }
 

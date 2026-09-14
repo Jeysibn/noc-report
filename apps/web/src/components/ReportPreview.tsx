@@ -7,6 +7,8 @@ import type {
   ReportBlock,
   ReportDocument,
   ReportIncidentEvidence,
+  ReportLink,
+  ReportLogFileReference,
 } from "@/types/report";
 import { ApiError } from "@/lib/http";
 
@@ -84,6 +86,14 @@ function ReportBlockView({ block, reportId }: { block: ReportBlock; reportId: st
     }
     case "paragraph":
       return <p className="text-sm">{block.text}</p>;
+    case "metadata":
+      return <p className="text-sm"><span className="font-medium">{block.label}: </span>{block.value}</p>;
+    case "link":
+      return <LinkView block={block} />;
+    case "log_file_reference":
+      return <LogFileView block={block} />;
+    case "screenshot":
+      return <PreviewScreenshot reportId={reportId} index={block.index} filename={block.filename} />;
     case "divider":
       return <hr className="border-border" />;
     case "page_break":
@@ -146,21 +156,27 @@ function FindListView({ block }: { block: ReportBilingualFindList }) {
 
 function PreviewScreenshot({ reportId, index, filename }: { reportId: string; index: number; filename: string | null }) {
   const [src, setSrc] = useState<string | null>(null);
+  const [error, setError] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     let objectUrl: string | null = null;
-    reportService.getScreenshotBlob(reportId, index).then((blob) => {
-      if (cancelled) return;
-      objectUrl = URL.createObjectURL(blob);
-      setSrc(objectUrl);
-    });
+    reportService.getScreenshotBlob(reportId, index)
+      .then((blob) => {
+        if (cancelled) return;
+        objectUrl = URL.createObjectURL(blob);
+        setSrc(objectUrl);
+      })
+      .catch(() => {
+        if (!cancelled) setError(true);
+      });
     return () => {
       cancelled = true;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [reportId, index]);
 
+  if (error) return <p className="text-xs text-danger">Screenshot could not be retrieved.</p>;
   if (!src) return <p className="text-xs text-muted">Loading screenshot…</p>;
   // Original dimensions kept; the container just bounds width so it never
   // overflows the report card, matching the DOCX adapter's "fit within
@@ -172,29 +188,45 @@ function IncidentEvidenceView({ block, reportId }: { block: ReportIncidentEviden
   return (
     <div className="flex flex-col gap-2 rounded-md border border-border p-4">
       <h3 className="text-base font-semibold text-accent">{block.heading}</h3>
+      {block.screenshots.map((shot, i) => (
+        <PreviewScreenshot key={i} reportId={reportId} index={shot.index} filename={shot.filename} />
+      ))}
+      {block.links.map((link, i) => (
+        <LinkView key={i} block={link} />
+      ))}
+      {block.log_file && (
+        <LogFileView block={block.log_file} />
+      )}
       {block.metadata.length > 0 && (
         <p className="text-sm text-muted">
           {block.metadata.map((m) => `${m.label}: ${m.value}`).join("  ·  ")}
         </p>
       )}
-      {block.screenshots.map((shot, i) => (
-        <PreviewScreenshot key={i} reportId={reportId} index={shot.index} filename={shot.filename} />
-      ))}
-      {block.links.map((link, i) => (
-        <p key={i} className="text-sm">
-          <span className="font-medium">{link.label}: </span>
-          <a href={link.url} target="_blank" rel="noreferrer" className="text-accent underline">
-            {link.url}
-          </a>
-        </p>
-      ))}
-      {block.log_file && (
-        <p className="text-sm">
-          <span className="font-medium">Log File — File Name: </span>
-          {block.log_file.filename}
-        </p>
-      )}
     </div>
+  );
+}
+
+function LinkView({ block }: { block: ReportLink }) {
+  return (
+    <p className="text-sm">
+      <span className="font-medium">{block.prefix ?? block.label}: </span>
+      <a href={block.url} target="_blank" rel="noreferrer" className="text-accent underline">
+        {block.text ?? block.url}
+      </a>
+    </p>
+  );
+}
+
+function LogFileView({ block }: { block: ReportLogFileReference }) {
+  return (
+    <p className="text-sm">
+      <span className="font-medium">Log File  File Name: </span>
+      {block.url ? (
+        <a href={block.url} target="_blank" rel="noreferrer" className="text-accent underline">
+          {block.filename}
+        </a>
+      ) : block.filename}
+    </p>
   );
 }
 
@@ -206,6 +238,15 @@ function AnalysisReferenceView({ block, reportId }: { block: ReportAnalysisRefer
         <p className="text-sm text-muted">{block.unavailable_text ?? "No analysis available."}</p>
       ) : (
         <>
+          {(block.screenshots ?? []).map((shot, i) => (
+            <PreviewScreenshot key={i} reportId={reportId} index={shot.index} filename={shot.filename} />
+          ))}
+          {block.log_file && <LogFileView block={block.log_file} />}
+          {(block.metadata ?? []).length > 0 && (
+            <p className="text-sm text-muted">
+              {(block.metadata ?? []).map((m) => `${m.label}: ${m.value}`).join("  ·  ")}
+            </p>
+          )}
           {block.children.map((child, i) => (
             <ReportBlockView key={i} block={child} reportId={reportId} />
           ))}

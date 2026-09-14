@@ -25,6 +25,7 @@ def _snapshot() -> dict:
     return {
         "shift_starts_at": "2026-09-14T00:00:00+00:00",
         "shift_ends_at": "2026-09-14T08:00:00+00:00",
+        "shift_display_name": "MS",
         "report_skill_snapshot_id": "report-v2",
         "report_skill_execution_hash": "report-exec-v2",
         "incidents": [
@@ -153,7 +154,7 @@ def test_full_analysis_presentation_keeps_all_findings_without_ai_echo(tmp_path)
         ],
         "secondary_finds": [
             {"label_zh": f"次要{i}", "label_en": f"Secondary {i}", "count": i, "percentage": i * 5, "detail_zh": f"次要细节{i}", "detail_en": f"Secondary detail {i}"}
-            for i in range(1, 4)
+            for i in range(1, 5)
         ],
         "likely_cause_zh": "根因", "likely_cause_en": "Root cause",
         "recommended_action_zh": "修复", "recommended_action_en": "Remediate",
@@ -168,8 +169,45 @@ def test_full_analysis_presentation_keeps_all_findings_without_ai_echo(tmp_path)
     destination = tmp_path / "phase7-analysis-fidelity.docx"
     render_document(document, destination, screenshot_fetcher=lambda *_: _PNG)
     text = "\n".join(paragraph.text for paragraph in Document(str(destination)).paragraphs)
-    for value in ("Finding 1", "Finding 7", "Secondary 1", "Secondary 3", "Root cause", "Remediate", "7 / 70%"):
+    for value in ("Finding 1", "Finding 7", "Secondary 1", "Secondary 4", "Root cause", "Remediate", "7 / 70%"):
         assert value in text
+
+
+def test_canonical_profile_numbers_from_frozen_order_and_repeats_alert_evidence(tmp_path):
+    snapshot = _snapshot()
+    snapshot["composition_profile"] = "noc-daily-report-v1"
+    snapshot["coverage"] = {
+        "incidents": "all", "analyses": "all_available",
+        "allow_duplicate_incidents": False, "allow_duplicate_analyses": False,
+    }
+    # Claude is allowed to return references in any order; composition is not.
+    plan = {
+        "blocks": [
+            {"type": "analysis_reference", "analysis_run_id": "run-002"},
+            {"type": "incident_reference", "incident_id": "inc-002"},
+            {"type": "bilingual_generated_text", "zh": "班次摘要", "en": "Shift summary"},
+            {"type": "analysis_reference", "analysis_run_id": "run-001"},
+            {"type": "incident_reference", "incident_id": "inc-001"},
+        ]
+    }
+    document = compose_report(plan, snapshot)
+    from noc_bridge.report_document import AnalysisReference, IncidentEvidence
+
+    assert document.title == "Daily Alert Report — Monday, 14 September 2026 — MS"
+    assert next(item.value for item in document.metadata if item.label == "Shift") == "MS"
+    alerts = [b for b in document.blocks if isinstance(b, IncidentEvidence)]
+    analyses = [b for b in document.blocks if isinstance(b, AnalysisReference)]
+    assert [b.heading for b in alerts] == ["Alert #1 - Payment timeout", "Alert #2 - Cache errors"]
+    assert [b.heading for b in analyses] == ["Alert #1 - Payment timeout", "Alert #2 - Cache errors"]
+    assert len(alerts[0].screenshots) == 1
+    assert len(analyses[0].screenshots) == 1
+
+    destination = tmp_path / "canonical.docx"
+    render_document(document, destination, screenshot_fetcher=lambda *_: _PNG)
+    with zipfile.ZipFile(destination) as archive:
+        relationships = archive.read("word/_rels/document.xml.rels").decode()
+        assert "https://grafana.example/inc-001" in relationships
+        assert "TargetMode=\"External\"" in relationships
 
 
 def test_materially_different_analysis_schema_uses_generic_presentation_export(tmp_path):
@@ -254,7 +292,7 @@ def _many_incidents(n: int) -> dict:
     return snapshot
 
 
-def test_golden_report_section_order_and_pagination_with_many_alerts():
+def test_golden_report_section_order_and_pagination_with_many_alerts(tmp_path):
     """Regression fixture for the canonical Daily Report layout: N alerts,
     each exactly once, Alerts -> General Summary -> Log Analysis, with no
     cap on how many alerts may appear (natural, unlimited pagination)."""
@@ -295,3 +333,13 @@ def test_golden_report_section_order_and_pagination_with_many_alerts():
     assert len(page_breaks) == 2
     assert alerts_end < page_breaks[0] < analysis_start
     assert page_breaks[0] < page_breaks[1] < analysis_start
+
+    destination = tmp_path / "many-alerts.docx"
+    render_document(document, destination)
+    with zipfile.ZipFile(destination) as archive:
+        xml = archive.read("word/document.xml").decode()
+        # Only the two deterministic section boundaries are explicit. Alerts
+        # are allowed to flow naturally across as many Word pages as needed.
+        assert xml.count('w:type="page"') == 2
+    text = "\n".join(paragraph.text for paragraph in Document(str(destination)).paragraphs)
+    assert "Alert #12 - Service 12 failure" in text

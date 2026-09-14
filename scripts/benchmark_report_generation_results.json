@@ -1,6 +1,6 @@
 [
   {
-    "strategy": "compact-legacy",
+    "strategy": "A-historical-compact",
     "prompt_chars": 409,
     "output_chars": 2014,
     "input_tokens": 2,
@@ -22,7 +22,7 @@
     "screenshot_completeness": true
   },
   {
-    "strategy": "full-report-document",
+    "strategy": "B-full-ai-report-document",
     "prompt_chars": 2233,
     "output_chars": 5007,
     "input_tokens": 2,
@@ -44,7 +44,7 @@
     "screenshot_completeness": true
   },
   {
-    "strategy": "report-plan",
+    "strategy": "C-report-plan-deterministic-composition",
     "prompt_chars": 1647,
     "output_chars": 1848,
     "input_tokens": 4,
@@ -69,7 +69,7 @@
     "final_docx_bytes": 38229
   },
   {
-    "strategy": "compact-legacy",
+    "strategy": "A-historical-compact",
     "prompt_chars": 1316,
     "output_chars": 3759,
     "input_tokens": 2,
@@ -91,7 +91,7 @@
     "screenshot_completeness": true
   },
   {
-    "strategy": "full-report-document",
+    "strategy": "B-full-ai-report-document",
     "prompt_chars": 7952,
     "output_chars": 8728,
     "input_tokens": 2,
@@ -113,7 +113,7 @@
     "screenshot_completeness": true
   },
   {
-    "strategy": "report-plan",
+    "strategy": "C-report-plan-deterministic-composition",
     "prompt_chars": 6024,
     "output_chars": 2518,
     "input_tokens": 6,
@@ -138,7 +138,7 @@
     "final_docx_bytes": 38492
   },
   {
-    "strategy": "compact-legacy",
+    "strategy": "A-historical-compact",
     "prompt_chars": 2637,
     "output_chars": 3641,
     "input_tokens": 2,
@@ -160,7 +160,7 @@
     "screenshot_completeness": true
   },
   {
-    "strategy": "full-report-document",
+    "strategy": "B-full-ai-report-document",
     "prompt_chars": 16688,
     "output_chars": 6311,
     "input_tokens": 2,
@@ -182,7 +182,7 @@
     "screenshot_completeness": true
   },
   {
-    "strategy": "report-plan",
+    "strategy": "C-report-plan-deterministic-composition",
     "prompt_chars": 12700,
     "output_chars": 3597,
     "input_tokens": 4,

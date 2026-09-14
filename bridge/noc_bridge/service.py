@@ -396,6 +396,17 @@ class BridgeService:
                 },
                 )
 
+                # Persist actual completed Claude calls separately from the
+                # conservative pre-launch reservation. A downstream retry
+                # may use the remaining paid budget, while a crashed worker
+                # still leaves its reservation as a safety fence.
+                if result.telemetry is not None:
+                    db.record_paid_ai_calls(
+                        pg_conn,
+                        job_id,
+                        result.telemetry.get("claude_calls", 0),
+                    )
+
             if result.exit_code != 0:
                 raise RuntimeError(f"sandbox exited {result.exit_code}: {result.logs[-2000:]}")
 

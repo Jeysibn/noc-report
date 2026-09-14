@@ -55,9 +55,15 @@ def _block_to_json(block: Any, screenshots: list[dict]) -> dict:
     if isinstance(block, Metadata):
         return {"type": "metadata", "label": block.label, "value": block.value}
     if isinstance(block, Link):
-        return {"type": "link", "label": block.label, "url": block.url}
+        return {
+            "type": "link",
+            "label": block.label,
+            "prefix": block.prefix,
+            "url": block.url,
+            "text": block.text,
+        }
     if isinstance(block, LogFileReference):
-        return {"type": "log_file_reference", "filename": block.filename}
+        return {"type": "log_file_reference", "filename": block.filename, "url": block.url}
     if isinstance(block, Screenshot):
         index = len(screenshots)
         screenshots.append({"bucket": block.bucket, "object_key": block.object_key, "filename": block.filename})
@@ -96,10 +102,13 @@ def _block_to_json(block: Any, screenshots: list[dict]) -> dict:
             "type": "analysis_reference",
             "heading": block.heading,
             "available": block.available,
+            "incident_id": block.incident_id,
             "analysis_run_id": block.analysis_run_id,
             "unavailable_text": block.unavailable_text,
             "metadata": [_block_to_json(m, screenshots) for m in block.metadata],
             "children": [_block_to_json(c, screenshots) for c in block.children],
+            "screenshots": [_block_to_json(s, screenshots) for s in block.screenshots],
+            "log_file": _block_to_json(block.log_file, screenshots) if block.log_file else None,
             "summary": _block_to_json(block.summary, screenshots) if block.summary else None,
             "key_finds": _block_to_json(block.key_finds, screenshots) if block.key_finds else None,
             "secondary_finds": _block_to_json(block.secondary_finds, screenshots) if block.secondary_finds else None,

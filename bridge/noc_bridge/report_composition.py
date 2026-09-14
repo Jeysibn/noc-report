@@ -24,6 +24,9 @@ from noc_bridge.report_document import (
 from noc_bridge.analysis_presentation import build_analysis_presentation
 from noc_bridge.validation import OutputValidationError
 
+DAILY_REPORT_COMPOSITION_PROFILE = "noc-daily-report-v1"
+_CANONICAL_TOP_LEVEL_HEADINGS = {"Alerts", "General Summary", "Log Analysis"}
+
 
 def _legacy_fragment(result: dict | None) -> dict | None:
     """Compatibility adapter for snapshots frozen before report_fragment.
@@ -76,28 +79,32 @@ def _metadata(incident: dict) -> tuple[Metadata, ...]:
     return tuple(Metadata(label, str(value)) for label, value in values if value not in (None, ""))
 
 
-def _incident_block(incident: dict) -> IncidentEvidence:
+def _incident_block(incident: dict, number: int) -> IncidentEvidence:
     links = []
     if incident.get("teams_url"):
-        links.append(Link("Teams", incident["teams_url"]))
+        links.append(Link("Teams", incident["teams_url"], text="Teams", prefix="Teams Link"))
     if incident.get("grafana_url"):
-        links.append(Link("Grafana", incident["grafana_url"]))
+        links.append(Link("Grafana", incident["grafana_url"], text="Grafana", prefix="Grafana Link"))
     screenshots = tuple(
         Screenshot(item["bucket"], item["object_key"], item.get("filename"))
         for item in incident.get("screenshots") or []
         if isinstance(item, dict) and item.get("bucket") and item.get("object_key")
     )
     return IncidentEvidence(
-        heading=f"Alert — {incident.get('title') or incident.get('display_id') or 'Incident'}",
+        heading=f"Alert #{number} - {incident.get('title') or incident.get('display_id') or 'Incident'}",
         incident_id=str(incident["id"]),
         metadata=_metadata(incident),
         links=tuple(links),
-        log_file=LogFileReference(incident["log_filename"]) if incident.get("log_filename") else None,
+        log_file=(
+            LogFileReference(incident["log_filename"], incident.get("log_file_url"))
+            if incident.get("log_filename")
+            else None
+        ),
         screenshots=screenshots,
     )
 
 
-def _analysis_block(incident: dict, plan_node: dict) -> AnalysisReference:
+def _analysis_block(incident: dict, plan_node: dict, number: int) -> AnalysisReference:
     requested_run_id = plan_node.get("analysis_run_id")
     requested_incident_id = plan_node.get("incident_id")
     if requested_run_id is None and requested_incident_id is None:
@@ -114,7 +121,8 @@ def _analysis_block(incident: dict, plan_node: dict) -> AnalysisReference:
     run_id = incident.get("analysis_run_id")
     if not available:
         return AnalysisReference(
-            heading=f"{incident.get('display_id') or incident['id']} — {incident.get('title') or 'Analysis'}",
+            heading=f"Alert #{number} - {incident.get('title') or incident.get('display_id') or 'Analysis'}",
+            incident_id=str(incident["id"]),
             available=False,
             analysis_run_id=None,
             unavailable_text="No log analysis available for this incident.",
@@ -124,7 +132,8 @@ def _analysis_block(incident: dict, plan_node: dict) -> AnalysisReference:
     fragment = incident.get("report_fragment") or _legacy_fragment(analysis)
     if not isinstance(fragment, dict) and not isinstance(analysis, dict):
         return AnalysisReference(
-            heading=f"{incident.get('display_id') or incident['id']} — {incident.get('title') or 'Analysis'}",
+            heading=f"Alert #{number} - {incident.get('title') or incident.get('display_id') or 'Analysis'}",
+            incident_id=str(incident["id"]),
             available=False,
             analysis_run_id=str(run_id),
             unavailable_text="The frozen analysis has no report export.",
@@ -147,6 +156,7 @@ def _analysis_block(incident: dict, plan_node: dict) -> AnalysisReference:
             value = _pair(fragment, key)
             if value:
                 children.extend((Heading(label, level=3), value))
+    children.insert(0, Heading("Log Analysis", level=3))
     provenance = tuple(
         Metadata(label, str(value))
         for label, value in (
@@ -160,10 +170,21 @@ def _analysis_block(incident: dict, plan_node: dict) -> AnalysisReference:
         if value not in (None, "")
     )
     return AnalysisReference(
-        heading=f"{incident.get('display_id') or incident['id']} — {incident.get('title') or 'Analysis'}",
+        heading=f"Alert #{number} - {incident.get('title') or incident.get('display_id') or 'Analysis'}",
         available=True,
+        incident_id=str(incident["id"]),
         analysis_run_id=str(run_id),
         metadata=provenance,
+        screenshots=tuple(
+            Screenshot(item["bucket"], item["object_key"], item.get("filename"))
+            for item in (incident.get("screenshots") or [])
+            if isinstance(item, dict) and item.get("bucket") and item.get("object_key")
+        ),
+        log_file=(
+            LogFileReference(incident["log_filename"], incident.get("log_file_url"))
+            if incident.get("log_filename")
+            else None
+        ),
         children=tuple(children),
     )
 
@@ -175,60 +196,63 @@ def compose_report(plan: dict, snapshot: dict) -> ReportDocument:
     coverage = snapshot.get("coverage") or {}
     if not isinstance(coverage, dict):
         raise OutputValidationError("report coverage policy must be an object")
+    composition_profile = snapshot.get("composition_profile") or coverage.get("composition_profile")
+    if composition_profile not in (None, DAILY_REPORT_COMPOSITION_PROFILE):
+        raise OutputValidationError(f"unsupported report composition profile: {composition_profile}")
     incident_policy = coverage.get("incidents", "optional")
     analysis_policy = coverage.get("analyses", "optional")
     allow_duplicate_incidents = bool(coverage.get("allow_duplicate_incidents", False))
     allow_duplicate_analyses = bool(coverage.get("allow_duplicate_analyses", False))
 
-    incidents = {}
-    unique_incidents = []
+    incidents: dict[str, dict] = {}
+    unique_incidents: list[dict] = []
     for incident in snapshot.get("incidents") or []:
         if not isinstance(incident, dict) or not incident.get("id"):
-            continue
-        incidents[str(incident["id"])] = incident
+            raise OutputValidationError("frozen report incident is missing an id")
+        incident_id = str(incident["id"])
+        if incident_id in incidents:
+            raise OutputValidationError(f"duplicate incident in frozen report snapshot: {incident_id}")
+        incidents[incident_id] = incident
         unique_incidents.append(incident)
         if incident.get("display_id"):
-            incidents[str(incident["display_id"])] = incident
+            display_id = str(incident["display_id"])
+            if display_id in incidents:
+                raise OutputValidationError(f"duplicate incident display_id in frozen report snapshot: {display_id}")
+            incidents[display_id] = incident
 
     incident_refs: list[str] = []
     analysis_refs: list[str] = []
+    analysis_plan_nodes: dict[str, dict] = {}
 
-    # The Daily Report skill authors summary text and cross-incident
-    # narrative, but section ORDER is a deterministic, structural property
-    # of the report -- not something a model-generated plan may decide.
-    # Every parsed block is bucketed by what produced it (an incident
-    # reference always belongs to Alerts, an analysis reference always
-    # belongs to Log Analysis, everything else belongs to whichever of
-    # those two the plan is currently narrating around, defaulting to
-    # General Summary) and the buckets are then reassembled in the
-    # canonical order below, regardless of how the plan interleaved them.
-    SECTION_ALERTS = "alerts"
-    SECTION_SUMMARY = "summary"
-    SECTION_LOG_ANALYSIS = "log_analysis"
+    def parse(nodes: list[dict]) -> list:
+        """Validate references while collecting only model-authored prose.
 
-    def parse(nodes: list[dict]) -> dict[str, list]:
-        sections: dict[str, list] = {SECTION_ALERTS: [], SECTION_SUMMARY: [], SECTION_LOG_ANALYSIS: []}
-        current = SECTION_SUMMARY
+        Incident and analysis nodes are authorization requests, not layout
+        instructions. Their final position and numbering are materialized
+        from the frozen snapshot below.
+        """
+        summary: list = []
         for node in nodes:
             kind = node.get("type") if isinstance(node, dict) else None
             if kind == "heading":
-                block = Heading(str(node["text"]), int(node.get("level", 1)))
+                text = str(node["text"])
+                if text in _CANONICAL_TOP_LEVEL_HEADINGS and int(node.get("level", 1)) == 1:
+                    continue
+                summary.append(Heading(text, int(node.get("level", 1))))
             elif kind == "paragraph":
-                block = Paragraph(str(node.get("text") or ""), node.get("style"))
+                summary.append(Paragraph(str(node.get("text") or ""), node.get("style")))
             elif kind == "bilingual_generated_text":
-                block = BilingualText(
+                summary.append(BilingualText(
                     str(node.get("zh") or ""), str(node.get("en") or ""),
                     node.get("heading_zh"), node.get("heading_en"),
-                )
-                current = SECTION_SUMMARY
+                ))
             elif kind == "incident_reference":
                 ref = str(node.get("incident_id") or "")
                 incident = incidents.get(ref)
                 if incident is None:
                     raise OutputValidationError(f"unknown incident reference: {ref}")
-                incident_refs.append(str(incident["id"]))
-                block = _incident_block(incident)
-                current = SECTION_ALERTS
+                incident_id = str(incident["id"])
+                incident_refs.append(incident_id)
             elif kind == "analysis_reference":
                 ref = str(node.get("incident_id") or "")
                 if ref:
@@ -244,12 +268,12 @@ def compose_report(plan: dict, snapshot: dict) -> ReportDocument:
                     )
                     if incident is None:
                         raise OutputValidationError(f"analysis reference is outside this report: {run_id}")
-                block = _analysis_block(incident, node)
+                incident_id = str(incident["id"])
                 if incident.get("analysis_run_id"):
                     analysis_refs.append(str(incident["analysis_run_id"]))
-                current = SECTION_LOG_ANALYSIS
+                analysis_plan_nodes[incident_id] = node
             elif kind == "divider":
-                block = Divider()
+                summary.append(Divider())
             elif kind == "page_break":
                 # Canonical section breaks are inserted deterministically
                 # below; a plan-authored page break inside a section is
@@ -258,20 +282,9 @@ def compose_report(plan: dict, snapshot: dict) -> ReportDocument:
                 continue
             else:
                 raise OutputValidationError(f"unsupported ReportPlan node type: {kind!r}")
-            sections[current].append(block)
-        return sections
+        return summary
 
-    sections = parse(plan["blocks"])
-
-    parsed_blocks: list = []
-    parsed_blocks.append(Heading("Alerts", level=1))
-    parsed_blocks.extend(sections[SECTION_ALERTS])
-    parsed_blocks.append(PageBreak())
-    parsed_blocks.append(Heading("General Summary", level=1))
-    parsed_blocks.extend(sections[SECTION_SUMMARY])
-    parsed_blocks.append(PageBreak())
-    parsed_blocks.append(Heading("Log Analysis", level=1))
-    parsed_blocks.extend(sections[SECTION_LOG_ANALYSIS])
+    summary_blocks = parse(plan["blocks"])
 
     if not allow_duplicate_incidents and len(incident_refs) != len(set(incident_refs)):
         raise OutputValidationError("duplicate incident reference in ReportPlan")
@@ -292,13 +305,60 @@ def compose_report(plan: dict, snapshot: dict) -> ReportDocument:
     elif analysis_policy not in ("none", "optional"):
         raise OutputValidationError(f"unsupported analysis coverage policy: {analysis_policy}")
 
-    starts = snapshot.get("shift_starts_at") or ""
-    ends = snapshot.get("shift_ends_at") or "ongoing"
-    title = str(plan.get("title") or f"Daily Alert Report — {starts} to {ends}")
-    metadata = (
-        Metadata("Date", str(starts).split("T", 1)[0]),
-        Metadata("Shift", f"{starts} to {ends}"),
-        Metadata("Skill Snapshot", str(snapshot.get("report_skill_snapshot_id") or "")),
-        Metadata("Execution Hash", str(snapshot.get("report_skill_execution_hash") or "")),
+    # Canonical profiles number and order from the frozen report, never from
+    # Claude's arbitrary reference order. Optional legacy profiles retain the
+    # plan's selected order for historical snapshots.
+    if incident_policy == "all":
+        alert_incidents = unique_incidents
+    else:
+        alert_incidents = []
+        seen: set[str] = set()
+        for incident_id in incident_refs:
+            if incident_id not in seen:
+                alert_incidents.append(incidents[incident_id])
+                seen.add(incident_id)
+
+    alert_number_by_id = {
+        str(incident["id"]): number
+        for number, incident in enumerate(alert_incidents, start=1)
+    }
+
+    if analysis_policy == "all_available":
+        analysis_incidents = [item for item in unique_incidents if item.get("analysis_run_id")]
+    else:
+        analysis_incidents = [incidents[incident_id] for incident_id in analysis_plan_nodes]
+
+    parsed_blocks: list = []
+    parsed_blocks.append(Heading("Alerts", level=1))
+    parsed_blocks.extend(_incident_block(incident, i) for i, incident in enumerate(alert_incidents, start=1))
+    parsed_blocks.append(PageBreak())
+    parsed_blocks.append(Heading("General Summary", level=1))
+    parsed_blocks.extend(summary_blocks)
+    parsed_blocks.append(PageBreak())
+    parsed_blocks.append(Heading("Log Analysis", level=1))
+    parsed_blocks.extend(
+        _analysis_block(
+            incident,
+            analysis_plan_nodes.get(str(incident["id"]), {"incident_id": str(incident["id"])}),
+            alert_number_by_id.get(str(incident["id"]), i),
+        )
+        for i, incident in enumerate(analysis_incidents, start=1)
     )
+
+    starts = snapshot.get("shift_starts_at") or ""
+    display_date = str(starts).split("T", 1)[0]
+    try:
+        from datetime import datetime
+        display_date = datetime.fromisoformat(str(starts)).strftime("%A, %d %B %Y")
+    except (TypeError, ValueError):
+        pass
+    shift_display = snapshot.get("shift_display_name") or snapshot.get("shift_code") or snapshot.get("shift_name") or "Shift"
+    title = f"Daily Alert Report — {display_date} — {shift_display}"
+    metadata_values = [
+        ("Date", display_date),
+        ("Shift", shift_display),
+        ("Skill Snapshot", snapshot.get("report_skill_snapshot_id")),
+        ("Execution Hash", snapshot.get("report_skill_execution_hash")),
+    ]
+    metadata = tuple(Metadata(label, str(value)) for label, value in metadata_values if value not in (None, ""))
     return ReportDocument(title=title, blocks=tuple(parsed_blocks), metadata=metadata)

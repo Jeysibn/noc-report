@@ -229,7 +229,9 @@ def test_render_daily_report_docx_end_to_end_produces_a_valid_docx(tmp_path):
 
     render_daily_report_docx(_RESULT, dest, screenshot_fetcher=fetcher)
     assert dest.exists()
-    assert fetched == [("noc-evidence", "k1")]
+    # The canonical Daily Report repeats trusted screenshots in Alerts and
+    # Log Analysis; both renderings must resolve the frozen object.
+    assert fetched == [("noc-evidence", "k1"), ("noc-evidence", "k1")]
 
     doc = Document(str(dest))
     all_text = "\n".join(p.text for p in doc.paragraphs)

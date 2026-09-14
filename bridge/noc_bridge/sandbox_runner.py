@@ -35,6 +35,16 @@ class SkillJobResult:
     exit_code: int
     output: dict | None
     logs: str
+    telemetry: dict | None = None
+
+
+def _read_optional_json(path: pathlib.Path) -> dict | None:
+    """Telemetry is best-effort and must never mask a valid skill result."""
+    try:
+        value = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
 
 
 def _grant_sandbox_uid_access(input_dir: pathlib.Path, output_dir: pathlib.Path) -> None:
@@ -181,8 +191,9 @@ def run_job_sandbox(
 
     result_path = output_dir / "result.json"
     output = json.loads(result_path.read_text()) if result_path.exists() else None
+    telemetry = _read_optional_json(output_dir / "telemetry.json")
 
-    return SkillJobResult(exit_code=exit_code, output=output, logs=logs)
+    return SkillJobResult(exit_code=exit_code, output=output, logs=logs, telemetry=telemetry)
 
 
 def run_skill_job(log_text: str, skills_dir: pathlib.Path) -> SkillJobResult:
@@ -234,5 +245,6 @@ def run_skill_job(log_text: str, skills_dir: pathlib.Path) -> SkillJobResult:
 
         result_path = pathlib.Path(output_dir) / "result.json"
         output = json.loads(result_path.read_text()) if result_path.exists() else None
+        telemetry = _read_optional_json(pathlib.Path(output_dir) / "telemetry.json")
 
-        return SkillJobResult(exit_code=exit_code, output=output, logs=logs)
+        return SkillJobResult(exit_code=exit_code, output=output, logs=logs, telemetry=telemetry)
