@@ -38,9 +38,10 @@ cache status are retained for audit and report assembly.
 ## Report seam
 
 The DOCX adapter consumes `ReportDocument` only. Declarative report skills
-may emit metadata plus headings, paragraphs, bilingual text, evidence,
-screenshots, links, log references, analysis references, dividers, and page
-breaks. Section order and meaning are upstream skill behavior. The active
+may emit headings, paragraphs, bilingual narrative, incident references,
+analysis references, dividers, and page breaks. Section order and meaning are
+upstream skill behavior; trusted evidence and storage references are resolved
+by the Phase 6 composition module. The active
 daily-report skill now uses `renderer_profile: report-document-v1`; historical
 snapshots retaining `daily_report_docx` continue through an isolated
 compatibility assembler. Both use the same adapter. The bridge selects one

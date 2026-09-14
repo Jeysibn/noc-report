@@ -115,6 +115,7 @@ class IncidentEvidence:
     incident_id: str | None = None
     metadata: tuple[Metadata, ...] = ()
     link: Link | None = None
+    links: tuple[Link, ...] = ()
     log_file: LogFileReference | None = None
     screenshots: tuple[Screenshot, ...] = ()
 
@@ -128,6 +129,7 @@ class AnalysisReference:
     available: bool
     analysis_run_id: str | None = None
     unavailable_text: str | None = None
+    metadata: tuple[Metadata, ...] = ()
     children: tuple["Block", ...] = ()
     summary: BilingualText | None = None
     key_finds: BilingualFindList | None = None
@@ -193,6 +195,7 @@ def _parse_blocks(raw_blocks: list[dict]) -> list[Block]:
                 incident_id=raw.get("incident_id"),
                 metadata=tuple(Metadata(str(item["label"]), str(item["value"])) for item in raw.get("metadata", [])),
                 link=Link(raw["link"]["label"], raw["link"]["url"]) if raw.get("link") else None,
+                links=tuple(Link(item["label"], item["url"]) for item in raw.get("links", [])),
                 log_file=LogFileReference(raw["log_file"]) if raw.get("log_file") else None,
                 screenshots=tuple(Screenshot(s["bucket"], s["object_key"], s.get("filename")) for s in raw.get("screenshots", [])),
             ))
@@ -208,6 +211,7 @@ def _parse_blocks(raw_blocks: list[dict]) -> list[Block]:
                     available=bool(raw.get("available", True)),
                     analysis_run_id=str(analysis_run_id) if analysis_run_id is not None else None,
                     unavailable_text=raw.get("unavailable_text"),
+                    metadata=tuple(Metadata(str(item["label"]), str(item["value"])) for item in raw.get("metadata", [])),
                     children=tuple(_parse_blocks(raw.get("blocks", []))),
                 )
             )

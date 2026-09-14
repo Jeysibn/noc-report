@@ -1,138 +1,30 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$comment": "The daily report skill owns this semantic ReportDocument contract. The DOCX adapter only renders generic blocks.",
+  "$comment": "ReportPlan: Claude controls semantic order and generated narrative. Trusted evidence and analysis content are resolved by the application.",
   "type": "object",
-  "required": ["metadata", "blocks"],
+  "required": ["blocks"],
   "additionalProperties": false,
   "properties": {
-    "metadata": {
-      "type": "object",
-      "required": ["title", "date", "shift"],
-      "additionalProperties": {"type": "string"},
-      "properties": {
-        "title": {"type": "string", "minLength": 1},
-        "date": {"type": "string", "minLength": 1},
-        "shift": {"type": "string", "minLength": 1}
-      }
-    },
-    "blocks": {
-      "type": "array",
-      "minItems": 1,
-      "items": {"$ref": "#/$defs/block"}
-    }
+    "title": {"type": "string", "minLength": 1},
+    "blocks": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/node"}}
   },
   "$defs": {
-    "metadata": {
-      "type": "object",
-      "required": ["label", "value"],
-      "additionalProperties": false,
+    "bilingual": {
+      "type": "object", "required": ["type", "zh", "en"], "additionalProperties": false,
       "properties": {
-        "label": {"type": "string", "minLength": 1},
-        "value": {"type": "string"}
+        "type": {"const": "bilingual_generated_text"}, "zh": {"type": "string"}, "en": {"type": "string"},
+        "heading_zh": {"type": ["string", "null"]}, "heading_en": {"type": ["string", "null"]}
       }
     },
-    "screenshot": {
-      "type": "object",
-      "required": ["bucket", "object_key"],
-      "additionalProperties": false,
-      "properties": {
-        "bucket": {"type": "string", "minLength": 1},
-        "object_key": {"type": "string", "minLength": 1},
-        "filename": {"type": ["string", "null"]}
-      }
-    },
-    "bilingual_text": {
-      "type": "object",
-      "required": ["type", "zh", "en"],
-      "additionalProperties": false,
-      "properties": {
-        "type": {"const": "bilingual_text"},
-        "zh": {"type": "string"},
-        "en": {"type": "string"},
-        "heading_zh": {"type": ["string", "null"]},
-        "heading_en": {"type": ["string", "null"]}
-      }
-    },
-    "block": {
+    "node": {
       "oneOf": [
-        {
-          "type": "object",
-          "required": ["type", "text"],
-          "additionalProperties": false,
-          "properties": {
-            "type": {"const": "heading"},
-            "level": {"type": "integer", "minimum": 1, "maximum": 6},
-            "text": {"type": "string", "minLength": 1}
-          }
-        },
-        {
-          "type": "object",
-          "required": ["type", "text"],
-          "additionalProperties": false,
-          "properties": {
-            "type": {"const": "paragraph"},
-            "text": {"type": "string"},
-            "style": {"type": ["string", "null"]}
-          }
-        },
-        {"$ref": "#/$defs/bilingual_text"},
-        {
-          "type": "object",
-          "required": ["type", "label", "value"],
-          "additionalProperties": false,
-          "properties": {
-            "type": {"const": "metadata"},
-            "label": {"type": "string", "minLength": 1},
-            "value": {"type": "string"}
-          }
-        },
-        {
-          "type": "object",
-          "required": ["type", "heading"],
-          "additionalProperties": false,
-          "properties": {
-            "type": {"const": "incident_evidence"},
-            "incident_id": {"type": ["string", "null"]},
-            "heading": {"type": "string", "minLength": 1},
-            "metadata": {"type": "array", "items": {"$ref": "#/$defs/metadata"}},
-            "link": {
-              "type": ["object", "null"],
-              "required": ["label", "url"],
-              "additionalProperties": false,
-              "properties": {
-                "label": {"type": "string", "minLength": 1},
-                "url": {"type": "string", "minLength": 1}
-              }
-            },
-            "log_file": {"type": ["string", "null"]},
-            "screenshots": {"type": "array", "items": {"$ref": "#/$defs/screenshot"}}
-          }
-        },
-        {
-          "type": "object",
-          "required": ["type", "label", "available", "blocks"],
-          "additionalProperties": false,
-          "properties": {
-            "type": {"const": "analysis_reference"},
-            "analysis_run_id": {"type": ["string", "null"]},
-            "label": {"type": "string", "minLength": 1},
-            "available": {"type": "boolean"},
-            "unavailable_text": {"type": ["string", "null"]},
-            "blocks": {"type": "array", "items": {"$ref": "#/$defs/block"}}
-          }
-        },
-        {
-          "type": "object",
-          "required": ["type"],
-          "additionalProperties": false,
-          "properties": {"type": {"const": "divider"}}
-        },
-        {
-          "type": "object",
-          "required": ["type"],
-          "additionalProperties": false,
-          "properties": {"type": {"const": "page_break"}}
-        }
+        {"type": "object", "required": ["type", "text"], "additionalProperties": false, "properties": {"type": {"const": "heading"}, "level": {"type": "integer", "minimum": 1, "maximum": 6}, "text": {"type": "string", "minLength": 1}}},
+        {"type": "object", "required": ["type", "text"], "additionalProperties": false, "properties": {"type": {"const": "paragraph"}, "text": {"type": "string"}, "style": {"type": ["string", "null"]}}},
+        {"$ref": "#/$defs/bilingual"},
+        {"type": "object", "required": ["type", "incident_id"], "additionalProperties": false, "properties": {"type": {"const": "incident_reference"}, "incident_id": {"type": "string", "minLength": 1}}},
+        {"type": "object", "required": ["type"], "additionalProperties": false, "properties": {"type": {"const": "analysis_reference"}, "incident_id": {"type": ["string", "null"]}, "analysis_run_id": {"type": ["string", "null"]}}, "anyOf": [{"required": ["incident_id"]}, {"required": ["analysis_run_id"]}]},
+        {"type": "object", "required": ["type"], "additionalProperties": false, "properties": {"type": {"const": "divider"}}},
+        {"type": "object", "required": ["type"], "additionalProperties": false, "properties": {"type": {"const": "page_break"}}}
       ]
     }
   }

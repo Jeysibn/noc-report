@@ -26,7 +26,7 @@ from app.db.session import get_db
 from app.deps import require_permission
 from app.jobs import enqueue_job
 from app.models.models import AnalysisRun, Evidence, Incident, Job, User
-from app.skills.registry import resolve_active_snapshot
+from app.skills.registry import compute_execution_hash, resolve_active_snapshot
 from app.skills.runtime import declared_skill_version, execution_policy, input_contract_version
 from app.schemas.schemas import AnalysisRequest, AnalysisRunOut
 
@@ -74,6 +74,7 @@ def _find_cached_analysis_run(
     requested_model: str | None,
     requested_effort: str | None,
     skill_hash: str,
+    skill_execution_hash: str | None = None,
     skill_snapshot_id: uuid.UUID | None = None,
 ) -> AnalysisRun | None:
     """Exact-match cache lookup: a prior *completed* log-triage-summary run
@@ -114,6 +115,8 @@ def _find_cached_analysis_run(
         AnalysisRun.cache_contract_version == CACHE_CONTRACT_VERSION,
         AnalysisRun.result_json.is_not(None),
     ]
+    if skill_execution_hash is not None:
+        filters.append(AnalysisRun.skill_execution_hash == skill_execution_hash)
     if skill_snapshot_id is not None:
         filters.append(AnalysisRun.skill_snapshot_id == skill_snapshot_id)
     if requested_model is not None:
@@ -156,6 +159,7 @@ def _to_out(job: Job, run: AnalysisRun | None) -> AnalysisRunOut:
         skill_version=job.skill_version,
         skill_snapshot_id=run.skill_snapshot_id if run else None,
         skill_hash=run.skill_hash if run else None,
+        skill_execution_hash=run.skill_execution_hash if run else None,
         schema_hash=run.schema_hash if run else None,
         input_contract_version=run.input_contract_version if run else None,
         preprocessor_version=run.preprocessor_version if run else None,
@@ -302,6 +306,7 @@ def request_analysis(
     # necessarily whatever is on disk right now — activation genuinely
     # controls what new jobs run.
     skill_snapshot = resolve_active_snapshot(db, SKILL_NAME)
+    skill_execution_hash = compute_execution_hash(db, skill_snapshot)
 
     # AI cost-optimization mission Phase 6: an exact-match cache hit skips
     # RabbitMQ/the bridge/Claude entirely — the Job row is created already
@@ -314,6 +319,7 @@ def request_analysis(
         requested_model=body.model,
         requested_effort=body.effort,
         skill_hash=skill_snapshot.content_hash,
+        skill_execution_hash=skill_execution_hash,
         skill_snapshot_id=skill_snapshot.id,
     )
 
@@ -332,6 +338,7 @@ def request_analysis(
             skill_name=SKILL_NAME,
             skill_version=declared_skill_version(skill_snapshot),
             skill_hash=skill_snapshot.content_hash,
+            skill_execution_hash=skill_execution_hash,
             skill_snapshot_id=skill_snapshot.id,
             correlation_id=str(uuid.uuid4()),
             started_at=now,
@@ -352,6 +359,7 @@ def request_analysis(
             skill_name=SKILL_NAME,
             skill_version=declared_skill_version(skill_snapshot),
             skill_hash=skill_snapshot.content_hash,
+            skill_execution_hash=skill_execution_hash,
             skill_snapshot_id=skill_snapshot.id,
             schema_hash=_snapshot_schema_hash(skill_snapshot),
             **provenance,
@@ -393,6 +401,7 @@ def request_analysis(
         skill_name=SKILL_NAME,
         skill_version=declared_skill_version(skill_snapshot),
         skill_hash=skill_snapshot.content_hash,
+        skill_execution_hash=skill_execution_hash,
         skill_snapshot_id=skill_snapshot.id,
         ai_policy=execution_policy(skill_snapshot),
     )
@@ -409,6 +418,7 @@ def request_analysis(
         skill_name=job.skill_name,
         skill_version=job.skill_version,
         skill_hash=job.skill_hash,
+        skill_execution_hash=skill_execution_hash,
         skill_snapshot_id=skill_snapshot.id,
         schema_hash=_snapshot_schema_hash(skill_snapshot),
         **_snapshot_runtime_provenance(skill_snapshot),

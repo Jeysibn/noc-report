@@ -6,6 +6,7 @@ from app.skills.registry import (
     NoActiveSkillSnapshot,
     SkillVersionNotFound,
     compute_skill_hash,
+    compute_execution_hash,
     get_or_create_snapshot,
     list_skill_names,
     list_snapshots,
@@ -210,3 +211,34 @@ def test_list_skill_names(db_session):
     names = list_skill_names(db_session)
     assert "log-triage-summary" in names
     assert "daily-alert-report" in names
+
+
+def test_dependency_snapshot_change_creates_new_execution_identity(db_session, tmp_path):
+    dep_dir = tmp_path / "dependency"
+    root_dir = tmp_path / "root"
+    dep_dir.mkdir()
+    root_dir.mkdir()
+    (dep_dir / "SKILL.md").write_text("dependency v1")
+    (dep_dir / "output.schema.json").write_text("{}")
+    (dep_dir / "skill.yaml").write_text("id: dependency\nversion: '1'\n")
+    (root_dir / "SKILL.md").write_text("root stays unchanged")
+    (root_dir / "output.schema.json").write_text("{}")
+    (root_dir / "skill.yaml").write_text("id: root\ndependencies:\n  - dependency\n")
+
+    dep_v1 = get_or_create_snapshot(db_session, "dependency", skills_dir=tmp_path)
+    root_v1 = get_or_create_snapshot(db_session, "root", skills_dir=tmp_path)
+    db_session.commit()
+    first_execution_hash = compute_execution_hash(db_session, root_v1)
+
+    (dep_dir / "SKILL.md").write_text("dependency v2")
+    dep_v2 = get_or_create_snapshot(db_session, "dependency", skills_dir=tmp_path)
+    set_active_snapshot(db_session, "dependency", dep_v2.version_label)
+    root_v2 = get_or_create_snapshot(db_session, "root", skills_dir=tmp_path)
+    db_session.commit()
+
+    assert dep_v1.id != dep_v2.id
+    assert root_v1.content_hash == root_v2.content_hash
+    assert root_v1.id != root_v2.id
+    assert first_execution_hash != compute_execution_hash(db_session, root_v2)
+    assert root_v1.dependency_snapshot_ids["dependency"] == str(dep_v1.id)
+    assert root_v2.dependency_snapshot_ids["dependency"] == str(dep_v2.id)

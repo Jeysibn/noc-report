@@ -27,7 +27,7 @@ def _purge_all(channel):
     channel.queue_purge("noc.events.log")
 
 
-def _create_incident(client, headers) -> str:
+def _create_incident(client, headers, *, with_report_links: bool = False) -> str:
     resp = client.post(
         "/api/v1/incidents",
         json={
@@ -35,6 +35,9 @@ def _create_incident(client, headers) -> str:
             "service": "payments-api",
             "environment": "production",
             "triggered_at": datetime.now(timezone.utc).isoformat(),
+            "trigger_value": "95%" if with_report_links else None,
+            "teams_url": "https://teams.example/inc-001" if with_report_links else None,
+            "grafana_url": "https://grafana.example/inc-001" if with_report_links else None,
         },
         headers=headers,
     )
@@ -55,7 +58,7 @@ def test_generate_report_freezes_snapshot_and_enqueues_real_job(client, db_sessi
     make_user(db_session, "operator1", "NOC")
     headers = auth_headers(client, "operator1")
     shift = _create_active_shift(db_session)
-    _create_incident(client, headers)  # auto-associated with the active shift
+    _create_incident(client, headers, with_report_links=True)  # auto-associated with the active shift
 
     connection = get_connection()
     channel = connection.channel()
@@ -99,6 +102,8 @@ def test_generate_report_freezes_snapshot_and_enqueues_real_job(client, db_sessi
     snapshot = json.loads(snapshot_bytes)
     assert snapshot["shift_id"] == str(shift.id)
     assert len(snapshot["incidents"]) == 1
+    assert snapshot["incidents"][0]["trigger_value"] == "95%"
+    assert snapshot["incidents"][0]["teams_url"] == "https://teams.example/inc-001"
     connection.close()
 
     # A second generate call for the same shift gets version 2, not a

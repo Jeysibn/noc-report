@@ -54,6 +54,7 @@ def enqueue_job(
     skill_version: str,
     skill_snapshot_id: uuid.UUID,
     skill_hash: str | None = None,
+    skill_execution_hash: str | None = None,
     ai_policy: dict | None = None,
 ) -> Job:
     """Create an executable job stamped with its immutable SkillSnapshot.
@@ -74,6 +75,7 @@ def enqueue_job(
         skill_name=skill_name,
         skill_version=skill_version,
         skill_hash=skill_hash,
+        skill_execution_hash=skill_execution_hash,
         skill_snapshot_id=skill_snapshot_id,
         attempt=1,
         correlation_id=str(uuid.uuid4()),
@@ -91,6 +93,7 @@ def enqueue_job(
         skill_name=skill_name,
         skill_version=skill_version,
         skill_hash=skill_hash,
+        skill_execution_hash=skill_execution_hash,
         skill_snapshot_id=str(skill_snapshot_id) if skill_snapshot_id else None,
         ai_policy=ai_policy,
         correlation_id=job.correlation_id,

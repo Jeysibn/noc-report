@@ -5,32 +5,22 @@ description: Produce the cross-incident, shift-level narrative for a daily alert
 
 # Daily Alert Report
 
-The frozen input contains the shift window and projected incident facts.
-Use those facts to write the report's semantic structure. The result is a
-`ReportDocument` contract: section order and wording belong to this skill;
-the bridge only renders the typed blocks into DOCX.
+The frozen input contains a compact shift window, incident facts, and stable
+analysis report fragments. Produce a `ReportPlan`, not a complete
+ReportDocument. Section order and wording belong to this skill; the
+application resolves all trusted facts and evidence after this response.
 
-Create metadata with:
+Create a `blocks` array using only `heading`, `paragraph`,
+`bilingual_generated_text`, `incident_reference`, `analysis_reference`,
+`divider`, and `page_break` nodes.
 
-- `title`: `Daily Alert Report — <shift start> to <shift end>`
-- `date`: the shift date
-- `shift`: the shift time window
+Use `incident_reference` with an incident `id` or `display_id` from the
+input. Use `analysis_reference` with the frozen `analysis_run_id`, or with
+an `incident_id` when no analysis exists. The application resolves all
+incident evidence and analysis content from the frozen snapshot.
 
-Create blocks in this order:
+Never emit screenshots, bucket names, object keys, URLs, log filenames,
+copied incident metadata, or full analysis objects.
 
-1. `heading`: `Alerts`
-2. One `incident_evidence` block per incident. Copy its `incident_id`, title,
-   status, Grafana URL, log filename, and screenshot references exactly from
-   the input. Do not invent or remove evidence references.
-3. `heading`: `General Summary`, followed by one `bilingual_text` block
-   summarizing the shift as a whole.
-4. `heading`: `Cross-Incident Findings`, followed by one `bilingual_text`
-   block identifying real correlations across incidents. If none exists, say
-   so plainly in both languages.
-5. `heading`: `Log Analysis`, followed by one `analysis_reference` block per
-   incident. Copy the analysis run ID exactly. If analysis is unavailable,
-   set `available` to false. Otherwise use nested bilingual text and
-   paragraphs for the available summary, findings, likely cause, and action.
-
-For bilingual text, provide both `zh` and `en`. Keep Chinese before English.
-Return JSON only. Every block must match `output.schema.json`.
+For generated bilingual text, provide both `zh` and `en`. Keep Chinese
+before English. Return JSON only. Every node must match `output.schema.json`.

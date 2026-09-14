@@ -3,7 +3,8 @@
 Mirrors `apps/api/app/skills/registry.py::compute_skill_hash` for legacy
 hash-only callers. Snapshot-backed jobs use the immutable PostgreSQL row
 instead: the bridge verifies its captured SKILL.md, output.schema.json, and
-skill.yaml bytes, then materializes only those bytes into the sandbox. The
+skill.yaml bytes plus the dependency-aware execution identity, then
+materializes only those bytes into the sandbox. The
 live `skills/` checkout is therefore not part of the execution path for a
 current job; hash verification against that checkout remains only as a
 compatibility path for old messages that carry no snapshot reference.
@@ -11,6 +12,7 @@ compatibility path for old messages that carry no snapshot reference.
 from __future__ import annotations
 
 import hashlib
+import json
 import pathlib
 import yaml
 
@@ -74,8 +76,8 @@ def fetch_skill_snapshot(conn, content_hash: str | None = None, snapshot_id: str
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(
             "SELECT id, skill_name, version_label, content_hash, skill_md, "
-            "output_schema_json, manifest_yaml, dependency_snapshot_ids FROM skill_snapshots "
-            "WHERE id = %s" if snapshot_id else "WHERE content_hash = %s",
+            "output_schema_json, manifest_yaml, dependency_snapshot_ids, execution_hash FROM skill_snapshots "
+            "WHERE id = %s" if snapshot_id else "WHERE content_hash = %s ORDER BY created_at DESC LIMIT 1",
             (snapshot_id or content_hash,),
         )
         row = cur.fetchone()
@@ -85,7 +87,7 @@ def fetch_skill_snapshot(conn, content_hash: str | None = None, snapshot_id: str
 def fetch_dependency_snapshot(conn, dependency) -> dict | None:
     name = dependency if isinstance(dependency, str) else dependency.get("id")
     version = None if isinstance(dependency, str) else dependency.get("version")
-    query = "SELECT skill_name, version_label, content_hash, skill_md, output_schema_json, manifest_yaml, dependency_snapshot_ids FROM skill_snapshots WHERE skill_name = %s"
+    query = "SELECT id, skill_name, version_label, content_hash, skill_md, output_schema_json, manifest_yaml, dependency_snapshot_ids, execution_hash FROM skill_snapshots WHERE skill_name = %s"
     params = [name]
     if version is not None:
         query += " AND version_label = %s"
@@ -116,6 +118,29 @@ def _verify_snapshot_row(snapshot: dict, *, expected_hash: str | None = None) ->
         )
 
 
+def _execution_hash(conn, snapshot: dict, active_names: set[str] | None = None) -> str:
+    active_names = set(active_names or ())
+    if snapshot["skill_name"] in active_names:
+        raise SkillSnapshotMissing(f"cyclic skill dependency: {snapshot['skill_name']}")
+    active_names.add(snapshot["skill_name"])
+    manifest = yaml.safe_load(snapshot["manifest_yaml"]) or {}
+    components = []
+    pinned = snapshot.get("dependency_snapshot_ids") or {}
+    for dependency in manifest.get("dependencies", []) or []:
+        name = dependency if isinstance(dependency, str) else dependency.get("id")
+        child = fetch_skill_snapshot(conn, snapshot_id=pinned.get(name)) if pinned.get(name) else fetch_dependency_snapshot(conn, dependency)
+        if child is None or child["skill_name"] != name:
+            raise SkillSnapshotMissing(f"dependency snapshot is missing: {dependency!r}")
+        components.append({
+            "id": name,
+            "content_hash": child["content_hash"],
+            "execution_hash": _execution_hash(conn, child, active_names),
+        })
+    components.sort(key=lambda item: (item["id"], item["content_hash"]))
+    payload = {"content_hash": snapshot["content_hash"], "dependencies": components}
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
 def _write_snapshot_files(snapshot: dict, dest_root: pathlib.Path) -> pathlib.Path:
     skill_dir = dest_root / snapshot["skill_name"]
     skill_dir.mkdir(parents=True, exist_ok=True)
@@ -136,6 +161,7 @@ def _materialize_snapshot_tree(
     active_names: set[str],
     materialized_ids: set[str],
     materialized_names: dict[str, str],
+    expected_execution_hash: str | None = None,
 ) -> None:
     """Materialize one snapshot and every exact transitive dependency."""
     snapshot_id = str(snapshot.get("id") or snapshot["content_hash"])
@@ -152,6 +178,10 @@ def _materialize_snapshot_tree(
         return
 
     _verify_snapshot_row(snapshot)
+    if expected_execution_hash is not None and _execution_hash(conn, snapshot) != expected_execution_hash:
+        raise SkillSnapshotMissing(
+            f"snapshot {snapshot_id} execution hash does not match the job reference"
+        )
     dest_root.mkdir(parents=True, exist_ok=True)
     dest_root.chmod(0o705)
     _write_snapshot_files(snapshot, dest_root)
@@ -197,7 +227,8 @@ def _materialize_snapshot_tree(
 
 def materialize_snapshot(
     conn, skill_name: str, content_hash: str | None = None, *,
-    snapshot_id: str | None = None, dest_root: pathlib.Path
+    snapshot_id: str | None = None, execution_hash: str | None = None,
+    dest_root: pathlib.Path
 ) -> pathlib.Path:
     """Writes the exact SkillSnapshot content identified by `content_hash`
     (fetched fresh from Postgres — never from the live, mutable `skills/`
@@ -231,5 +262,6 @@ def materialize_snapshot(
         active_names=set(),
         materialized_ids=set(),
         materialized_names={},
+        expected_execution_hash=execution_hash,
     )
     return dest_root

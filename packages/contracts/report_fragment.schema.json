@@ -1,0 +1,18 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://noc-report.internal/contracts/report_fragment.schema.json",
+  "title": "Analysis ReportFragment v1",
+  "type": "object",
+  "required": ["contract", "headline", "severity", "summary", "likely_cause", "recommended_action", "findings"],
+  "additionalProperties": false,
+  "properties": {
+    "contract": {"const": "report-fragment-v1"},
+    "headline": {"type": "string"},
+    "severity": {"type": ["string", "null"]},
+    "summary": {"$ref": "#/$defs/pair"},
+    "likely_cause": {"$ref": "#/$defs/pair"},
+    "recommended_action": {"$ref": "#/$defs/pair"},
+    "findings": {"type": "array", "maxItems": 5, "items": {"type": "object", "additionalProperties": false, "required": ["zh", "en", "detail_zh", "detail_en"], "properties": {"zh": {"type": "string"}, "en": {"type": "string"}, "detail_zh": {"type": "string"}, "detail_en": {"type": "string"}}}}
+  },
+  "$defs": {"pair": {"type": "object", "required": ["zh", "en"], "additionalProperties": false, "properties": {"zh": {"type": "string"}, "en": {"type": "string"}}}}
+}

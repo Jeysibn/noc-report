@@ -13,6 +13,7 @@ import pathlib
 from docx import Document
 
 from noc_bridge.docx_render import render_daily_report_docx, render_document
+from noc_bridge.report_composition import compose_report
 from noc_bridge.report_document import (
     AnalysisReference,
     BilingualText,
@@ -171,41 +172,43 @@ def test_declarative_document_supports_metadata_and_analysis_references(tmp_path
 
 def test_active_daily_report_document_contract_renders_nested_analysis_blocks(tmp_path):
     result = {
-        "metadata": {"title": "Daily Report", "date": "2026-09-14", "shift": "Night"},
         "blocks": [
             {"type": "heading", "level": 1, "text": "Alerts"},
-            {
-                "type": "incident_evidence",
-                "incident_id": "incident-1",
-                "heading": "Alert #1 - API failure",
-                "metadata": [{"label": "Status", "value": "RESOLVED"}],
-                "link": {"label": "Grafana", "url": "https://grafana.example/1"},
-                "log_file": "api.log",
-                "screenshots": [],
-            },
+            {"type": "incident_reference", "incident_id": "incident-1"},
             {"type": "heading", "level": 1, "text": "General Summary"},
-            {"type": "bilingual_text", "zh": "一项事件。", "en": "One incident."},
+            {"type": "bilingual_generated_text", "zh": "一项事件。", "en": "One incident."},
             {"type": "heading", "level": 1, "text": "Log Analysis"},
             {
                 "type": "analysis_reference",
                 "analysis_run_id": "run-1",
-                "label": "INC-001",
-                "available": True,
-                "blocks": [
-                    {"type": "bilingual_text", "zh": "数据库超时。", "en": "Database timeout."},
-                    {"type": "paragraph", "text": "Recommended action: inspect pool saturation."},
-                ],
             },
         ],
     }
+    result["blocks"].append({"type": "paragraph", "text": "Recommended action: inspect pool saturation."})
     validate_output(
         "daily_report",
         result,
         skill_name="daily-alert-report",
         skills_dir=SKILLS_DIR,
     )
+    snapshot = {
+        "shift_starts_at": "2026-09-14T00:00:00+00:00",
+        "shift_ends_at": "2026-09-14T08:00:00+00:00",
+        "report_skill_snapshot_id": "report-snapshot",
+        "report_skill_execution_hash": "report-execution",
+        "incidents": [{
+            "id": "incident-1", "display_id": "INC-001", "title": "API failure",
+            "status": "RESOLVED", "service": "api", "environment": "prod",
+            "triggered_at": "2026-09-14T01:00:00+00:00", "recovered_at": None,
+            "grafana_url": "https://grafana.example/1", "log_filename": "api.log",
+            "screenshots": [], "analysis_run_id": "run-1",
+            "report_fragment": {"summary": {"zh": "数据库超时。", "en": "Database timeout."}, "findings": [], "likely_cause": {}, "recommended_action": {}},
+            "analysis_skill_snapshot_id": "analysis-snapshot", "analysis_skill_execution_hash": "analysis-execution",
+            "analysis_skill_version": "1", "analysis_output_sha256": "result-hash", "analysis_model": "model", "analysis_effort": "low",
+        }],
+    }
     destination = tmp_path / "active-daily-report.docx"
-    render_document(build_report_document(result), destination)
+    render_document(compose_report(result, snapshot), destination)
     text = "\n".join(p.text for p in Document(str(destination)).paragraphs)
     assert "Incident ID: incident-1" in text
     assert "Analysis reference: run-1" in text

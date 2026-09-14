@@ -442,7 +442,7 @@ def test_end_to_end_log_triage_job(pg_conn, minio_client, mq_channel):
     _delete_job_row(pg_conn, job_id)
 
 
-def test_end_to_end_unsupported_job_type_goes_to_dlq(pg_conn, minio_client, mq_channel, monkeypatch):
+def test_end_to_end_unsupported_job_type_goes_to_dlq(pg_conn, minio_client, mq_channel, monkeypatch, tmp_path):
     """As of Milestone 14 both real job_types (log_triage, daily_report)
     have skills wired — so this exercises UnsupportedJobType by publishing
     onto the real log_triage queue (so DLQ routing/binding is real) while
@@ -450,11 +450,14 @@ def test_end_to_end_unsupported_job_type_goes_to_dlq(pg_conn, minio_client, mq_c
     `_process_job`'s lookup to legitimately come back empty."""
     from noc_bridge import service as service_module
 
-    monkeypatch.setitem(
-        service_module._INPUT_FILENAME_BY_JOB_TYPE,
-        "log_triage",
-        None,
-    )
+    # Input filenames are now snapshot-manifest-owned. Simulate an
+    # unsupported materialized contract at that seam instead of mutating the
+    # retired hard-coded job-type map.
+    fake_skill = tmp_path / "log-triage-summary"
+    fake_skill.mkdir()
+    (fake_skill / "skill.yaml").write_text("id: log-triage-summary\n")
+    monkeypatch.setattr(service_module, "materialize_snapshot", lambda *args, **kwargs: tmp_path)
+    monkeypatch.setitem(service_module._INPUT_FILENAME_BY_JOB_TYPE, "log_triage", None)
 
     job_id = uuid.uuid4()
     snapshot_id, skill_hash = _insert_job_row(pg_conn, job_id, "log_triage")

@@ -113,9 +113,10 @@ wrong here. Now:
   summary (`display_id`, `title`, `status`, `severity_signal`, `main_error`,
   `impact`, `starts_at`, `ends_at`) and deterministic bridge-side merging.
   The active daily-report snapshot now uses the manifest's declarative input
-  projection and emits the skill-owned `ReportDocument` block contract,
-  including evidence and analysis-reference blocks. The old assembler remains
-  only for queued/historical snapshots whose immutable manifest selects that
+  projection and emits the skill-owned compact `ReportPlan` contract. The
+  bridge's deterministic Report Composition module resolves evidence and
+  analysis references into `ReportDocument`; the old assembler remains only
+  for queued/historical snapshots whose immutable manifest selects that
   profile.
 - For historical snapshots, `bridge/noc_bridge/service.py`'s
   `_merge_daily_report(snapshot,

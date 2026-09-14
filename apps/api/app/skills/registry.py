@@ -11,13 +11,11 @@ reasoning about a different prompt under the same label).
 This module makes a skill's *content* — its `SKILL.md` prompt,
 `output.schema.json` contract, and `skill.yaml` manifest — the actual
 identity: `compute_skill_hash` hashes those three files' bytes, and
-`get_or_create_snapshot` records an immutable `SkillSnapshot` row the
-first time a given hash is seen for a skill name, auto-incrementing a
-human-readable version label. Editing any of the three files produces a
-new hash, therefore a new snapshot, therefore an automatic cache miss and
-a new audit trail entry — no manual version bump required to get that
-safety, though `skill_version` (the human-chosen label elsewhere in the
-code) is kept too since it's still useful as a stable display name.
+`get_or_create_snapshot` records an immutable `SkillSnapshot` row for each
+own-content/dependency-pin set, auto-incrementing a human-readable version
+label. Editing any of the three files produces a new hash; advancing a
+name-only dependency produces a new execution identity and pinned snapshot.
+Either change creates a new audit trail entry and cache identity.
 
 The bridge retrieves the same immutable row by snapshot ID and verifies its
 captured bytes before materializing it. The current checkout is not part of
@@ -26,6 +24,7 @@ the execution path for snapshot-backed jobs.
 from __future__ import annotations
 
 import hashlib
+import json
 import pathlib
 import yaml
 
@@ -79,6 +78,62 @@ def read_skill_files(skill_name: str, *, skills_dir: pathlib.Path = SKILLS_DIR) 
     }
 
 
+def _dependency_snapshot(db: Session, snapshot: SkillSnapshot, dependency):
+    """Resolve one dependency through the snapshot's pinned ids.
+
+    This deliberately mirrors runtime.py's validation rule: a dependency
+    name is only a declaration; the immutable id captured on the parent is
+    the execution reference.
+    """
+    dependency_name = dependency if isinstance(dependency, str) else dependency.get("id")
+    pinned_id = (snapshot.dependency_snapshot_ids or {}).get(dependency_name)
+    if pinned_id:
+        return db.get(SkillSnapshot, pinned_id)
+    query = select(SkillSnapshot).where(SkillSnapshot.skill_name == dependency_name)
+    if isinstance(dependency, dict) and dependency.get("version") is not None:
+        query = query.where(SkillSnapshot.version_label == int(dependency["version"]))
+    return db.scalar(query.order_by(SkillSnapshot.version_label.desc()))
+
+
+def compute_execution_hash(
+    db: Session,
+    snapshot: SkillSnapshot,
+    *,
+    _active: set[str] | None = None,
+) -> str:
+    """Return the stable identity of a snapshot's complete dependency graph.
+
+    ``content_hash`` remains the hash of the snapshot's own three files.
+    The execution hash recursively includes dependency names, content hashes,
+    and child execution hashes in manifest order-independent form.  Cycles
+    are rejected instead of producing an ambiguous identity.
+    """
+    active = set(_active or ())
+    if snapshot.skill_name in active:
+        raise ValueError(f"cyclic skill dependency: {snapshot.skill_name}")
+    active.add(snapshot.skill_name)
+    manifest = yaml.safe_load(snapshot.manifest_yaml) or {}
+    dependencies = manifest.get("dependencies", [])
+    components = []
+    for dependency in dependencies:
+        dependency_name = dependency if isinstance(dependency, str) else dependency.get("id")
+        child = _dependency_snapshot(db, snapshot, dependency)
+        if child is None or child.skill_name != dependency_name:
+            raise ValueError(f"unresolvable skill dependency: {dependency!r}")
+        components.append(
+            {
+                "id": dependency_name,
+                "content_hash": child.content_hash,
+                "execution_hash": compute_execution_hash(db, child, _active=active),
+            }
+        )
+    components.sort(key=lambda item: (item["id"], item["content_hash"]))
+    payload = {"content_hash": snapshot.content_hash, "dependencies": components}
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
 def get_or_create_snapshot(
     db: Session,
     skill_name: str,
@@ -105,41 +160,6 @@ def get_or_create_snapshot(
     `activate=True` here) to promote a Draft to Active."""
     content_hash = compute_skill_hash(skill_name, skills_dir=skills_dir)
 
-    existing = db.scalar(
-        select(SkillSnapshot).where(
-            SkillSnapshot.skill_name == skill_name,
-            SkillSnapshot.content_hash == content_hash,
-        )
-    )
-    if existing is not None:
-        return existing
-
-    is_first_snapshot_for_skill = (
-        db.scalar(
-            select(func.count()).select_from(SkillSnapshot).where(SkillSnapshot.skill_name == skill_name)
-        )
-        or 0
-    ) == 0
-
-    next_version = (
-        db.scalar(
-            select(func.coalesce(func.max(SkillSnapshot.version_label), 0)).where(
-                SkillSnapshot.skill_name == skill_name
-            )
-        )
-        or 0
-    ) + 1
-
-    should_activate = activate if activate is not None else is_first_snapshot_for_skill
-    if should_activate:
-        for other in db.scalars(select(SkillSnapshot).where(SkillSnapshot.skill_name == skill_name)):
-            other.is_active = False
-        # The partial unique index is intentionally enforced by the
-        # database. Clear the previous pointer before inserting the new
-        # active snapshot so SQLAlchemy's batched flush cannot try to set two
-        # active rows in one UPDATE/INSERT ordering.
-        db.flush()
-
     files = read_skill_files(skill_name, skills_dir=skills_dir)
     # Materialize dependency history before validating a dependent snapshot,
     # and capture the exact rows selected now. A name-only dependency must not
@@ -164,6 +184,42 @@ def get_or_create_snapshot(
             dependency_snapshot = get_or_create_snapshot(db, dependency_name, skills_dir=skills_dir)
         dependency_snapshot_ids[dependency_name] = str(dependency_snapshot.id)
 
+    # Own files can remain unchanged while a name-only dependency advances.
+    # That is a new immutable execution contract, so identity is the pair
+    # (content_hash, pinned dependency ids), not content_hash alone.
+    existing = db.scalars(
+        select(SkillSnapshot)
+        .where(SkillSnapshot.skill_name == skill_name, SkillSnapshot.content_hash == content_hash)
+        .order_by(SkillSnapshot.version_label.desc())
+    )
+    for candidate in existing:
+        if (candidate.dependency_snapshot_ids or {}) == dependency_snapshot_ids:
+            return candidate
+
+    is_first_snapshot_for_skill = (
+        db.scalar(
+            select(func.count()).select_from(SkillSnapshot).where(SkillSnapshot.skill_name == skill_name)
+        )
+        or 0
+    ) == 0
+
+    next_version = (
+        db.scalar(
+            select(func.coalesce(func.max(SkillSnapshot.version_label), 0)).where(
+                SkillSnapshot.skill_name == skill_name
+            )
+        )
+        or 0
+    ) + 1
+
+    should_activate = activate if activate is not None else is_first_snapshot_for_skill
+    if should_activate:
+        for other in db.scalars(select(SkillSnapshot).where(SkillSnapshot.skill_name == skill_name)):
+            other.is_active = False
+        # Clear the old active pointer before inserting the new row so the
+        # partial unique index never sees two active snapshots.
+        db.flush()
+
     snapshot = SkillSnapshot(
         skill_name=skill_name,
         version_label=next_version,
@@ -179,6 +235,7 @@ def get_or_create_snapshot(
     # after attempting activation.
     from app.skills.runtime import validate_snapshot
     validate_snapshot(db, snapshot)
+    snapshot.execution_hash = compute_execution_hash(db, snapshot)
     db.add(snapshot)
     db.flush()
     return snapshot

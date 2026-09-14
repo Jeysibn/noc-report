@@ -83,6 +83,7 @@ def build_job_message(
     correlation_id: str,
     attempt: int = 1,
     skill_hash: str | None = None,
+    skill_execution_hash: str | None = None,
     skill_snapshot_id: uuid.UUID | None = None,
     protocol_version: str = "1",
     expected_output_type: str | None = None,
@@ -113,6 +114,7 @@ def build_job_message(
         "skill_name": skill_name,
         "skill_version": skill_version,
         "skill_hash": skill_hash,
+        "skill_execution_hash": skill_execution_hash,
         "skill_snapshot_id": str(skill_snapshot_id) if skill_snapshot_id else None,
         "expected_output_type": expected_output_type or f"{job_type}.result",
         "ai_policy": ai_policy if ai_policy is not None else {
@@ -194,6 +196,7 @@ def publish_job(
     correlation_id: str,
     attempt: int = 1,
     skill_hash: str | None = None,
+    skill_execution_hash: str | None = None,
     skill_snapshot_id: uuid.UUID | None = None,
 ) -> None:
     """Publish a job message directly. ADR-004: references only, never
@@ -214,6 +217,7 @@ def publish_job(
         correlation_id=correlation_id,
         attempt=attempt,
         skill_hash=skill_hash,
+        skill_execution_hash=skill_execution_hash,
         skill_snapshot_id=skill_snapshot_id,
     )
     publish_message(

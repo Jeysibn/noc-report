@@ -263,6 +263,10 @@ class Job(Base):
     # identity a cache lookup and the bridge's pre-execution check both
     # key off of.
     skill_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Full immutable execution identity: this snapshot's content plus its
+    # pinned transitive dependency graph.  skill_hash remains the exact
+    # row-content hash used to verify materialized bytes.
+    skill_execution_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     attempt: Mapped[int] = mapped_column(nullable=False, default=1)
     correlation_id: Mapped[str] = mapped_column(String(100), nullable=False)
     error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
@@ -347,7 +351,10 @@ class SkillSnapshot(Base):
     id: Mapped[uuid.UUID] = uuid_pk()
     skill_name: Mapped[str] = mapped_column(String(100), nullable=False)
     version_label: Mapped[int] = mapped_column(Integer, nullable=False)
-    content_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    # A dependency-aware identity; unlike content_hash it changes when a
+    # pinned dependency changes even if this snapshot's own files do not.
+    execution_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     skill_md: Mapped[str] = mapped_column(String, nullable=False)
     output_schema_json: Mapped[str] = mapped_column(String, nullable=False)
     manifest_yaml: Mapped[str] = mapped_column(String, nullable=False)
@@ -404,6 +411,7 @@ class AnalysisRun(Base):
     skill_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("skill_snapshots.id"), nullable=True
     )
+    skill_execution_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     schema_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     input_contract_version: Mapped[str | None] = mapped_column(String(100), nullable=True)
     preprocessor_version: Mapped[str | None] = mapped_column(String(50), nullable=True)
@@ -498,6 +506,7 @@ class ReportSnapshot(Base):
     skill_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("skill_snapshots.id"), nullable=True
     )
+    skill_execution_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -534,6 +543,7 @@ class Report(Base):
     # identity a cache lookup and the bridge's pre-execution check both
     # key off of.
     skill_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    skill_execution_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     generated_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     error_message: Mapped[str | None] = mapped_column(String, nullable=True)

@@ -1,0 +1,47 @@
+[
+  {
+    "strategy": "compact-legacy",
+    "prompt_chars": 524,
+    "output_chars": 2849,
+    "input_tokens": 2,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 12729,
+    "output_tokens": 831,
+    "duration_ms": 9457,
+    "turns": 2,
+    "effort": "low",
+    "estimated_cost_usd": 0.012046800000000002,
+    "document_complete": true
+  },
+  {
+    "strategy": "full-report-document",
+    "prompt_chars": 2634,
+    "output_chars": 4927,
+    "input_tokens": 2,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 13577,
+    "output_tokens": 2499,
+    "duration_ms": 19761,
+    "turns": 2,
+    "effort": "low",
+    "estimated_cost_usd": 0.029678399999999997,
+    "document_complete": true
+  },
+  {
+    "strategy": "report-plan",
+    "prompt_chars": 1956,
+    "output_chars": 2779,
+    "input_tokens": 4,
+    "cache_creation_input_tokens": 1367,
+    "cache_read_input_tokens": 28420,
+    "output_tokens": 1927,
+    "duration_ms": 16772,
+    "turns": 3,
+    "effort": "low",
+    "estimated_cost_usd": 0.032204,
+    "document_complete": true,
+    "reference_correctness": true,
+    "screenshot_correctness": true,
+    "analysis_integrity": true
+  }
+]
