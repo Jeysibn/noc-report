@@ -3,15 +3,18 @@
 - Status: Accepted
 - Date: 2026-09-14
 
-Phase 9 hardens this profile’s effort policy, shift scope, provenance boundary,
-and bilingual presentation without changing its deterministic composition model.
+Phases 9 and 10 harden this profile’s effort policy, shift scope, provenance
+boundary, bilingual presentation, and time projection without changing its
+deterministic composition model.
 
 ## Decision
 
 The active Daily Report uses composition profile `noc-daily-report-v1`.
-ReportPlan references are validated against the immutable ReportSnapshot, but
-the application materializes Alert and Log Analysis blocks in frozen snapshot
-order. The resulting section order is always:
+ReportPlan is narrative-only: Claude supplies a required non-empty Chinese and
+English General Summary and optional cross-incident reasoning. The application
+derives mandatory Alert and Log Analysis coverage from the immutable
+ReportSnapshot and materializes blocks in frozen snapshot order. The resulting
+section order is always:
 
 ```text
 Report Header -> Alerts -> General Summary -> Log Analysis
@@ -45,7 +48,8 @@ composition, rendering, or artifact upload fails after Claude has completed.
 
 ## Consequences
 
-The Daily Report is operationally complete even when Claude produces a
-reordered or incomplete reference list: the job fails validation rather than
-silently omitting evidence. Future report types can use other composition
-profiles without adding NOC-specific policy to generic rendering.
+The Daily Report is operationally complete because Claude cannot omit required
+evidence through a reference list. Missing bilingual narrative fails bounded
+plan validation rather than becoming an empty summary. Future report types can
+use other composition profiles without adding NOC-specific policy to generic
+rendering.

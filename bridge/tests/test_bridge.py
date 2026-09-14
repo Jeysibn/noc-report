@@ -111,11 +111,12 @@ def _insert_job_row(pg_conn, job_id: uuid.UUID, job_type: str) -> tuple[str, str
         cur.execute(
             "INSERT INTO jobs "
             "(id, job_type, status, attempt, correlation_id, skill_name, "
-            "skill_version, skill_hash, skill_snapshot_id) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            "skill_version, skill_hash, skill_snapshot_id, used_cache, "
+            "paid_ai_call_budget, paid_ai_calls_reserved, paid_ai_calls_used) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
             (
                 str(job_id), job_type, "QUEUED", 1, str(uuid.uuid4()),
-                skill_name, "1", content_hash, snapshot_id,
+                    skill_name, "1", content_hash, snapshot_id, False, 4, 0, 0,
             ),
         )
     pg_conn.commit()
@@ -547,6 +548,9 @@ def test_end_to_end_daily_report_job(pg_conn, minio_client, mq_channel):
         "shift_id": "SHIFT-TEST",
         "shift_starts_at": "2026-09-09T00:00:00+00:00",
         "shift_ends_at": None,
+        "shift_timezone": "Asia/Manila",
+        "composition_profile": "noc-daily-report-v1",
+        "coverage": {"incidents": "all", "analyses": "all_available"},
         "incidents": [
             {
                 "id": "11111111-1111-1111-1111-111111111111",

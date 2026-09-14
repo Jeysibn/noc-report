@@ -102,6 +102,10 @@ def test_generate_report_freezes_snapshot_and_enqueues_real_job(client, db_sessi
     snapshot_bytes = get_client().get_object(Bucket=ref["bucket"], Key=ref["key"])["Body"].read()
     snapshot = json.loads(snapshot_bytes)
     assert snapshot["shift_id"] == str(shift.id)
+    assert snapshot["shift_timezone"] == shift.definition.timezone
+    frozen_timezone = snapshot["shift_timezone"]
+    shift.definition.timezone = "UTC"
+    assert frozen_timezone == "Asia/Manila"
     assert len(snapshot["incidents"]) == 1
     assert snapshot["incidents"][0]["trigger_value"] == "95%"
     assert snapshot["incidents"][0]["teams_url"] == "https://teams.example/inc-001"

@@ -75,9 +75,24 @@ describe("ShiftReport", () => {
     fireEvent.click(screen.getByRole("button", { name: /generate report/i }));
     await act(async () => {});
 
-    expect(generateReport).toHaveBeenCalledWith("shift-1", { model: "claude-sonnet-5" });
+    expect(generateReport).toHaveBeenCalledWith("shift-1", {});
     expect(screen.getByText(/version 1/i)).toBeInTheDocument();
     expect(screen.getAllByText(/queued/i).length).toBeGreaterThan(0);
+  });
+
+  it("sends a model only when the operator explicitly overrides System default", async () => {
+    generateReport.mockResolvedValue({
+      id: "report-2", shiftId: "shift-1", snapshotId: "snap-2", jobId: "job-2",
+      version: 1, status: "QUEUED", model: "claude-opus-5", effort: null,
+      skillName: "daily-alert-report", skillVersion: "1", generatedBy: null,
+      generatedAt: null, errorMessage: null, createdAt: new Date().toISOString(), downloadable: false,
+    });
+    render(<MemoryRouter><ShiftReport /></MemoryRouter>);
+    await act(async () => {});
+    fireEvent.change(screen.getAllByRole("combobox")[0], { target: { value: "claude-opus-5" } });
+    fireEvent.click(screen.getByRole("button", { name: /generate report/i }));
+    await act(async () => {});
+    expect(generateReport).toHaveBeenCalledWith("shift-1", { model: "claude-opus-5" });
   });
 
   it("shows a download button once a report is downloadable", async () => {

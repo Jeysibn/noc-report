@@ -25,6 +25,15 @@ def effective_effort(requested: str | None, configured: str | None) -> str:
     return value
 
 
+def effective_model(requested: str | None, configured: str | None) -> str:
+    """Return an explicit model override or the live system default."""
+    value = requested or configured or "claude-sonnet-5"
+    value = str(value).strip()
+    if not value:
+        raise ValueError("effective AI model cannot be empty")
+    return value
+
+
 def reserve(conn, job_id: uuid.UUID, requested: int = MAX_PAID_AI_CALLS_PER_JOB) -> int:
     return db.reserve_paid_ai_calls(conn, job_id, requested=requested)
 
@@ -35,3 +44,8 @@ def record(conn, job_id: uuid.UUID, consumed: int) -> None:
 
 def remaining(conn, job_id: uuid.UUID) -> int:
     return db.remaining_paid_ai_calls(conn, job_id)
+
+
+def apply_effective_policy(conn, job_id: uuid.UUID, *, model: str, effort: str) -> None:
+    """Persist the resolved execution policy for audit/UI visibility."""
+    db.record_effective_ai_policy(conn, job_id, model=model, effort=effort)

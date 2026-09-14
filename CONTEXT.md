@@ -11,9 +11,9 @@ This glossary is the shared vocabulary for maintainers and coding agents.
 - **SkillSnapshot** — immutable Skill content identified by hash. Jobs execute the snapshot stamped on their Job row.
 - **ReportFragment** — compact bilingual analysis data sent to Daily Report reasoning to control AI usage; it is not the complete human export.
 - **AnalysisPresentation** — deterministic full-fidelity rendering data derived from stored AnalysisRun output, including every required finding.
-- **ReportPlan** — Claude’s structured narrative and reference request. It may not omit or invent facts required by composition policy.
-- **ReportSnapshot** — frozen Shift, Incident, evidence, AnalysisRun, provenance, and report-policy inputs for one report generation.
+- **ReportPlan** — Claude’s narrative-only bilingual shift summary and optional cross-incident reasoning. It does not repeat mandatory incident or AnalysisRun references.
+- **ReportSnapshot** — frozen Shift, Incident, evidence, AnalysisRun, provenance, report policy, and IANA operational timezone for one report generation.
 - **ReportDocument** — renderer-neutral semantic blocks consumed by both Web Preview and DOCX. It separates visible metadata from audit provenance.
 - **Job** — the durable unit processed through the outbox/RabbitMQ pipeline. Its AI usage budget is cumulative across deliveries and retries.
 - **AI Usage Budget** — the atomic per-Job paid-call reservation/consumption fence. `used` never decreases and `used + active reservation` never exceeds the configured budget.
-- **Report Composition** — the deterministic authority that validates references, coverage, uniqueness, section order, and materializes the final ReportDocument.
+- **Report Composition** — the deterministic authority that derives coverage from the frozen snapshot, validates narrative requirements, controls canonical section order, and materializes the final ReportDocument.

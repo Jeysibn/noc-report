@@ -60,6 +60,26 @@ def bump_attempt(conn, job_id: uuid.UUID, attempt: int) -> None:
     conn.commit()
 
 
+def record_effective_ai_policy(conn, job_id: uuid.UUID, *, model: str, effort: str) -> None:
+    """Persist the model/effort actually selected by system policy.
+
+    Request-time overrides are already copied onto the Job. The bridge fills
+    the previously-null fields when Auto/System Default was requested so the
+    durable Job and report history expose the effective policy.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE jobs
+            SET model = COALESCE(model, %(model)s),
+                effort = COALESCE(effort, %(effort)s)
+            WHERE id = %(job_id)s
+            """,
+            {"job_id": str(job_id), "model": model, "effort": effort},
+        )
+    conn.commit()
+
+
 def reserve_paid_ai_calls(conn, job_id: uuid.UUID, *, requested: int = 4) -> int:
     """Atomically reserve the remaining paid-call permits for one Job.
 
@@ -117,13 +137,13 @@ def record_paid_ai_calls(conn, job_id: uuid.UUID, calls: int) -> None:
             SET paid_ai_calls_used = LEAST(
                 paid_ai_call_budget,
                     paid_ai_calls_used + LEAST(
-                        calls, GREATEST(0, paid_ai_calls_reserved - paid_ai_calls_used)
+                        %(calls)s, GREATEST(0, paid_ai_calls_reserved - paid_ai_calls_used)
                     )
                 ),
                 paid_ai_calls_reserved = LEAST(
                 paid_ai_call_budget,
                     paid_ai_calls_used + LEAST(
-                        calls, GREATEST(0, paid_ai_calls_reserved - paid_ai_calls_used)
+                        %(calls)s, GREATEST(0, paid_ai_calls_reserved - paid_ai_calls_used)
                     )
                 )
             WHERE id = %(job_id)s

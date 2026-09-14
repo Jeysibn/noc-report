@@ -1,31 +1,22 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$comment": "ReportPlan: Claude controls semantic order and generated narrative. Trusted evidence and analysis content are resolved by the application.",
+  "$comment": "Narrative-only ReportPlan. Coverage, evidence, numbering, ordering, and analysis completeness are owned by deterministic Report Composition.",
   "type": "object",
-  "required": ["blocks"],
+  "required": ["general_summary"],
   "additionalProperties": false,
   "properties": {
-    "title": {"type": "string", "minLength": 1},
-    "blocks": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/node"}}
+    "general_summary": {"$ref": "#/$defs/bilingual_summary"},
+    "cross_incident_findings": {"$ref": "#/$defs/bilingual_summary"}
   },
   "$defs": {
-    "bilingual": {
-      "type": "object", "required": ["type", "zh", "en"], "additionalProperties": false,
+    "bilingual_summary": {
+      "type": "object",
+      "required": ["zh", "en"],
+      "additionalProperties": false,
       "properties": {
-        "type": {"const": "bilingual_generated_text"}, "zh": {"type": "string"}, "en": {"type": "string"},
-        "heading_zh": {"type": ["string", "null"]}, "heading_en": {"type": ["string", "null"]}
+        "zh": {"type": "string", "minLength": 1},
+        "en": {"type": "string", "minLength": 1}
       }
-    },
-    "node": {
-      "oneOf": [
-        {"type": "object", "required": ["type", "text"], "additionalProperties": false, "properties": {"type": {"const": "heading"}, "level": {"type": "integer", "minimum": 1, "maximum": 6}, "text": {"type": "string", "minLength": 1}}},
-        {"type": "object", "required": ["type", "text"], "additionalProperties": false, "properties": {"type": {"const": "paragraph"}, "text": {"type": "string"}, "style": {"type": ["string", "null"]}}},
-        {"$ref": "#/$defs/bilingual"},
-        {"type": "object", "required": ["type", "incident_id"], "additionalProperties": false, "properties": {"type": {"const": "incident_reference"}, "incident_id": {"type": "string", "minLength": 1}}},
-        {"type": "object", "required": ["type"], "additionalProperties": false, "properties": {"type": {"const": "analysis_reference"}, "incident_id": {"type": ["string", "null"]}, "analysis_run_id": {"type": ["string", "null"]}}, "anyOf": [{"required": ["incident_id"]}, {"required": ["analysis_run_id"]}]},
-        {"type": "object", "required": ["type"], "additionalProperties": false, "properties": {"type": {"const": "divider"}}},
-        {"type": "object", "required": ["type"], "additionalProperties": false, "properties": {"type": {"const": "page_break"}}}
-      ]
     }
   }
 }

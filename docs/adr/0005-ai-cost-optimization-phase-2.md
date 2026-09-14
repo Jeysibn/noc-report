@@ -1,5 +1,10 @@
 # 0005 — AI Usage & Cost Optimization, Phase 2
 
+> Historical note: the active canonical Daily Report now uses the
+> narrative-only ReportPlan and deterministic composition documented in ADR
+> 0017. The historical compact/full-report comparison and compatibility
+> adapter described below remain useful for older snapshots.
+
 Status: **implemented** (Issues 1-7, 9-10 below), with Issue 7 and Issue 8
 explicitly scoped down from the full mission brief — see "Deliberate
 scoping" at the end. Supersedes/corrects two claims in ADR 0004 (see the

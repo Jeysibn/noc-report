@@ -43,6 +43,8 @@ _PNG = base64.b64decode(
 SNAPSHOT = {
     "shift_starts_at": "2026-09-14T00:00:00+00:00",
     "shift_ends_at": "2026-09-14T08:00:00+00:00",
+    "shift_timezone": "Asia/Manila",
+    "composition_profile": "noc-daily-report-v1",
     "report_skill_snapshot_id": "report-v2",
     "report_skill_execution_hash": "report-exec-v2",
     "incidents": [
@@ -77,7 +79,7 @@ def _fixture(count: int) -> dict:
         source["screenshots"] = []
         snapshot["incidents"].append(source)
     snapshot["incidents"] = snapshot["incidents"][:count]
-    snapshot["coverage"] = {"incidents": "optional", "analyses": "optional"}
+    snapshot["coverage"] = {"incidents": "all", "analyses": "all_available"}
     return snapshot
 
 
@@ -87,6 +89,24 @@ def _legacy_prompt(snapshot: dict) -> str:
 
 def _full_prompt(snapshot: dict) -> str:
     return "Produce the complete report document, including evidence and analysis, from this frozen snapshot:\n" + json.dumps(snapshot, indent=2)
+
+
+def _reference_heavy_plan(snapshot: dict) -> dict:
+    """Historical ReportPlan shape used only for deterministic comparison."""
+    blocks = [
+        {"type": "incident_reference", "incident_id": item["id"]}
+        for item in snapshot["incidents"]
+    ]
+    blocks.append({"type": "bilingual_generated_text", "zh": "班次摘要", "en": "Shift summary"})
+    blocks.extend(
+        {"type": "analysis_reference", "analysis_run_id": item["analysis_run_id"]}
+        for item in snapshot["incidents"] if item.get("analysis_run_id")
+    )
+    return {"blocks": blocks}
+
+
+def _narrative_plan() -> dict:
+    return {"general_summary": {"zh": "班次摘要", "en": "Shift summary"}}
 
 
 def _row(strategy: str, result: dict, telemetry: dict, prompt: str, valid: bool, **quality) -> dict:
@@ -126,7 +146,13 @@ def main() -> None:
         print("live benchmark gated; deterministic prompt sizes:")
         for count in fixtures:
             snapshot = _fixture(count)
-            print(f"incidents={count} compact={len(_legacy_prompt(snapshot))} full={len(_full_prompt(snapshot))}")
+            historical = json.dumps(_reference_heavy_plan(snapshot), ensure_ascii=False)
+            narrative = json.dumps(_narrative_plan(), ensure_ascii=False)
+            print(
+                f"incidents={count} compact_prompt={len(_legacy_prompt(snapshot))} "
+                f"full_prompt={len(_full_prompt(snapshot))} "
+                f"reference_plan={len(historical)} narrative_plan={len(narrative)}"
+            )
         print("report-plan: uses the mounted daily-alert-report projection; set NOC_LIVE_REPORT_BENCHMARK=1 for real telemetry")
         return
 
@@ -164,7 +190,7 @@ def main() -> None:
             }
         except Exception as exc:  # pragma: no cover - live/manual benchmark
             quality = {"reference_correctness": False, "screenshot_correctness": False, "analysis_integrity": False, "incident_completeness": False, "analysis_completeness": False, "screenshot_completeness": False, "final_docx_bytes": None, "composition_error": str(exc)}
-        rows.append(_row("C-report-plan-deterministic-composition", plan, telemetry, plan_prompt, bool(plan.get("blocks")), incidents=count, report_plan_bytes=len(json.dumps(plan).encode()), **quality))
+        rows.append(_row("C-report-plan-deterministic-composition", plan, telemetry, plan_prompt, bool(plan.get("general_summary")), incidents=count, report_plan_bytes=len(json.dumps(plan).encode()), **quality))
     out_path.write_text(json.dumps(rows, indent=2))
     print(json.dumps(rows, indent=2))
     print(f"wrote {out_path}")

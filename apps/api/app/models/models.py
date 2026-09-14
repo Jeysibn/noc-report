@@ -409,6 +409,14 @@ class AnalysisRun(Base):
     scanning history."""
 
     __tablename__ = "analysis_runs"
+    __table_args__ = (
+        Index(
+            "uq_analysis_runs_current_incident",
+            "incident_id",
+            unique=True,
+            postgresql_where=text("current IS TRUE"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = uuid_pk()
     incident_id: Mapped[uuid.UUID] = mapped_column(

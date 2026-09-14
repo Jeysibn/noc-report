@@ -55,7 +55,7 @@ function readinessFor(incident: Incident): IncidentReadiness {
 export function ShiftReport() {
   const [shift, setShift] = useState<Shift | null>(null);
   const [incidents, setIncidents] = useState<Incident[]>([]);
-  const [model, setModel] = useState("claude-sonnet-5");
+  const [model, setModel] = useState("auto");
   const [effort, setEffort] = useState<"auto" | "low" | "medium">("auto");
   const [versions, setVersions] = useState<ReportRun[]>([]);
   const [requestError, setRequestError] = useState<string | null>(null);
@@ -165,7 +165,7 @@ export function ShiftReport() {
     setRequestError(null);
     try {
       const run = await reportService.generate(shift.id, {
-        model,
+        ...(model === "auto" ? {} : { model }),
         ...(effort === "auto" ? {} : { effort }),
       });
       setVersions((prev) => [run, ...prev]);
@@ -290,6 +290,7 @@ export function ShiftReport() {
                     onChange={(e) => setModel(e.target.value)}
                     disabled={isBusy}
                   >
+                    <option value="auto">System default / Auto</option>
                     <option value="claude-sonnet-5">Claude Sonnet 5</option>
                     <option value="claude-opus-5">Claude Opus 5</option>
                   </Select>

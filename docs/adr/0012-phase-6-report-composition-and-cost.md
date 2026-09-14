@@ -1,5 +1,11 @@
 # ADR 0012 — Phase 6 ReportPlan and Deterministic Composition
 
+> Historical decision. For the active canonical Daily Report, the
+> reference-heavy ReportPlan described here was superseded by ADR 0017:
+> Claude emits narrative only, while Report Composition derives mandatory
+> coverage and section order from the frozen ReportSnapshot. The generic
+> ReportDocument/parser and historical-profile compatibility remain valid.
+
 Status: implemented
 
 ## Context

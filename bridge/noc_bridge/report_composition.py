@@ -1,9 +1,10 @@
 """Deterministic ReportPlan -> ReportDocument composition.
 
-The Daily Report skill owns ordering and narrative.  This module owns every
-trusted fact lookup: incident/evidence resolution, analysis provenance,
-links, filenames, and storage references.  A model-generated plan therefore
-cannot authorize a MinIO read or invent an AnalysisRun.
+The Daily Report skill owns narrative reasoning. This module owns canonical
+section order and every trusted fact lookup: incident/evidence resolution,
+analysis provenance, links, filenames, and storage references. A model-
+generated plan therefore cannot authorize a MinIO read, omit a mandatory
+incident, or invent an AnalysisRun.
 """
 from __future__ import annotations
 
@@ -22,6 +23,7 @@ from noc_bridge.report_document import (
     Screenshot,
 )
 from noc_bridge.analysis_presentation import build_analysis_presentation
+from noc_bridge.time_projection import project_shift_time
 from noc_bridge.validation import OutputValidationError
 
 DAILY_REPORT_COMPOSITION_PROFILE = "noc-daily-report-v1"
@@ -79,9 +81,9 @@ def _metadata(incident: dict) -> tuple[Metadata, ...]:
     return tuple(Metadata(label, str(value)) for label, value in values if value not in (None, ""))
 
 
-def _incident_block(incident: dict, number: int) -> IncidentEvidence:
+def _incident_block(incident: dict, number: int, *, canonical: bool = False) -> IncidentEvidence:
     links = []
-    if incident.get("teams_url"):
+    if not canonical and incident.get("teams_url"):
         links.append(Link("Teams", incident["teams_url"], text="Teams", prefix="Teams Link"))
     if incident.get("grafana_url"):
         links.append(Link("Grafana", incident["grafana_url"], text="Grafana", prefix="Grafana Link"))
@@ -93,7 +95,9 @@ def _incident_block(incident: dict, number: int) -> IncidentEvidence:
     return IncidentEvidence(
         heading=f"Alert #{number} - {incident.get('title') or incident.get('display_id') or 'Incident'}",
         incident_id=str(incident["id"]),
-        metadata=_metadata(incident),
+        # The canonical operator report exposes only operational evidence.
+        # Incident metadata remains in the frozen snapshot for audit views.
+        metadata=() if canonical else _metadata(incident),
         links=tuple(links),
         log_file=(
             LogFileReference(incident["log_filename"], incident.get("log_file_url"))
@@ -104,10 +108,10 @@ def _incident_block(incident: dict, number: int) -> IncidentEvidence:
     )
 
 
-def _analysis_block(incident: dict, plan_node: dict, number: int) -> AnalysisReference:
-    requested_run_id = plan_node.get("analysis_run_id")
-    requested_incident_id = plan_node.get("incident_id")
-    if requested_run_id is None and requested_incident_id is None:
+def _analysis_block(incident: dict, plan_node: dict | None, number: int) -> AnalysisReference:
+    requested_run_id = plan_node.get("analysis_run_id") if plan_node else None
+    requested_incident_id = plan_node.get("incident_id") if plan_node else None
+    if plan_node is not None and requested_run_id is None and requested_incident_id is None:
         raise OutputValidationError("analysis_reference requires analysis_run_id or incident_id")
     if requested_incident_id is not None and str(requested_incident_id) not in {
         str(incident.get("id")), str(incident.get("display_id"))
@@ -191,14 +195,15 @@ def _analysis_block(incident: dict, plan_node: dict, number: int) -> AnalysisRef
 
 def compose_report(plan: dict, snapshot: dict) -> ReportDocument:
     """Resolve one validated ReportPlan against one frozen snapshot."""
-    if not isinstance(plan, dict) or not isinstance(plan.get("blocks"), list):
-        raise OutputValidationError("ReportPlan must contain a blocks array")
+    if not isinstance(plan, dict):
+        raise OutputValidationError("ReportPlan must be an object")
     coverage = snapshot.get("coverage") or {}
     if not isinstance(coverage, dict):
         raise OutputValidationError("report coverage policy must be an object")
     composition_profile = snapshot.get("composition_profile") or coverage.get("composition_profile")
     if composition_profile not in (None, DAILY_REPORT_COMPOSITION_PROFILE):
         raise OutputValidationError(f"unsupported report composition profile: {composition_profile}")
+    canonical = composition_profile == DAILY_REPORT_COMPOSITION_PROFILE
     incident_policy = coverage.get("incidents", "optional")
     analysis_policy = coverage.get("analyses", "optional")
     allow_duplicate_incidents = bool(coverage.get("allow_duplicate_incidents", False))
@@ -223,6 +228,21 @@ def compose_report(plan: dict, snapshot: dict) -> ReportDocument:
     incident_refs: list[str] = []
     analysis_refs: list[str] = []
     analysis_plan_nodes: dict[str, dict] = {}
+
+    def required_text(value: object, label: str) -> str:
+        if not isinstance(value, str) or not value.strip():
+            raise OutputValidationError(f"{label} must be a non-empty string")
+        return value
+
+    def narrative_summary(value: object, label: str) -> BilingualText:
+        if not isinstance(value, dict):
+            raise OutputValidationError(f"{label} must contain zh and en")
+        return BilingualText(
+            required_text(value.get("zh"), f"{label}.zh"),
+            required_text(value.get("en"), f"{label}.en"),
+            "Chinese Summary",
+            "English Summary",
+        )
 
     def parse(nodes: list[dict]) -> list:
         """Validate references while collecting only model-authored prose.
@@ -285,26 +305,38 @@ def compose_report(plan: dict, snapshot: dict) -> ReportDocument:
                 raise OutputValidationError(f"unsupported ReportPlan node type: {kind!r}")
         return summary
 
-    summary_blocks = parse(plan["blocks"])
+    narrative_mode = "general_summary" in plan
+    if canonical and not narrative_mode:
+        raise OutputValidationError("canonical Daily Report requires general_summary")
+    if narrative_mode:
+        summary_blocks = [narrative_summary(plan.get("general_summary"), "general_summary")]
+        if plan.get("cross_incident_findings") is not None:
+            summary_blocks.extend((Heading("Cross-Incident Findings", level=2), narrative_summary(
+                plan.get("cross_incident_findings"), "cross_incident_findings"
+            )))
+    else:
+        if not isinstance(plan.get("blocks"), list):
+            raise OutputValidationError("ReportPlan must contain a blocks array")
+        summary_blocks = parse(plan["blocks"])
 
-    if not allow_duplicate_incidents and len(incident_refs) != len(set(incident_refs)):
+    if not narrative_mode and not allow_duplicate_incidents and len(incident_refs) != len(set(incident_refs)):
         raise OutputValidationError("duplicate incident reference in ReportPlan")
-    if not allow_duplicate_analyses and len(analysis_refs) != len(set(analysis_refs)):
+    if not narrative_mode and not allow_duplicate_analyses and len(analysis_refs) != len(set(analysis_refs)):
         raise OutputValidationError("duplicate analysis reference in ReportPlan")
-    if incident_policy == "all":
+    if incident_policy not in ("all", "none", "optional"):
+        raise OutputValidationError(f"unsupported incident coverage policy: {incident_policy}")
+    if analysis_policy not in ("all_available", "none", "optional"):
+        raise OutputValidationError(f"unsupported analysis coverage policy: {analysis_policy}")
+    if not narrative_mode and incident_policy == "all":
         required = {str(item["id"]) for item in unique_incidents}
         missing = required - set(incident_refs)
         if missing:
             raise OutputValidationError(f"ReportPlan omitted required incidents: {sorted(missing)}")
-    elif incident_policy not in ("none", "optional"):
-        raise OutputValidationError(f"unsupported incident coverage policy: {incident_policy}")
-    if analysis_policy == "all_available":
+    if not narrative_mode and analysis_policy == "all_available":
         required = {str(item["analysis_run_id"]) for item in unique_incidents if item.get("analysis_run_id")}
         missing = required - set(analysis_refs)
         if missing:
             raise OutputValidationError(f"ReportPlan omitted required analyses: {sorted(missing)}")
-    elif analysis_policy not in ("none", "optional"):
-        raise OutputValidationError(f"unsupported analysis coverage policy: {analysis_policy}")
 
     # Canonical profiles number and order from the frozen report, never from
     # Claude's arbitrary reference order. Optional legacy profiles retain the
@@ -331,7 +363,7 @@ def compose_report(plan: dict, snapshot: dict) -> ReportDocument:
 
     parsed_blocks: list = []
     parsed_blocks.append(Heading("Alerts", level=1))
-    parsed_blocks.extend(_incident_block(incident, i) for i, incident in enumerate(alert_incidents, start=1))
+    parsed_blocks.extend(_incident_block(incident, i, canonical=canonical) for i, incident in enumerate(alert_incidents, start=1))
     parsed_blocks.append(PageBreak())
     parsed_blocks.append(Heading("General Summary", level=1))
     parsed_blocks.extend(summary_blocks)
@@ -340,19 +372,16 @@ def compose_report(plan: dict, snapshot: dict) -> ReportDocument:
     parsed_blocks.extend(
         _analysis_block(
             incident,
-            analysis_plan_nodes.get(str(incident["id"]), {"incident_id": str(incident["id"])}),
+            analysis_plan_nodes.get(str(incident["id"])) if narrative_mode else analysis_plan_nodes.get(str(incident["id"]), {"incident_id": str(incident["id"])}),
             alert_number_by_id.get(str(incident["id"]), i),
         )
         for i, incident in enumerate(analysis_incidents, start=1)
     )
 
-    starts = snapshot.get("shift_starts_at") or ""
-    display_date = str(starts).split("T", 1)[0]
     try:
-        from datetime import datetime
-        display_date = datetime.fromisoformat(str(starts)).strftime("%A, %d %B %Y")
-    except (TypeError, ValueError):
-        pass
+        display_date = project_shift_time(snapshot).report_date
+    except ValueError as exc:
+        raise OutputValidationError(str(exc)) from exc
     shift_display = snapshot.get("shift_display_name") or snapshot.get("shift_code") or snapshot.get("shift_name") or "Shift"
     metadata = tuple(Metadata(label, str(value)) for label, value in (("Date", display_date), ("Shift", shift_display)))
     provenance = tuple(

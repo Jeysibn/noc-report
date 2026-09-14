@@ -211,19 +211,8 @@ def test_declarative_document_supports_metadata_and_analysis_references(tmp_path
 
 def test_active_daily_report_document_contract_renders_nested_analysis_blocks(tmp_path):
     result = {
-        "blocks": [
-            {"type": "heading", "level": 1, "text": "Alerts"},
-            {"type": "incident_reference", "incident_id": "incident-1"},
-            {"type": "heading", "level": 1, "text": "General Summary"},
-            {"type": "bilingual_generated_text", "zh": "一项事件。", "en": "One incident."},
-            {"type": "heading", "level": 1, "text": "Log Analysis"},
-            {
-                "type": "analysis_reference",
-                "analysis_run_id": "run-1",
-            },
-        ],
+        "general_summary": {"zh": "一项事件。", "en": "One incident."},
     }
-    result["blocks"].append({"type": "paragraph", "text": "Recommended action: inspect pool saturation."})
     validate_output(
         "daily_report",
         result,
@@ -233,6 +222,7 @@ def test_active_daily_report_document_contract_renders_nested_analysis_blocks(tm
     snapshot = {
         "shift_starts_at": "2026-09-14T00:00:00+00:00",
         "shift_ends_at": "2026-09-14T08:00:00+00:00",
+        "shift_timezone": "Asia/Manila",
         "report_skill_snapshot_id": "report-snapshot",
         "report_skill_execution_hash": "report-execution",
         "incidents": [{
@@ -245,6 +235,8 @@ def test_active_daily_report_document_contract_renders_nested_analysis_blocks(tm
             "analysis_skill_snapshot_id": "analysis-snapshot", "analysis_skill_execution_hash": "analysis-execution",
             "analysis_skill_version": "1", "analysis_output_sha256": "result-hash", "analysis_model": "model", "analysis_effort": "low",
         }],
+        "composition_profile": "noc-daily-report-v1",
+        "coverage": {"incidents": "all", "analyses": "all_available"},
     }
     destination = tmp_path / "active-daily-report.docx"
     render_document(compose_report(result, snapshot), destination)

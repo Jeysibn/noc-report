@@ -316,6 +316,16 @@ class BridgeService:
 
             publish_status_event(channel, job_id=job_id, event="progress", detail={"stage": "sandbox"})
 
+            effective_model = ai_governance.effective_model(
+                payload.get("model"), config["default_model"]
+            )
+            effective_effort = ai_governance.effective_effort(
+                payload.get("effort"), config["default_effort"]
+            )
+            ai_governance.apply_effective_policy(
+                pg_conn, job_id, model=effective_model, effort=effective_effort
+            )
+
             # A daily report stores the validated ReportPlan separately from
             # the final DOCX. If composition/upload fails after Claude has
             # succeeded, a retry reuses this durable plan and spends zero new
@@ -382,10 +392,8 @@ class BridgeService:
                     # request time in apps/api) always wins; system_config
                     # only supplies the fallback default, same precedent as
                     # the pre-existing claude_model_default fallback.
-                    "SKILL_MODEL": payload.get("model") or config["default_model"],
-                    "SKILL_EFFORT": ai_governance.effective_effort(
-                        payload.get("effort"), config["default_effort"]
-                    ),
+                    "SKILL_MODEL": effective_model,
+                    "SKILL_EFFORT": effective_effort,
                     "SKILL_EFFORT_ESCALATION": self.settings.claude_effort_escalation,
                     "SKILL_ESCALATION_CONFIDENCE_THRESHOLD": str(
                         self.settings.claude_escalation_confidence_threshold

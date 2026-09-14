@@ -26,6 +26,7 @@ def _snapshot() -> dict:
     return {
         "shift_starts_at": "2026-09-14T00:00:00+00:00",
         "shift_ends_at": "2026-09-14T08:00:00+00:00",
+        "shift_timezone": "Asia/Manila",
         "shift_display_name": "MS",
         "report_skill_snapshot_id": "report-v2",
         "report_skill_execution_hash": "report-exec-v2",
@@ -192,16 +193,9 @@ def test_canonical_profile_numbers_from_frozen_order_and_repeats_alert_evidence(
         "incidents": "all", "analyses": "all_available",
         "allow_duplicate_incidents": False, "allow_duplicate_analyses": False,
     }
-    # Claude is allowed to return references in any order; composition is not.
-    plan = {
-        "blocks": [
-            {"type": "analysis_reference", "analysis_run_id": "run-002"},
-            {"type": "incident_reference", "incident_id": "inc-002"},
-            {"type": "bilingual_generated_text", "zh": "班次摘要", "en": "Shift summary"},
-            {"type": "analysis_reference", "analysis_run_id": "run-001"},
-            {"type": "incident_reference", "incident_id": "inc-001"},
-        ]
-    }
+    # Claude returns narrative only; coverage and order come from the frozen
+    # snapshot and profile.
+    plan = {"general_summary": {"zh": "班次摘要", "en": "Shift summary"}}
     document = compose_report(plan, snapshot)
     from noc_bridge.report_document import AnalysisReference, IncidentEvidence
 
@@ -213,6 +207,8 @@ def test_canonical_profile_numbers_from_frozen_order_and_repeats_alert_evidence(
     assert [b.heading for b in analyses] == ["Alert #1 - Payment timeout", "Alert #2 - Cache errors"]
     assert len(alerts[0].screenshots) == 1
     assert len(analyses[0].screenshots) == 1
+    assert alerts[0].metadata == ()
+    assert {link.label for link in alerts[0].links} == {"Grafana"}
     destination = tmp_path / "canonical.docx"
     render_document(document, destination, screenshot_fetcher=lambda *_: _PNG)
     rendered_text = "\n".join(paragraph.text for paragraph in Document(str(destination)).paragraphs)
@@ -221,6 +217,37 @@ def test_canonical_profile_numbers_from_frozen_order_and_repeats_alert_evidence(
         relationships = archive.read("word/_rels/document.xml.rels").decode()
         assert "https://grafana.example/inc-001" in relationships
         assert "TargetMode=\"External\"" in relationships
+
+
+def test_narrative_plan_derives_complete_canonical_coverage_without_references():
+    snapshot = _snapshot()
+    snapshot["composition_profile"] = "noc-daily-report-v1"
+    snapshot["coverage"] = {"incidents": "all", "analyses": "all_available"}
+    document = compose_report(
+        {"general_summary": {"zh": "班次稳定。", "en": "The shift was stable."}},
+        snapshot,
+    )
+    from noc_bridge.report_document import AnalysisReference, IncidentEvidence
+    assert [b.incident_id for b in document.blocks if isinstance(b, IncidentEvidence)] == ["inc-001", "inc-002"]
+    assert [b.incident_id for b in document.blocks if isinstance(b, AnalysisReference)] == ["inc-001", "inc-002"]
+
+
+@pytest.mark.parametrize("plan", [
+    {},
+    {"general_summary": {"zh": "", "en": "English"}},
+    {"general_summary": {"zh": "中文", "en": "   "}},
+])
+def test_canonical_daily_report_requires_nonempty_bilingual_general_summary(plan):
+    snapshot = _snapshot()
+    snapshot["composition_profile"] = "noc-daily-report-v1"
+    snapshot["coverage"] = {"incidents": "all", "analyses": "all_available"}
+    with pytest.raises(OutputValidationError, match="general_summary"):
+        compose_report(plan, snapshot)
+
+
+def test_schema_rejects_a_plan_without_the_canonical_summary():
+    with pytest.raises(OutputValidationError, match="required property"):
+        validate_output("daily_report", {}, skill_name="daily-alert-report", skills_dir=SKILLS_DIR)
 
 
 def test_materially_different_analysis_schema_uses_generic_presentation_export(tmp_path):

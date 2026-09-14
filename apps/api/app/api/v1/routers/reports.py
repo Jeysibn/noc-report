@@ -61,15 +61,20 @@ def _build_snapshot(db: Session, shift: Shift, report_skill_snapshot) -> dict:
     however the underlying incidents change afterward."""
     report_manifest = load_manifest(report_skill_snapshot)
     shift_display_name = getattr(shift.definition, "name", None)
+    shift_timezone = getattr(shift.definition, "timezone", None) or "UTC"
     incidents = list(
         db.scalars(shift_incident_statement(shift.id))
     )
     incident_rows = []
     for incident in incidents:
-        run = db.scalar(
+        current_runs = list(db.scalars(
             select(AnalysisRun)
             .where(AnalysisRun.incident_id == incident.id, AnalysisRun.current.is_(True))
-        )
+            .limit(2)
+        ))
+        if len(current_runs) > 1:
+            raise RuntimeError(f"incident {incident.id} has multiple current AnalysisRuns")
+        run = current_runs[0] if current_runs else None
         analysis_presentation_contract = None
         if run and run.skill_snapshot_id:
             analysis_snapshot = db.get(SkillSnapshot, run.skill_snapshot_id)
@@ -151,6 +156,9 @@ def _build_snapshot(db: Session, shift: Shift, report_skill_snapshot) -> dict:
         "shift_name": shift_display_name,
         "shift_code": shift_display_name,
         "shift_display_name": shift_display_name,
+        # Freeze the operational calendar with the UTC boundaries. Historical
+        # reports must not change if the mutable ShiftDefinition is edited.
+        "shift_timezone": shift_timezone,
         "report_skill_snapshot_id": str(report_skill_snapshot.id),
         "report_skill_execution_hash": compute_execution_hash(db, report_skill_snapshot),
         # Coverage is part of the immutable report-skill contract. The
@@ -218,6 +226,10 @@ def _sync_completed_report(db: Session, report: Report, job: Job) -> None:
     report.report_object_key = key
     report.report_sha256 = sha256_of_bytes(head)
     report.generated_at = job.completed_at
+    if report.model is None:
+        report.model = job.model
+    if report.effort is None:
+        report.effort = job.effort
     db.flush()
 
 

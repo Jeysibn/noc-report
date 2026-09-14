@@ -93,6 +93,8 @@ def test_manifest_projection_is_the_source_of_daily_report_context(monkeypatch):
     incident = projected["incidents"][0]
     assert incident["report_fragment"]["summary"]["en"] == "NullPointerException in PaymentWorker.charge"
     assert incident["report_fragment"]["likely_cause"]["en"] == "null pointer dereference"
+    assert "id" not in incident
+    assert "analysis_run_id" not in incident
     assert "grafana_url" not in incident
     assert "screenshots" not in incident
 

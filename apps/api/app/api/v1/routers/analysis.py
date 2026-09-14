@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.audit import record_audit
@@ -65,6 +66,20 @@ SKILL_VERSION = str((yaml.safe_load(_SOURCE_MANIFEST.read_text()) or {}).get("ve
 PREPROCESSOR_VERSION = "1"
 AI_POLICY_VERSION = "1"
 CACHE_CONTRACT_VERSION = f"{PREPROCESSOR_VERSION}.{AI_POLICY_VERSION}"
+
+
+def _commit_current_analysis(db: Session) -> None:
+    """Commit a current-run transition and surface uniqueness races clearly."""
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        if "uq_analysis_runs_current_incident" in str(exc):
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "Another analysis became current for this incident; retry the request.",
+            ) from exc
+        raise
 
 
 def _find_cached_analysis_run(
@@ -380,7 +395,7 @@ def request_analysis(
             resource_id=str(incident.id),
             metadata={"job_id": str(job.id), "used_cache": True, "cache_type": "exact", "source_run_id": str(cached_run.id)},
         )
-        db.commit()
+        _commit_current_analysis(db)
         db.refresh(job)
         db.refresh(run)
         return _to_out(job, run)
@@ -437,7 +452,7 @@ def request_analysis(
         resource_id=str(incident.id),
         metadata={"job_id": str(job.id)},
     )
-    db.commit()
+    _commit_current_analysis(db)
     db.refresh(job)
     db.refresh(run)
     return _to_out(job, run)

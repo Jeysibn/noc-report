@@ -19,7 +19,6 @@ input_projection:
     incidents:
       source: incidents
       fields:
-        id: id
         display_id: display_id
         title: title
         status: status
@@ -27,7 +26,6 @@ input_projection:
         environment: environment
         starts_at: triggered_at
         ends_at: recovered_at
-        analysis_run_id: analysis_run_id
         report_fragment: report_fragment
 renderer_profile: report-document-v1
 composition_profile: noc-daily-report-v1
@@ -41,5 +39,6 @@ execution_policy:
 dependencies:
   - log-triage-summary
 description: >
-  Produce a compact ReportPlan. References are IDs only; the application
-  resolves incident facts, evidence, storage paths, and analysis provenance.
+  Produce a compact narrative-only ReportPlan. The application resolves
+  incident facts, mandatory coverage, evidence, storage paths, and analysis
+  provenance after the response.
