@@ -229,3 +229,91 @@ def test_poll_syncs_docx_once_job_completes_and_download_url_works(client, db_se
     download = client.get(f"/api/v1/reports/{report_id}/download-url", headers=headers)
     assert download.status_code == 200
     assert "download_url" in download.json()
+
+
+def test_document_preview_and_screenshot_proxy_serve_bridge_written_artifacts(client, db_session):
+    """Simulates what the bridge writes for the report-document-v1 renderer
+    profile: report.docx, document.json (browser-safe preview) and
+    document.screenshots.json (private bucket/object_key index). The API
+    must serve the preview JSON and proxy screenshot bytes by index,
+    without ever handing the browser a bucket/object_key directly."""
+    make_user(db_session, "operator3", "NOC")
+    headers = auth_headers(client, "operator3")
+    shift = _create_active_shift(db_session)
+
+    resp = client.post(
+        f"/api/v1/shifts/{shift.id}/reports",
+        json={"model": "claude-sonnet-5", "effort": "medium"},
+        headers=headers,
+    )
+    assert resp.status_code == 201
+    report_id = resp.json()["id"]
+    job_id = resp.json()["job_id"]
+
+    not_ready = client.get(f"/api/v1/reports/{report_id}/document", headers=headers)
+    assert not_ready.status_code == 409
+
+    from app.models.models import Job
+
+    job = db_session.get(Job, __import__("uuid").UUID(job_id))
+    job.status = "COMPLETED"
+    job.completed_at = datetime.now(timezone.utc)
+    db_session.commit()
+
+    minio = get_client()
+    minio.put_object(
+        Bucket=settings.minio_bucket_reports,
+        Key=f"reports/{job_id}/report.docx",
+        Body=b"fake docx bytes for test",
+        ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
+    preview_payload = {
+        "title": "Daily Alert & Log Analysis Report",
+        "metadata": [],
+        "blocks": [
+            {"type": "heading", "text": "Alerts", "level": 1},
+            {
+                "type": "incident_evidence",
+                "heading": "Alert #1 - Payment timeout",
+                "incident_id": "inc-001",
+                "metadata": [],
+                "links": [],
+                "log_file": None,
+                "screenshots": [{"type": "screenshot", "index": 0, "filename": "alert.png"}],
+            },
+        ],
+    }
+    minio.put_object(
+        Bucket=settings.minio_bucket_reports,
+        Key=f"reports/{job_id}/document.json",
+        Body=json.dumps(preview_payload).encode("utf-8"),
+        ContentType="application/json",
+    )
+    minio.put_object(
+        Bucket=settings.minio_bucket_reports,
+        Key=f"reports/{job_id}/document.screenshots.json",
+        Body=json.dumps([{"bucket": "noc-evidence", "object_key": "inc-001.png", "filename": "alert.png"}]).encode("utf-8"),
+        ContentType="application/json",
+    )
+    minio.put_object(
+        Bucket="noc-evidence",
+        Key="inc-001.png",
+        Body=b"fake png bytes",
+        ContentType="image/png",
+    )
+
+    doc_resp = client.get(f"/api/v1/reports/{report_id}/document", headers=headers)
+    assert doc_resp.status_code == 200
+    body = doc_resp.json()
+    assert body["blocks"][0]["text"] == "Alerts"
+    dumped = json.dumps(body)
+    assert "noc-evidence" not in dumped
+    assert "inc-001.png" not in dumped
+
+    shot_resp = client.get(f"/api/v1/reports/{report_id}/document/screenshots/0", headers=headers)
+    assert shot_resp.status_code == 200
+    assert shot_resp.content == b"fake png bytes"
+    assert shot_resp.headers["content-type"] == "image/png"
+
+    missing_shot = client.get(f"/api/v1/reports/{report_id}/document/screenshots/9", headers=headers)
+    assert missing_shot.status_code == 404

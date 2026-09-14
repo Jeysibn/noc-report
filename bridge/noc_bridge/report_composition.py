@@ -193,26 +193,42 @@ def compose_report(plan: dict, snapshot: dict) -> ReportDocument:
     incident_refs: list[str] = []
     analysis_refs: list[str] = []
 
-    def parse(nodes: list[dict]):
-        blocks = []
+    # The Daily Report skill authors summary text and cross-incident
+    # narrative, but section ORDER is a deterministic, structural property
+    # of the report -- not something a model-generated plan may decide.
+    # Every parsed block is bucketed by what produced it (an incident
+    # reference always belongs to Alerts, an analysis reference always
+    # belongs to Log Analysis, everything else belongs to whichever of
+    # those two the plan is currently narrating around, defaulting to
+    # General Summary) and the buckets are then reassembled in the
+    # canonical order below, regardless of how the plan interleaved them.
+    SECTION_ALERTS = "alerts"
+    SECTION_SUMMARY = "summary"
+    SECTION_LOG_ANALYSIS = "log_analysis"
+
+    def parse(nodes: list[dict]) -> dict[str, list]:
+        sections: dict[str, list] = {SECTION_ALERTS: [], SECTION_SUMMARY: [], SECTION_LOG_ANALYSIS: []}
+        current = SECTION_SUMMARY
         for node in nodes:
             kind = node.get("type") if isinstance(node, dict) else None
             if kind == "heading":
-                blocks.append(Heading(str(node["text"]), int(node.get("level", 1))))
+                block = Heading(str(node["text"]), int(node.get("level", 1)))
             elif kind == "paragraph":
-                blocks.append(Paragraph(str(node.get("text") or ""), node.get("style")))
+                block = Paragraph(str(node.get("text") or ""), node.get("style"))
             elif kind == "bilingual_generated_text":
-                blocks.append(BilingualText(
+                block = BilingualText(
                     str(node.get("zh") or ""), str(node.get("en") or ""),
                     node.get("heading_zh"), node.get("heading_en"),
-                ))
+                )
+                current = SECTION_SUMMARY
             elif kind == "incident_reference":
                 ref = str(node.get("incident_id") or "")
                 incident = incidents.get(ref)
                 if incident is None:
                     raise OutputValidationError(f"unknown incident reference: {ref}")
                 incident_refs.append(str(incident["id"]))
-                blocks.append(_incident_block(incident))
+                block = _incident_block(incident)
+                current = SECTION_ALERTS
             elif kind == "analysis_reference":
                 ref = str(node.get("incident_id") or "")
                 if ref:
@@ -228,18 +244,34 @@ def compose_report(plan: dict, snapshot: dict) -> ReportDocument:
                     )
                     if incident is None:
                         raise OutputValidationError(f"analysis reference is outside this report: {run_id}")
-                blocks.append(_analysis_block(incident, node))
+                block = _analysis_block(incident, node)
                 if incident.get("analysis_run_id"):
                     analysis_refs.append(str(incident["analysis_run_id"]))
+                current = SECTION_LOG_ANALYSIS
             elif kind == "divider":
-                blocks.append(Divider())
+                block = Divider()
             elif kind == "page_break":
-                blocks.append(PageBreak())
+                # Canonical section breaks are inserted deterministically
+                # below; a plan-authored page break inside a section is
+                # otherwise redundant, so it is dropped rather than trusted
+                # to land in the right place.
+                continue
             else:
                 raise OutputValidationError(f"unsupported ReportPlan node type: {kind!r}")
-        return blocks
+            sections[current].append(block)
+        return sections
 
-    parsed_blocks = parse(plan["blocks"])
+    sections = parse(plan["blocks"])
+
+    parsed_blocks: list = []
+    parsed_blocks.append(Heading("Alerts", level=1))
+    parsed_blocks.extend(sections[SECTION_ALERTS])
+    parsed_blocks.append(PageBreak())
+    parsed_blocks.append(Heading("General Summary", level=1))
+    parsed_blocks.extend(sections[SECTION_SUMMARY])
+    parsed_blocks.append(PageBreak())
+    parsed_blocks.append(Heading("Log Analysis", level=1))
+    parsed_blocks.extend(sections[SECTION_LOG_ANALYSIS])
 
     if not allow_duplicate_incidents and len(incident_refs) != len(set(incident_refs)):
         raise OutputValidationError("duplicate incident reference in ReportPlan")

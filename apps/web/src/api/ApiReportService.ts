@@ -1,5 +1,5 @@
 import type { ReportGenerateInput, ReportService } from "@/services/report.service";
-import type { ReportRun } from "@/types/report";
+import type { ReportDocument, ReportRun } from "@/types/report";
 import { httpRequest, httpRequestBlob } from "@/lib/http";
 
 interface RawReportOut {
@@ -61,5 +61,13 @@ export class ApiReportService implements ReportService {
 
   async download(reportId: string): Promise<Blob> {
     return httpRequestBlob(`/api/v1/reports/${reportId}/download`);
+  }
+
+  async getDocument(reportId: string): Promise<ReportDocument> {
+    return httpRequest<ReportDocument>(`/api/v1/reports/${reportId}/document`);
+  }
+
+  async getScreenshotBlob(reportId: string, index: number): Promise<Blob> {
+    return httpRequestBlob(`/api/v1/reports/${reportId}/document/screenshots/${index}`);
   }
 }

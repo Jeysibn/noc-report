@@ -19,3 +19,119 @@ export interface ReportRun {
   createdAt: string;
   downloadable: boolean;
 }
+
+// Mirrors bridge/noc_bridge/report_document_json.py's browser-safe
+// serialization of the same ReportDocument the DOCX adapter renders from
+// (bridge/noc_bridge/report_document.py) — one semantic model, two
+// adapters. Every block carries a "type" discriminator matching the
+// bridge's own block-type names.
+
+export interface ReportMetadataItem {
+  type: "metadata";
+  label: string;
+  value: string;
+}
+
+export interface ReportLink {
+  type: "link";
+  label: string;
+  url: string;
+}
+
+export interface ReportLogFileReference {
+  type: "log_file_reference";
+  filename: string;
+}
+
+export interface ReportScreenshotRef {
+  type: "screenshot";
+  index: number;
+  filename: string | null;
+}
+
+export interface ReportHeading {
+  type: "heading";
+  text: string;
+  level: number;
+}
+
+export interface ReportParagraph {
+  type: "paragraph";
+  text: string;
+  style: string | null;
+}
+
+export interface ReportDivider {
+  type: "divider";
+}
+
+export interface ReportPageBreak {
+  type: "page_break";
+}
+
+export interface ReportBilingualText {
+  type: "bilingual_text";
+  text_zh: string;
+  text_en: string;
+  heading_zh: string | null;
+  heading_en: string | null;
+}
+
+export interface ReportFind {
+  label: string;
+  detail: string | null;
+  stat: string | null;
+}
+
+export interface ReportBilingualFindList {
+  type: "bilingual_find_list";
+  heading_zh: string;
+  heading_en: string;
+  finds_zh: ReportFind[];
+  finds_en: ReportFind[];
+}
+
+export interface ReportIncidentEvidence {
+  type: "incident_evidence";
+  heading: string;
+  incident_id: string | null;
+  metadata: ReportMetadataItem[];
+  links: ReportLink[];
+  log_file: ReportLogFileReference | null;
+  screenshots: ReportScreenshotRef[];
+}
+
+export interface ReportAnalysisReference {
+  type: "analysis_reference";
+  heading: string;
+  available: boolean;
+  analysis_run_id: string | null;
+  unavailable_text: string | null;
+  metadata: ReportMetadataItem[];
+  children: ReportBlock[];
+  summary: ReportBilingualText | null;
+  key_finds: ReportBilingualFindList | null;
+  secondary_finds: ReportBilingualFindList | null;
+  likely_cause: ReportBilingualText | null;
+  recommended_action: ReportBilingualText | null;
+}
+
+export type ReportBlock =
+  | ReportHeading
+  | ReportParagraph
+  | ReportDivider
+  | ReportPageBreak
+  | ReportMetadataItem
+  | ReportLink
+  | ReportLogFileReference
+  | ReportScreenshotRef
+  | ReportBilingualText
+  | ReportBilingualFindList
+  | ReportIncidentEvidence
+  | ReportAnalysisReference;
+
+export interface ReportDocument {
+  title: string;
+  metadata: ReportMetadataItem[];
+  blocks: ReportBlock[];
+}
