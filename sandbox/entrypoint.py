@@ -6,7 +6,7 @@ output mount (master plan §27 steps 9-12).
 The Milestone 0.5 / Milestone 12 deterministic stand-in has been replaced
 (ADR 0003) — this now shells out to the `claude` binary bind-mounted at
 /usr/local/bin/claude by the bridge, authenticated via the OAuth
-credential bind-mounted at /home/sandbox/.claude/.credentials.json (never
+credential bind-mounted at $HOME/.claude/.credentials.json (never
 a separate ANTHROPIC_API_KEY — `--bare` is deliberately NOT passed, so the
 CLI reads that credential file instead of requiring an API key).
 

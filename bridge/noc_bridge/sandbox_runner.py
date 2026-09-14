@@ -152,6 +152,11 @@ def run_job_sandbox(
     container = client.containers.run(
         SANDBOX_IMAGE,
         detach=True,
+        # Keep the bridge UID for bind-mounted private files (notably the
+        # OAuth credential copy). Docker's per-container `pids_limit` still
+        # bounds this process tree; do not add an `nproc` ulimit here because
+        # Linux accounts that limit per UID and would include unrelated host
+        # desktop threads owned by the same operator.
         user=f"{os.getuid()}:{os.getgid()}",
         read_only=True,
         tmpfs={"/tmp": "size=64m"},
@@ -161,7 +166,6 @@ def run_job_sandbox(
         nano_cpus=cpu_nano_cpus,
         mem_limit=mem_limit,
         pids_limit=pid_limit,
-        ulimits=[Ulimit(name="nproc", soft=pid_limit, hard=pid_limit)],
         volumes=volumes,
         environment=environment or {},
     )

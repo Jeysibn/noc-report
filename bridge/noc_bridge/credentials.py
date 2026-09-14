@@ -3,13 +3,10 @@ credential (master plan §28: "use minimum required credentials/config",
 "never mount general host home directory").
 
 The source `.credentials.json` is normally mode 0600, owned by the host
-user — unreadable by the sandbox's own non-root uid (10001) once bind-
-mounted as-is, since Docker bind mounts preserve host ownership/perms
-verbatim. Rather than loosening the real file's permissions or mounting
-the operator's actual `~/.claude` directory, this copies just the one
-file into a fresh, process-owned temp directory with relaxed (but still
-not world-writable) permissions, and only that copy is ever mounted into
-a container.
+user. Rather than loosening the real file's permissions or mounting the
+operator's actual `~/.claude` directory, this copies just the one file into
+a fresh, process-owned temp directory, and only that copy is ever mounted
+read-only into a container.
 """
 from __future__ import annotations
 
