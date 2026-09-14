@@ -40,7 +40,10 @@ app = FastAPI(title="NOC Report Builder API", version="0.1.0", lifespan=lifespan
 # real deployment target (and its origin) exists.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    # Support both names browsers commonly use for the local Vite server.
+    # `localhost` and `127.0.0.1` are different browser origins even though
+    # they resolve to the same machine.
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

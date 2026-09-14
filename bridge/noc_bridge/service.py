@@ -324,11 +324,19 @@ class BridgeService:
                         "mode": "ro",
                     },
                     str(creds_dir): {
-                        "bind": "/home/sandbox/.claude",
+                        # The bridge keeps the host UID inside the container
+                        # so private bind-mounted files remain readable only
+                        # by that UID. The image's /home/sandbox directory is
+                        # owned by UID 10001 and intentionally 0700, so it is
+                        # not traversable after that user override. Put the
+                        # isolated read-only credential directory under the
+                        # sandbox tmpfs instead and point HOME there.
+                        "bind": "/tmp/claude-home/.claude",
                         "mode": "ro",
                     },
                 },
                 environment={
+                    "HOME": "/tmp/claude-home",
                     "SKILL_NAME": skill_name,
                     # A job's own requested model/effort (payload, set at
                     # request time in apps/api) always wins; system_config
@@ -344,7 +352,6 @@ class BridgeService:
                     "SKILL_CLI_TIMEOUT_SECONDS": str(self.settings.claude_cli_timeout_seconds),
                     "SKILL_MAX_LOG_CHARS": str(self.settings.skill_max_log_chars),
                     "SKILL_MAX_PATTERN_GROUPS": str(self.settings.skill_max_pattern_groups),
-                    "HOME": "/home/sandbox",
                 },
             )
 

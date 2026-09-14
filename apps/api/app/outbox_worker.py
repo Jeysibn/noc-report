@@ -44,6 +44,14 @@ def run_forever(stop_event: threading.Event | None = None) -> None:
                 declare_topology(channel)
                 backoff = RECONNECT_BACKOFF_SECONDS
                 while not stop_event.is_set():
+                    # A publish failure can close the Pika channel while
+                    # `dispatch_pending_events` deliberately keeps the
+                    # outbox row unpublished for retry. Do not spin on that
+                    # dead channel forever; return to the outer loop so a
+                    # fresh connection/channel can publish the row.
+                    if not connection.is_open or not channel.is_open:
+                        logger.warning("outbox dispatcher channel closed — reconnecting")
+                        break
                     db = SessionLocal()
                     try:
                         dispatch_pending_events(db, channel)
