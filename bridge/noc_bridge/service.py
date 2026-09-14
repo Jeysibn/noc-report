@@ -23,13 +23,19 @@ import threading
 import time
 import uuid
 import yaml
+from botocore.exceptions import ClientError
 
 import pika
 
 from noc_bridge import db, health
 from noc_bridge.config import BridgeSettings, settings as default_settings
 from noc_bridge.credentials import prepare_sandbox_credentials
-from noc_bridge.failures import RETRYABLE, classify_failure
+from noc_bridge.failures import (
+    EvidenceIntegrityError,
+    EvidenceRetrievalError,
+    RETRYABLE,
+    classify_failure,
+)
 from noc_bridge.queue_topology import (
     JOB_TYPES,
     declare_topology,
@@ -40,8 +46,8 @@ from noc_bridge.queue_topology import (
 )
 from noc_bridge.docx_render import render_daily_report_docx, render_document
 from noc_bridge.report_composition import compose_report
-from noc_bridge.sandbox_runner import run_job_sandbox
-from noc_bridge.skill_registry import SkillHashMismatch, SkillSnapshotMissing, materialize_snapshot, verify_skill_hash
+from noc_bridge.sandbox_runner import SkillJobResult, run_job_sandbox
+from noc_bridge.skill_registry import materialize_snapshot, verify_skill_hash
 from noc_bridge.storage import ChecksumMismatch, download_object, get_client, object_exists, upload_artifact
 from noc_bridge.validation import (
     OutputValidationError,
@@ -80,6 +86,12 @@ _LEASE_SAFETY_MARGIN_SECONDS = 120
 
 logger = logging.getLogger("noc_bridge")
 
+# A single sandbox may make two structured-output calls and, when the skill's
+# declared quality signal requires it, a second effort-tier call. Reserve all
+# four permits once per Job so broker/storage retries cannot multiply paid
+# usage. The sandbox itself enforces the same value for its in-process calls.
+MAX_PAID_AI_CALLS_PER_JOB = 4
+
 # Reliability mission Batch A/Phase 3: was 1, which made the "retry"
 # branch below dead code — every first failure went straight to the DLQ.
 # Bounded at 3 real attempts (an initial try plus two retries) before a
@@ -94,6 +106,11 @@ def _artifact_ref(job_type: str, job_id: uuid.UUID, settings: BridgeSettings) ->
     redelivered message against work a prior attempt already finished."""
     if job_type == "daily_report":
         return settings.minio_bucket_reports, f"reports/{job_id}/report.docx"
+    return settings.minio_bucket_job_artifacts, f"jobs/{job_id}/result.json"
+
+
+def _plan_artifact_ref(job_id: uuid.UUID, settings: BridgeSettings) -> tuple[str, str]:
+    """Daily Report Plan artifact used to retry composition without Claude."""
     return settings.minio_bucket_job_artifacts, f"jobs/{job_id}/result.json"
 
 
@@ -296,11 +313,33 @@ class BridgeService:
 
             publish_status_event(channel, job_id=job_id, event="progress", detail={"stage": "sandbox"})
 
-            creds_dir = self._ensure_claude_creds_dir()
-            if not skill_name:
-                raise UnsupportedJobType(f"no skill wired yet for job_type={job_type!r}")
+            # A daily report stores the validated ReportPlan separately from
+            # the final DOCX. If composition/upload fails after Claude has
+            # succeeded, a retry reuses this durable plan and spends zero new
+            # paid calls. This is the report equivalent of result-artifact
+            # reconciliation for analysis jobs.
+            reusable_plan = None
+            if job_type == "daily_report":
+                plan_bucket, plan_key = _plan_artifact_ref(job_id, self.settings)
+                if object_exists(minio_client, bucket=plan_bucket, object_key=plan_key):
+                    plan_path = output_dir / "result.json"
+                    download_object(minio_client, bucket=plan_bucket, object_key=plan_key, dest_path=plan_path)
+                    reusable_plan = json.loads(plan_path.read_text())
 
-            result = run_job_sandbox(
+            if reusable_plan is not None:
+                result = SkillJobResult(exit_code=0, output=reusable_plan, logs="reused durable ReportPlan")
+            else:
+                creds_dir = self._ensure_claude_creds_dir()
+                if not skill_name:
+                    raise UnsupportedJobType(f"no skill wired yet for job_type={job_type!r}")
+
+                paid_ai_budget = db.reserve_paid_ai_calls(
+                    pg_conn, job_id, requested=MAX_PAID_AI_CALLS_PER_JOB
+                )
+                if paid_ai_budget <= 0:
+                    raise RuntimeError("paid AI retry budget exhausted")
+
+                result = run_job_sandbox(
                 input_dir=input_dir,
                 output_dir=output_dir,
                 skills_dir=job_skills_dir,
@@ -352,8 +391,9 @@ class BridgeService:
                     "SKILL_CLI_TIMEOUT_SECONDS": str(self.settings.claude_cli_timeout_seconds),
                     "SKILL_MAX_LOG_CHARS": str(self.settings.skill_max_log_chars),
                     "SKILL_MAX_PATTERN_GROUPS": str(self.settings.skill_max_pattern_groups),
+                    "SKILL_AI_CALL_BUDGET": str(paid_ai_budget),
                 },
-            )
+                )
 
             if result.exit_code != 0:
                 raise RuntimeError(f"sandbox exited {result.exit_code}: {result.logs[-2000:]}")
@@ -364,6 +404,17 @@ class BridgeService:
             # — the full report is assembled and validated separately
             # right below, once merged with the frozen snapshot.
             validate_output(job_type, result.output, skill_name=skill_name, skills_dir=job_skills_dir)
+
+            if job_type == "daily_report" and reusable_plan is None:
+                # Preserve the AI result before deterministic composition.
+                # A later MinIO/DOCX/evidence failure can therefore retry
+                # composition without re-invoking Claude.
+                upload_artifact(
+                    minio_client,
+                    bucket=self.settings.minio_bucket_job_artifacts,
+                    object_key=f"jobs/{job_id}/result.json",
+                    src_path=output_dir / "result.json",
+                )
 
             renderer_profile = None
             try:
@@ -403,9 +454,22 @@ class BridgeService:
                             buf = io.BytesIO()
                             _client.download_fileobj(bucket, object_key, buf)
                             return buf.getvalue()
-                        except Exception:
+                        except ClientError as exc:
+                            code = str((exc.response or {}).get("Error", {}).get("Code", ""))
+                            if code in {"NoSuchKey", "NoSuchBucket", "404", "NotFound"}:
+                                raise EvidenceIntegrityError(
+                                    f"frozen screenshot object is missing: {bucket}/{object_key}"
+                                ) from exc
+                            raise EvidenceRetrievalError(
+                                f"temporary screenshot retrieval failure: {bucket}/{object_key}"
+                            ) from exc
+                        except EvidenceIntegrityError:
+                            raise
+                        except Exception as exc:
                             logger.warning("could not fetch trusted screenshot %s/%s for report", bucket, object_key)
-                            return None
+                            raise EvidenceRetrievalError(
+                                f"temporary screenshot retrieval failure: {bucket}/{object_key}"
+                            ) from exc
 
                     render_document(
                         compose_report(result.output, snapshot),
@@ -425,9 +489,20 @@ class BridgeService:
                             buf = io.BytesIO()
                             _client.download_fileobj(bucket, object_key, buf)
                             return buf.getvalue()
-                        except Exception:
+                        except ClientError as exc:
+                            code = str((exc.response or {}).get("Error", {}).get("Code", ""))
+                            if code in {"NoSuchKey", "NoSuchBucket", "404", "NotFound"}:
+                                raise EvidenceIntegrityError(
+                                    f"frozen screenshot object is missing: {bucket}/{object_key}"
+                                ) from exc
+                            raise EvidenceRetrievalError(
+                                f"temporary screenshot retrieval failure: {bucket}/{object_key}"
+                            ) from exc
+                        except Exception as exc:
                             logger.warning("could not fetch screenshot %s/%s for report", bucket, object_key)
-                            return None
+                            raise EvidenceRetrievalError(
+                                f"temporary screenshot retrieval failure: {bucket}/{object_key}"
+                            ) from exc
 
                     render_daily_report_docx(result.output, docx_path, screenshot_fetcher=_fetch_screenshot)
                 else:

@@ -30,10 +30,10 @@ from app.core.storage import (
 from app.db.session import get_db
 from app.deps import require_permission
 from app.jobs import enqueue_job
-from app.models.models import AnalysisRun, Evidence, Incident, Job, Report, ReportSnapshot, Shift, User
+from app.models.models import AnalysisRun, Evidence, Incident, Job, Report, ReportSnapshot, Shift, SkillSnapshot, User
 from app.report_fragments import build_report_fragment
 from app.skills.registry import compute_execution_hash, resolve_active_snapshot
-from app.skills.runtime import declared_skill_version, execution_policy
+from app.skills.runtime import declared_skill_version, execution_policy, load_manifest
 from app.schemas.schemas import (
     ReportDownloadUrlResponse,
     ReportGenerateRequest,
@@ -66,6 +66,15 @@ def _build_snapshot(db: Session, shift: Shift, report_skill_snapshot) -> dict:
             select(AnalysisRun)
             .where(AnalysisRun.incident_id == incident.id, AnalysisRun.current.is_(True))
         )
+        analysis_presentation_contract = None
+        if run and run.skill_snapshot_id:
+            analysis_snapshot = db.get(SkillSnapshot, run.skill_snapshot_id)
+            if analysis_snapshot is not None:
+                analysis_manifest = load_manifest(analysis_snapshot)
+                exports = analysis_manifest.get("exports") or {}
+                presentation = exports.get("presentation") if isinstance(exports, dict) else None
+                if isinstance(presentation, dict):
+                    analysis_presentation_contract = presentation.get("contract")
         evidence_items = list(
             db.scalars(select(Evidence).where(Evidence.incident_id == incident.id))
         )
@@ -93,6 +102,7 @@ def _build_snapshot(db: Session, shift: Shift, report_skill_snapshot) -> dict:
                     for e in screenshot_evidence
                 ],
                 "analysis": run.result_json if (run and run.result_json) else None,
+                "analysis_presentation_contract": analysis_presentation_contract,
                 "report_fragment": build_report_fragment(run.result_json if run else None),
                 # Skill Runtime mission Phase 7: exact per-incident
                 # dependency provenance, frozen into the snapshot
@@ -124,6 +134,7 @@ def _build_snapshot(db: Session, shift: Shift, report_skill_snapshot) -> dict:
                 "analysis_cache_creation_tokens": run.cache_creation_tokens if run else None,
                 "analysis_estimated_cost_usd": run.estimated_cost_usd if run else None,
                 "analysis_output_sha256": run.output_sha256 if run else None,
+                "analysis_total_model_input_tokens": run.total_model_input_tokens if run else None,
             }
         )
     return {
@@ -132,6 +143,10 @@ def _build_snapshot(db: Session, shift: Shift, report_skill_snapshot) -> dict:
         "shift_ends_at": shift.ends_at.isoformat() if shift.ends_at else None,
         "report_skill_snapshot_id": str(report_skill_snapshot.id),
         "report_skill_execution_hash": compute_execution_hash(db, report_skill_snapshot),
+        # Coverage is part of the immutable report-skill contract. The
+        # bridge must validate against this frozen policy, never the current
+        # checkout or a later activation.
+        "coverage": load_manifest(report_skill_snapshot).get("coverage") or {},
         "incidents": incident_rows,
     }
 

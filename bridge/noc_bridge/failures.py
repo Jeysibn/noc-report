@@ -12,6 +12,14 @@ from __future__ import annotations
 RETRYABLE = "retryable"
 TERMINAL = "terminal"
 
+
+class EvidenceRetrievalError(RuntimeError):
+    """Frozen evidence exists but a temporary storage/read failure occurred."""
+
+
+class EvidenceIntegrityError(RuntimeError):
+    """Frozen evidence is permanently unavailable or cannot be decoded."""
+
 # Substrings looked for (case-insensitively) in an exception's message when
 # its exact type doesn't already settle the question (see
 # classify_failure's RuntimeError branch below). Matches the reliability
@@ -25,6 +33,7 @@ _TERMINAL_MESSAGE_MARKERS = (
     "prompt too large",
     "security violation",
     "missing required immutable snapshot",
+    "paid ai retry budget exhausted",
 )
 
 # A structured_output_retry_exhausted failure is explicitly called out as
@@ -53,6 +62,10 @@ def classify_failure(exc: BaseException) -> str:
 
     if isinstance(exc, UnsupportedJobType):
         return TERMINAL
+    if isinstance(exc, EvidenceIntegrityError):
+        return TERMINAL
+    if isinstance(exc, EvidenceRetrievalError):
+        return RETRYABLE
     if isinstance(exc, OutputValidationError):
         return TERMINAL
     if isinstance(exc, SkillHashMismatch):

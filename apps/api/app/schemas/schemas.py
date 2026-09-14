@@ -232,6 +232,8 @@ class JobOut(BaseModel):
     correlation_id: str
     error_code: str | None
     error_message: str | None
+    paid_ai_call_budget: int
+    paid_ai_calls_reserved: int
     queued_at: datetime
     started_at: datetime | None
     completed_at: datetime | None
@@ -303,6 +305,7 @@ class AnalysisRunOut(BaseModel):
     # AI cost-optimization mission Phase 1 (usage telemetry) — null when
     # unavailable (older run, cache hit, telemetry upload failure).
     input_tokens: int | None = None
+    total_model_input_tokens: int | None = None
     output_tokens: int | None = None
     cache_creation_tokens: int | None = None
     cache_read_tokens: int | None = None

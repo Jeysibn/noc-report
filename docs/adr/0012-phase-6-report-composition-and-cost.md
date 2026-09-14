@@ -47,7 +47,10 @@ AnalysisRun.  The current Log Triage adapter maps its private result once;
 future analysis skills may supply a `report_context` with the same stable
 shape.  Daily Report consumes only the fragment's summary, cause, action,
 severity, and bounded findings.  Full analysis results remain stored for
-provenance and historical inspection.
+provenance and historical inspection. Phase 7 adds a separate
+`analysis-presentation-v1` export: the bridge adapts the full frozen result
+to renderer-neutral blocks, so the compact reasoning export is never used as
+the human-facing technical analysis.
 
 ## Dependency execution identity
 
@@ -57,6 +60,17 @@ dependency execution identities.  A root skill with unchanged own files but
 a newly pinned dependency gets a new snapshot and execution hash.  Jobs,
 AnalysisRuns, Reports, ReportSnapshots, cache lookup, and the job protocol
 carry the execution hash where compatibility matters.
+
+## Phase 7 completeness and evidence integrity
+
+The active report manifest freezes a semantic coverage policy in
+`ReportSnapshot`: all reportable incidents and all available AnalysisRuns
+must be represented unless a skill explicitly declares otherwise. The
+composition module rejects unknown, cross-report, missing, or duplicate
+references without hard-coding section names. It also rejects missing or
+unreadable declared screenshots. An absent screenshot list is valid; a
+declared object that cannot be fetched is a retryable/permanent evidence
+failure, not a successful placeholder report.
 
 ## Evidence completeness
 
@@ -82,10 +96,23 @@ sample and, more importantly, removed deterministic evidence reproduction
 from the model contract.  Token/cost values are telemetry from one live
 representative run, not a pricing guarantee; cache state affects them.
 
+## Paid AI retry budget and token accounting
+
+RabbitMQ/MinIO infrastructure retries and paid Claude calls are separate.
+Each Job persists a four-call paid budget and the bridge reserves it once
+before launching the sandbox. The sandbox enforces the same limit across
+structured-output retries and LOW-to-MEDIUM escalation; a redelivery cannot
+reset it. If a deterministic artifact already exists, reconciliation bypasses
+the budget and Claude entirely.
+
+All benchmark and sandbox telemetry reports uncached input, cache creation,
+cache read, and `total_model_input_tokens`, where the total is the sum of all
+three input categories.
+
 ## Consequences
 
 Report layout changes remain skill-owned.  Evidence integrity, provenance,
 and storage access remain application-owned.  A new downstream analysis
 schema needs only a `report-fragment-v1` adapter, not changes to the Daily
 Report skill or DOCX renderer.  The remaining P2 work is an always-on,
-size-independent LogEvidence extractor and a larger statistical benchmark.
+size-independent LogEvidence extractor and broader live benchmark sampling.

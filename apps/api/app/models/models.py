@@ -282,6 +282,14 @@ class Job(Base):
     used_cache: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     cache_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
+    # Paid Claude calls are a separate resource from RabbitMQ/MinIO retry
+    # attempts. The bridge reserves this budget atomically before launching
+    # the sandbox; a redelivery cannot reset it or purchase another set of
+    # model calls. Four permits the current two structured-output tries plus
+    # one bounded LOW->MEDIUM escalation (which can itself use two tries).
+    paid_ai_call_budget: Mapped[int] = mapped_column(Integer, nullable=False, default=4)
+    paid_ai_calls_reserved: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
     # Reliability mission Batch A (idempotent job lifecycle): a claim/lease
     # so the bridge can tell "am I the one allowed to execute this job right
     # now" apart from RabbitMQ's own at-least-once redelivery. `claim_token`
@@ -433,6 +441,7 @@ class AnalysisRun(Base):
     # must never block a real analysis result from being usable. Left
     # unset (None/False) on a cache hit, since no Claude call happened.
     input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    total_model_input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     cache_creation_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     cache_read_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)

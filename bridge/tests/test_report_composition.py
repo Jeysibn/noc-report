@@ -8,6 +8,7 @@ import pytest
 from docx import Document
 
 from noc_bridge.docx_render import render_document
+from noc_bridge.failures import EvidenceIntegrityError, EvidenceRetrievalError
 from noc_bridge.report_composition import compose_report
 from noc_bridge.validation import OutputValidationError, validate_output
 
@@ -99,9 +100,104 @@ def test_unknown_references_are_rejected():
         compose_report({"blocks": [{"type": "analysis_reference", "analysis_run_id": "run-999"}]}, _snapshot())
 
 
+def test_report_composition_enforces_semantic_coverage_and_duplicates():
+    snapshot = _snapshot()
+    snapshot["coverage"] = {"incidents": "all", "analyses": "all_available"}
+    incomplete = {"blocks": [
+        {"type": "incident_reference", "incident_id": "inc-001"},
+        {"type": "analysis_reference", "analysis_run_id": "run-001"},
+    ]}
+    with pytest.raises(OutputValidationError, match="omitted required incidents"):
+        compose_report(incomplete, snapshot)
+
+    complete = {"blocks": [
+        {"type": "incident_reference", "incident_id": "inc-001"},
+        {"type": "incident_reference", "incident_id": "inc-002"},
+        {"type": "analysis_reference", "analysis_run_id": "run-001"},
+        {"type": "analysis_reference", "analysis_run_id": "run-002"},
+    ]}
+    compose_report(complete, snapshot)
+    duplicate = {"blocks": complete["blocks"] + [{"type": "incident_reference", "incident_id": "inc-001"}]}
+    with pytest.raises(OutputValidationError, match="duplicate incident"):
+        compose_report(duplicate, snapshot)
+
+
+def test_full_analysis_presentation_keeps_all_findings_without_ai_echo(tmp_path):
+    snapshot = _snapshot()
+    snapshot["incidents"][0]["analysis"] = {
+        "summary_zh": "完整摘要", "summary_en": "Full summary",
+        "key_finds": [
+            {"label_zh": f"重点{i}", "label_en": f"Finding {i}", "count": i, "percentage": i * 10, "detail_zh": f"细节{i}", "detail_en": f"Detail {i}"}
+            for i in range(1, 8)
+        ],
+        "secondary_finds": [
+            {"label_zh": f"次要{i}", "label_en": f"Secondary {i}", "count": i, "percentage": i * 5, "detail_zh": f"次要细节{i}", "detail_en": f"Secondary detail {i}"}
+            for i in range(1, 4)
+        ],
+        "likely_cause_zh": "根因", "likely_cause_en": "Root cause",
+        "recommended_action_zh": "修复", "recommended_action_en": "Remediate",
+    }
+    document = compose_report(
+        {"blocks": [
+            {"type": "incident_reference", "incident_id": "inc-001"},
+            {"type": "analysis_reference", "analysis_run_id": "run-001"},
+        ]},
+        snapshot,
+    )
+    destination = tmp_path / "phase7-analysis-fidelity.docx"
+    render_document(document, destination, screenshot_fetcher=lambda *_: _PNG)
+    text = "\n".join(paragraph.text for paragraph in Document(str(destination)).paragraphs)
+    for value in ("Finding 1", "Finding 7", "Secondary 1", "Secondary 3", "Root cause", "Remediate", "7 / 70%"):
+        assert value in text
+
+
+def test_materially_different_analysis_schema_uses_generic_presentation_export(tmp_path):
+    snapshot = _snapshot()
+    snapshot["incidents"][0]["analysis"] = {
+        "different_private_schema": {"primary_failure": "database"},
+        "report_presentation": {
+            "blocks": [
+                {"type": "heading", "text": "Primary Failure", "level": 3},
+                {"type": "bilingual_text", "zh": "数据库故障", "en": "Database failure"},
+            ]
+        },
+    }
+    snapshot["incidents"][0]["analysis_presentation_contract"] = "analysis-presentation-v1"
+    document = compose_report(
+        {"blocks": [{"type": "analysis_reference", "analysis_run_id": "run-001"}]},
+        snapshot,
+    )
+    destination = tmp_path / "different-analysis-schema.docx"
+    render_document(document, destination, screenshot_fetcher=lambda *_: _PNG)
+    text = "\n".join(paragraph.text for paragraph in Document(str(destination)).paragraphs)
+    assert "Primary Failure" in text
+    assert "Database failure" in text
+
+
 def test_storage_references_are_not_part_of_the_report_plan_contract():
     malicious = {
         "blocks": [{"type": "screenshot", "bucket": "other-bucket", "object_key": "secret/file"}]
     }
     with pytest.raises(Exception):
         validate_output("daily_report", malicious, skill_name="daily-alert-report", skills_dir=SKILLS_DIR)
+
+
+def test_expected_screenshot_retrieval_failure_is_not_silently_successful(tmp_path):
+    document = compose_report(
+        {"blocks": [{"type": "incident_reference", "incident_id": "inc-001"}]},
+        _snapshot(),
+    )
+    with pytest.raises(EvidenceRetrievalError):
+        render_document(document, tmp_path / "temporary-failure.docx", screenshot_fetcher=lambda *_: None)
+    with pytest.raises(EvidenceIntegrityError):
+        render_document(document, tmp_path / "missing-fetcher.docx")
+
+
+def test_no_frozen_screenshot_is_a_valid_report(tmp_path):
+    snapshot = _snapshot()
+    snapshot["incidents"][0]["screenshots"] = []
+    document = compose_report(
+        {"blocks": [{"type": "incident_reference", "incident_id": "inc-001"}]},
+        snapshot,
+    )
+    render_document(document, tmp_path / "no-screenshot.docx")

@@ -19,7 +19,13 @@ id: log-triage-summary
 name: log-triage-summary
 version: "1"
 kind: analysis
-report_export_contract: report-fragment-v1
+exports:
+  reasoning:
+    contract: report-fragment-v1
+    adapter: log-triage-v1
+  presentation:
+    contract: analysis-presentation-v1
+    adapter: log-triage-v1
 input_contract:
   version: log-evidence-v1
   filename: log.txt

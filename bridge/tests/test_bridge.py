@@ -163,6 +163,19 @@ def test_claim_lease_covers_configured_job_timeout_plus_safety_margin(pg_conn):
         _delete_job_row(pg_conn, job_id)
 
 
+def test_paid_ai_call_budget_is_reserved_once_per_job(pg_conn):
+    job_id = uuid.uuid4()
+    _insert_job_row(pg_conn, job_id, "log_triage")
+    try:
+        assert db.reserve_paid_ai_calls(pg_conn, job_id, requested=4) == 4
+        assert db.reserve_paid_ai_calls(pg_conn, job_id, requested=4) == 0
+        row = db.fetch_job_row(pg_conn, job_id)
+        assert row["paid_ai_call_budget"] == 4
+        assert row["paid_ai_calls_reserved"] == 4
+    finally:
+        _delete_job_row(pg_conn, job_id)
+
+
 # -- storage: real MinIO round-trip ---------------------------------------
 
 

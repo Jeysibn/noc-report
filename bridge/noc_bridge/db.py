@@ -32,7 +32,8 @@ def mark_completed(conn, job_id: uuid.UUID) -> None:
     a lease against, and clearing it keeps `fetch_job_row` output tidy."""
     with conn.cursor() as cur:
         cur.execute(
-            "UPDATE jobs SET status = %s, completed_at = %s, claimed_at = NULL, "
+            "UPDATE jobs SET status = %s, completed_at = %s, error_code = NULL, "
+            "error_message = NULL, claimed_at = NULL, "
             "claim_token = NULL, lease_expires_at = NULL WHERE id = %s",
             ("COMPLETED", datetime.now(timezone.utc), str(job_id)),
         )
@@ -57,6 +58,33 @@ def bump_attempt(conn, job_id: uuid.UUID, attempt: int) -> None:
     with conn.cursor() as cur:
         cur.execute("UPDATE jobs SET attempt = %s WHERE id = %s", (attempt, str(job_id)))
     conn.commit()
+
+
+def reserve_paid_ai_calls(conn, job_id: uuid.UUID, *, requested: int = 4) -> int:
+    """Atomically reserve the remaining paid-call permits for one Job.
+
+    Reservation is intentionally conservative: unused permits are not
+    returned after a sandbox exits. That makes a worker crash or RabbitMQ
+    redelivery unable to buy another Claude budget. Artifact reconciliation
+    still bypasses this function entirely after Claude has already produced
+    the deterministic artifact.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE jobs
+            SET paid_ai_calls_reserved = paid_ai_calls_reserved + LEAST(
+                %(requested)s, paid_ai_call_budget - paid_ai_calls_reserved
+            )
+            WHERE id = %(job_id)s
+              AND paid_ai_calls_reserved < paid_ai_call_budget
+            RETURNING paid_ai_calls_reserved
+            """,
+            {"requested": requested, "job_id": str(job_id)},
+        )
+        row = cur.fetchone()
+    conn.commit()
+    return int(row[0]) if row else 0
 
 
 def fetch_job_row(conn, job_id: uuid.UUID) -> dict | None:

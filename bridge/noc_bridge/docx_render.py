@@ -39,6 +39,7 @@ from noc_bridge.report_document import (
     Screenshot,
     build_daily_report_document,
 )
+from noc_bridge.failures import EvidenceIntegrityError, EvidenceRetrievalError
 
 ScreenshotFetcher = Callable[[str, str], bytes | None]
 
@@ -85,16 +86,14 @@ def _add_incident_evidence(doc: Document, block: IncidentEvidence, screenshot_fe
         doc.add_paragraph(f"Log File — File Name: {block.log_file.filename}")
     for shot in block.screenshots:
         if screenshot_fetcher is None:
-            continue
+            raise EvidenceIntegrityError(f"no screenshot fetcher for frozen evidence: {shot.filename or shot.object_key}")
         data = screenshot_fetcher(shot.bucket, shot.object_key)
         if not data:
-            continue
+            raise EvidenceRetrievalError(f"frozen screenshot could not be retrieved: {shot.bucket}/{shot.object_key}")
         try:
             doc.add_picture(io.BytesIO(data), width=Inches(5.5))
-        except Exception:
-            # A non-image or corrupt screenshot shouldn't fail the whole
-            # report — note it and move on.
-            doc.add_paragraph(f"[could not embed screenshot: {shot.filename}]")
+        except Exception as exc:
+            raise EvidenceIntegrityError(f"frozen screenshot is not a valid image: {shot.filename or shot.object_key}") from exc
 
 
 def _add_analysis_reference(
@@ -144,16 +143,23 @@ def _render_block(doc: Document, block, screenshot_fetcher: ScreenshotFetcher | 
     elif isinstance(block, LogFileReference):
         doc.add_paragraph(f"Log File — File Name: {block.filename}")
     elif isinstance(block, Screenshot):
-        if screenshot_fetcher is not None:
-            data = screenshot_fetcher(block.bucket, block.object_key)
-            if data:
-                doc.add_picture(io.BytesIO(data), width=Inches(5.5))
+        if screenshot_fetcher is None:
+            raise EvidenceIntegrityError(f"no screenshot fetcher for frozen evidence: {block.filename or block.object_key}")
+        data = screenshot_fetcher(block.bucket, block.object_key)
+        if not data:
+            raise EvidenceRetrievalError(f"frozen screenshot could not be retrieved: {block.bucket}/{block.object_key}")
+        try:
+            doc.add_picture(io.BytesIO(data), width=Inches(5.5))
+        except Exception as exc:
+            raise EvidenceIntegrityError(f"frozen screenshot is not a valid image: {block.filename or block.object_key}") from exc
     elif isinstance(block, Divider):
         doc.add_paragraph("―" * 20)
     elif isinstance(block, PageBreak):
         doc.add_page_break()
     elif isinstance(block, BilingualText):
         _add_bilingual_text(doc, block)
+    elif isinstance(block, BilingualFindList):
+        _add_bilingual_find_list(doc, block)
     elif isinstance(block, IncidentEvidence):
         _add_incident_evidence(doc, block, screenshot_fetcher)
     elif isinstance(block, AnalysisReference):

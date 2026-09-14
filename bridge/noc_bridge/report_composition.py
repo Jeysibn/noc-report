@@ -21,6 +21,7 @@ from noc_bridge.report_document import (
     ReportDocument,
     Screenshot,
 )
+from noc_bridge.analysis_presentation import build_analysis_presentation
 from noc_bridge.validation import OutputValidationError
 
 
@@ -119,37 +120,33 @@ def _analysis_block(incident: dict, plan_node: dict) -> AnalysisReference:
             unavailable_text="No log analysis available for this incident.",
         )
 
-    fragment = incident.get("report_fragment") or _legacy_fragment(incident.get("analysis"))
-    if not isinstance(fragment, dict):
+    analysis = incident.get("analysis")
+    fragment = incident.get("report_fragment") or _legacy_fragment(analysis)
+    if not isinstance(fragment, dict) and not isinstance(analysis, dict):
         return AnalysisReference(
             heading=f"{incident.get('display_id') or incident['id']} — {incident.get('title') or 'Analysis'}",
             available=False,
             analysis_run_id=str(run_id),
             unavailable_text="The frozen analysis has no report export.",
         )
-    children = []
-    summary = _pair(fragment, "summary")
-    if summary:
-        children.append(summary)
-    findings = fragment.get("findings") or []
-    if findings:
-        children.append(Heading("Findings", level=3))
-        for finding in findings:
-            if not isinstance(finding, dict):
-                continue
-            children.append(
-                BilingualText(
-                    str(finding.get("zh") or ""),
-                    str(finding.get("en") or ""),
-                    heading_zh=None,
-                    heading_en=None,
-                )
-            )
-    for label, key in (("Likely Cause", "likely_cause"), ("Recommended Action", "recommended_action")):
-        value = _pair(fragment, key)
-        if value:
-            children.append(Heading(label, level=3))
-            children.append(value)
+    try:
+        children = list(build_analysis_presentation(
+            analysis,
+            incident.get("analysis_presentation_contract"),
+        ))
+    except ValueError as exc:
+        raise OutputValidationError(str(exc)) from exc
+    if not children:
+        # Old immutable snapshots may contain only the compact export. Keep
+        # those historical reports renderable while new snapshots use the
+        # complete stored AnalysisRun result above.
+        summary = _pair(fragment, "summary")
+        if summary:
+            children.append(summary)
+        for label, key in (("Likely Cause", "likely_cause"), ("Recommended Action", "recommended_action")):
+            value = _pair(fragment, key)
+            if value:
+                children.extend((Heading(label, level=3), value))
     provenance = tuple(
         Metadata(label, str(value))
         for label, value in (
@@ -175,13 +172,26 @@ def compose_report(plan: dict, snapshot: dict) -> ReportDocument:
     """Resolve one validated ReportPlan against one frozen snapshot."""
     if not isinstance(plan, dict) or not isinstance(plan.get("blocks"), list):
         raise OutputValidationError("ReportPlan must contain a blocks array")
+    coverage = snapshot.get("coverage") or {}
+    if not isinstance(coverage, dict):
+        raise OutputValidationError("report coverage policy must be an object")
+    incident_policy = coverage.get("incidents", "optional")
+    analysis_policy = coverage.get("analyses", "optional")
+    allow_duplicate_incidents = bool(coverage.get("allow_duplicate_incidents", False))
+    allow_duplicate_analyses = bool(coverage.get("allow_duplicate_analyses", False))
+
     incidents = {}
+    unique_incidents = []
     for incident in snapshot.get("incidents") or []:
         if not isinstance(incident, dict) or not incident.get("id"):
             continue
         incidents[str(incident["id"])] = incident
+        unique_incidents.append(incident)
         if incident.get("display_id"):
             incidents[str(incident["display_id"])] = incident
+
+    incident_refs: list[str] = []
+    analysis_refs: list[str] = []
 
     def parse(nodes: list[dict]):
         blocks = []
@@ -201,6 +211,7 @@ def compose_report(plan: dict, snapshot: dict) -> ReportDocument:
                 incident = incidents.get(ref)
                 if incident is None:
                     raise OutputValidationError(f"unknown incident reference: {ref}")
+                incident_refs.append(str(incident["id"]))
                 blocks.append(_incident_block(incident))
             elif kind == "analysis_reference":
                 ref = str(node.get("incident_id") or "")
@@ -218,6 +229,8 @@ def compose_report(plan: dict, snapshot: dict) -> ReportDocument:
                     if incident is None:
                         raise OutputValidationError(f"analysis reference is outside this report: {run_id}")
                 blocks.append(_analysis_block(incident, node))
+                if incident.get("analysis_run_id"):
+                    analysis_refs.append(str(incident["analysis_run_id"]))
             elif kind == "divider":
                 blocks.append(Divider())
             elif kind == "page_break":
@@ -225,6 +238,27 @@ def compose_report(plan: dict, snapshot: dict) -> ReportDocument:
             else:
                 raise OutputValidationError(f"unsupported ReportPlan node type: {kind!r}")
         return blocks
+
+    parsed_blocks = parse(plan["blocks"])
+
+    if not allow_duplicate_incidents and len(incident_refs) != len(set(incident_refs)):
+        raise OutputValidationError("duplicate incident reference in ReportPlan")
+    if not allow_duplicate_analyses and len(analysis_refs) != len(set(analysis_refs)):
+        raise OutputValidationError("duplicate analysis reference in ReportPlan")
+    if incident_policy == "all":
+        required = {str(item["id"]) for item in unique_incidents}
+        missing = required - set(incident_refs)
+        if missing:
+            raise OutputValidationError(f"ReportPlan omitted required incidents: {sorted(missing)}")
+    elif incident_policy not in ("none", "optional"):
+        raise OutputValidationError(f"unsupported incident coverage policy: {incident_policy}")
+    if analysis_policy == "all_available":
+        required = {str(item["analysis_run_id"]) for item in unique_incidents if item.get("analysis_run_id")}
+        missing = required - set(analysis_refs)
+        if missing:
+            raise OutputValidationError(f"ReportPlan omitted required analyses: {sorted(missing)}")
+    elif analysis_policy not in ("none", "optional"):
+        raise OutputValidationError(f"unsupported analysis coverage policy: {analysis_policy}")
 
     starts = snapshot.get("shift_starts_at") or ""
     ends = snapshot.get("shift_ends_at") or "ongoing"
@@ -235,4 +269,4 @@ def compose_report(plan: dict, snapshot: dict) -> ReportDocument:
         Metadata("Skill Snapshot", str(snapshot.get("report_skill_snapshot_id") or "")),
         Metadata("Execution Hash", str(snapshot.get("report_skill_execution_hash") or "")),
     )
-    return ReportDocument(title=title, blocks=tuple(parse(plan["blocks"])), metadata=metadata)
+    return ReportDocument(title=title, blocks=tuple(parsed_blocks), metadata=metadata)
