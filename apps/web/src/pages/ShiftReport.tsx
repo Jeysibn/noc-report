@@ -3,6 +3,7 @@ import { incidentService, reportService, shiftService } from "@/services";
 import type { Incident, Shift } from "@/types/domain";
 import type { ReportJobStatus, ReportRun } from "@/types/report";
 import { Card, CardHeader, CardTitle } from "@/components/ui/Card";
+import { ReportPreview } from "@/components/ReportPreview";
 import { Table, Thead, Tbody, Tr, Th, Td } from "@/components/ui/Table";
 import { StatusPill } from "@/components/ui/StatusPill";
 import { Button } from "@/components/ui/Button";
@@ -58,6 +59,7 @@ export function ShiftReport() {
   const [effort, setEffort] = useState<"low" | "medium" | "high">("medium");
   const [versions, setVersions] = useState<ReportRun[]>([]);
   const [requestError, setRequestError] = useState<string | null>(null);
+  const [previewingId, setPreviewingId] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const canGenerateReport = hasPermission("report.generate");
@@ -332,13 +334,24 @@ export function ShiftReport() {
                     label={jobPill[v.status].label}
                   />
                   {v.downloadable && canDownload && (
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      onClick={() => download(v.id)}
-                    >
-                      Download
-                    </Button>
+                    <>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() =>
+                          setPreviewingId((id) => (id === v.id ? null : v.id))
+                        }
+                      >
+                        {previewingId === v.id ? "Hide preview" : "Preview"}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => download(v.id)}
+                      >
+                        Download
+                      </Button>
+                    </>
                   )}
                 </div>
               </li>
@@ -346,6 +359,15 @@ export function ShiftReport() {
           </ul>
         </Card>
       </div>
+
+      {previewingId && (
+        <Card>
+          <CardTitle>Report preview</CardTitle>
+          <div className="mt-3">
+            <ReportPreview reportId={previewingId} />
+          </div>
+        </Card>
+      )}
     </div>
   );
 }

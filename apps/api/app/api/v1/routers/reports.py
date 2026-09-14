@@ -11,6 +11,7 @@ created at request time, not from live incident/analysis state, so a
 Report's content never drifts even if incidents are edited afterward.
 """
 import json
+import mimetypes
 import uuid
 
 from botocore.exceptions import ClientError
@@ -153,6 +154,14 @@ def _build_snapshot(db: Session, shift: Shift, report_skill_snapshot) -> dict:
 
 def _report_object_key(job_id: uuid.UUID) -> str:
     return f"reports/{job_id}/report.docx"
+
+
+def _document_object_key(job_id: uuid.UUID) -> str:
+    return f"reports/{job_id}/document.json"
+
+
+def _document_screenshots_object_key(job_id: uuid.UUID) -> str:
+    return f"reports/{job_id}/document.screenshots.json"
 
 
 def _to_out(report: Report, job: Job) -> ReportOut:
@@ -388,3 +397,68 @@ def download_report(
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+def _report_or_404(db: Session, report_id: uuid.UUID) -> tuple[Report, Job]:
+    report = db.get(Report, report_id)
+    if report is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Report not found")
+    job = db.get(Job, report.job_id)
+    _sync_completed_report(db, report, job)
+    db.commit()
+    if not report.report_object_key:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Report is not ready yet")
+    return report, job
+
+
+@router.get("/reports/{report_id}/document")
+def get_report_document(
+    report_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_permission("report.read")),
+) -> Response:
+    """The web Report Builder preview's data source: the exact same
+    composed `ReportDocument` the DOCX was rendered from (see
+    `bridge/noc_bridge/report_document_json.py`), as browser-safe JSON —
+    screenshots are referenced by index only, never by MinIO bucket/key.
+    Not every report was produced by the report-document-v1 renderer
+    profile (older frozen snapshots may have used the legacy assembler),
+    so a missing document.json is a normal 404, not an error."""
+    report, _job = _report_or_404(db, report_id)
+    try:
+        body = get_object_bytes(report.report_bucket, _document_object_key(report.job_id))
+    except ClientError:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "No structured preview is available for this report"
+        )
+    return Response(content=body, media_type="application/json")
+
+
+@router.get("/reports/{report_id}/document/screenshots/{index}")
+def get_report_document_screenshot(
+    report_id: uuid.UUID,
+    index: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_permission("report.read")),
+) -> Response:
+    """Proxies one screenshot referenced by the preview payload's
+    `{"type": "screenshot", "index": N}` blocks. The real bucket/object_key
+    for each index lives only in the private document.screenshots.json
+    artifact this reads server-side — it is never sent to the browser."""
+    report, _job = _report_or_404(db, report_id)
+    try:
+        raw_index = get_object_bytes(report.report_bucket, _document_screenshots_object_key(report.job_id))
+    except ClientError:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "No structured preview is available for this report"
+        )
+    screenshots = json.loads(raw_index)
+    if index < 0 or index >= len(screenshots):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No such screenshot")
+    entry = screenshots[index]
+    try:
+        image_bytes = get_object_bytes(entry["bucket"], entry["object_key"])
+    except ClientError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Could not fetch screenshot from storage") from exc
+    content_type = mimetypes.guess_type(entry.get("filename") or "")[0] or "application/octet-stream"
+    return Response(content=image_bytes, media_type=content_type)

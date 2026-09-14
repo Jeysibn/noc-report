@@ -46,6 +46,7 @@ from noc_bridge.queue_topology import (
 )
 from noc_bridge.docx_render import render_daily_report_docx, render_document
 from noc_bridge.report_composition import compose_report
+from noc_bridge.report_document_json import document_to_preview_json
 from noc_bridge.sandbox_runner import SkillJobResult, run_job_sandbox
 from noc_bridge.skill_registry import materialize_snapshot, verify_skill_hash
 from noc_bridge.storage import ChecksumMismatch, download_object, get_client, object_exists, upload_artifact
@@ -471,10 +472,36 @@ class BridgeService:
                                 f"temporary screenshot retrieval failure: {bucket}/{object_key}"
                             ) from exc
 
+                    document = compose_report(result.output, snapshot)
                     render_document(
-                        compose_report(result.output, snapshot),
+                        document,
                         docx_path,
                         screenshot_fetcher=_fetch_trusted_screenshot,
+                    )
+
+                    # Web/DOCX consistency: the web Report Builder previews
+                    # the exact same composed ReportDocument the DOCX was
+                    # rendered from, not a hand-maintained second layout.
+                    # Screenshots are split into a private index (real
+                    # bucket/object_key, for the API server only, to proxy
+                    # bytes back to an <img> tag) and never embedded in the
+                    # browser-facing preview payload itself.
+                    preview_payload, screenshot_index = document_to_preview_json(document)
+                    preview_path = output_dir / "document.json"
+                    preview_path.write_text(json.dumps(preview_payload))
+                    screenshot_index_path = output_dir / "document.screenshots.json"
+                    screenshot_index_path.write_text(json.dumps(screenshot_index))
+                    upload_artifact(
+                        minio_client,
+                        bucket=self.settings.minio_bucket_reports,
+                        object_key=f"reports/{job_id}/document.json",
+                        src_path=preview_path,
+                    )
+                    upload_artifact(
+                        minio_client,
+                        bucket=self.settings.minio_bucket_reports,
+                        object_key=f"reports/{job_id}/document.screenshots.json",
+                        src_path=screenshot_index_path,
                     )
                 elif renderer_profile == "daily_report_docx":
                     # The current daily-report skill returns a compact

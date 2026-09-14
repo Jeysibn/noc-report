@@ -78,11 +78,32 @@ def test_plan_resolves_frozen_facts_and_embeds_only_trusted_screenshot(tmp_path)
         ],
     }
     document = compose_report(plan, _snapshot())
-    assert document.blocks[1].incident_id == "inc-001"
-    assert {link.label for link in document.blocks[1].links} == {"Teams", "Grafana"}
-    analysis = document.blocks[2]
+
+    from noc_bridge.report_document import AnalysisReference, Heading, IncidentEvidence, PageBreak
+
+    section_headings = [b.text for b in document.blocks if isinstance(b, Heading) and b.level == 1]
+    assert [h for h in section_headings if h in ("Alerts", "General Summary", "Log Analysis")] == [
+        "Alerts", "General Summary", "Log Analysis"
+    ]
+
+    incident_block = next(b for b in document.blocks if isinstance(b, IncidentEvidence))
+    assert incident_block.incident_id == "inc-001"
+    assert {link.label for link in incident_block.links} == {"Teams", "Grafana"}
+
+    analysis = next(b for b in document.blocks if isinstance(b, AnalysisReference))
     assert analysis.analysis_run_id == "run-001"
     assert any(item.label == "Execution Hash" for item in analysis.metadata)
+
+    # Canonical section order: Alerts -> General Summary -> Log Analysis,
+    # each separated by an explicit page break, regardless of how the plan
+    # interleaved its blocks.
+    alerts_idx = document.blocks.index(incident_block)
+    analysis_idx = document.blocks.index(analysis)
+    assert alerts_idx < analysis_idx
+    page_breaks = [i for i, b in enumerate(document.blocks) if isinstance(b, PageBreak)]
+    assert len(page_breaks) == 2
+    assert alerts_idx < page_breaks[0] < analysis_idx
+    assert page_breaks[0] < page_breaks[1] < analysis_idx
 
     destination = tmp_path / "report.docx"
     render_document(document, destination, screenshot_fetcher=lambda bucket, key: _PNG)
@@ -201,3 +222,76 @@ def test_no_frozen_screenshot_is_a_valid_report(tmp_path):
         snapshot,
     )
     render_document(document, tmp_path / "no-screenshot.docx")
+
+
+def _many_incidents(n: int) -> dict:
+    snapshot = {
+        "shift_starts_at": "2026-09-13T00:00:00+00:00",
+        "shift_ends_at": "2026-09-13T08:00:00+00:00",
+        "report_skill_snapshot_id": "report-vN",
+        "report_skill_execution_hash": "report-exec-vN",
+        "incidents": [],
+    }
+    for i in range(1, n + 1):
+        snapshot["incidents"].append({
+            "id": f"inc-{i:03d}", "display_id": f"INC-{i:03d}", "title": f"Service {i} failure",
+            "status": "RECOVERED", "service": f"service-{i}", "environment": "prod",
+            "triggered_at": "2026-09-13T01:00:00+00:00", "recovered_at": "2026-09-13T01:30:00+00:00",
+            "trigger_value": None, "teams_url": None,
+            "grafana_url": f"https://grafana.example/inc-{i:03d}",
+            "log_filename": f"{i}-service-{i}-logs-2026-09-13.json",
+            "screenshots": [], "analysis_run_id": f"run-{i:03d}",
+            "analysis_skill_snapshot_id": "triage-v1", "analysis_skill_execution_hash": "triage-exec-v1",
+            "analysis_skill_version": "1", "analysis_output_sha256": f"result-{i:03d}",
+            "analysis_model": "sonnet", "analysis_effort": "low",
+            "report_fragment": {
+                "contract": "report-fragment-v1", "headline": f"Service {i} failure",
+                "severity": "high", "summary": {"zh": f"服务{i}故障", "en": f"Service {i} failure"},
+                "likely_cause": {"zh": "", "en": ""}, "recommended_action": {"zh": "", "en": ""},
+                "findings": [],
+            },
+        })
+    return snapshot
+
+
+def test_golden_report_section_order_and_pagination_with_many_alerts():
+    """Regression fixture for the canonical Daily Report layout: N alerts,
+    each exactly once, Alerts -> General Summary -> Log Analysis, with no
+    cap on how many alerts may appear (natural, unlimited pagination)."""
+    from noc_bridge.report_document import AnalysisReference, Heading, IncidentEvidence, PageBreak
+
+    n = 12  # comfortably more than would fit on a single page
+    snapshot = _many_incidents(n)
+    blocks = [{"type": "incident_reference", "incident_id": inc["id"]} for inc in snapshot["incidents"]]
+    blocks.append({"type": "bilingual_generated_text", "zh": "班次总体稳定。", "en": "The shift was overall stable."})
+    blocks.extend({"type": "analysis_reference", "incident_id": inc["id"]} for inc in snapshot["incidents"])
+
+    document = compose_report({"blocks": blocks}, snapshot)
+
+    incident_blocks = [b for b in document.blocks if isinstance(b, IncidentEvidence)]
+    analysis_blocks = [b for b in document.blocks if isinstance(b, AnalysisReference)]
+
+    # every alert appears, exactly once, in both Alerts and Log Analysis
+    assert [b.incident_id for b in incident_blocks] == [inc["id"] for inc in snapshot["incidents"]]
+    assert len(incident_blocks) == n
+    assert len(analysis_blocks) == n
+
+    section_headings = [b.text for b in document.blocks if isinstance(b, Heading) and b.level == 1]
+    assert [h for h in section_headings if h in ("Alerts", "General Summary", "Log Analysis")] == [
+        "Alerts", "General Summary", "Log Analysis"
+    ]
+
+    alerts_start = document.blocks.index(incident_blocks[0])
+    alerts_end = document.blocks.index(incident_blocks[-1])
+    analysis_start = document.blocks.index(analysis_blocks[0])
+
+    # all N alerts land contiguously in the Alerts section (natural
+    # pagination is a DOCX/word-wrap concern, not a block-ordering cap)
+    assert alerts_end - alerts_start == n - 1
+    # General Summary and its page break sit strictly between Alerts and
+    # Log Analysis -- never interleaved with either.
+    assert alerts_end < analysis_start
+    page_breaks = [i for i, b in enumerate(document.blocks) if isinstance(b, PageBreak)]
+    assert len(page_breaks) == 2
+    assert alerts_end < page_breaks[0] < analysis_start
+    assert page_breaks[0] < page_breaks[1] < analysis_start

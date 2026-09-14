@@ -71,16 +71,23 @@ def _add_bilingual_text(doc: Document, block: BilingualText) -> None:
 
 
 def _add_incident_evidence(doc: Document, block: IncidentEvidence, screenshot_fetcher: ScreenshotFetcher | None) -> None:
-    doc.add_heading(block.heading, level=2)
+    # Keep the alert heading glued to whatever paragraph follows it so Word's
+    # automatic pagination does not strand "Alert #n - <title>" alone at the
+    # bottom of a page with its evidence pushed to the next one.
+    heading = doc.add_heading(block.heading, level=2)
+    heading.paragraph_format.keep_with_next = True
     if block.incident_id:
-        doc.add_paragraph(f"Incident ID: {block.incident_id}")
+        para = doc.add_paragraph(f"Incident ID: {block.incident_id}")
+        para.paragraph_format.keep_with_next = True
     if block.metadata:
-        doc.add_paragraph("  ·  ".join(f"{m.label}: {m.value}" for m in block.metadata))
+        para = doc.add_paragraph("  ·  ".join(f"{m.label}: {m.value}" for m in block.metadata))
+        para.paragraph_format.keep_with_next = True
     links = list(block.links)
     if block.link:
         links.insert(0, block.link)
     for link in links:
-        doc.add_paragraph(link.label)
+        label_para = doc.add_paragraph(link.label)
+        label_para.paragraph_format.keep_with_next = True
         doc.add_paragraph(link.url)
     if block.log_file:
         doc.add_paragraph(f"Log File — File Name: {block.log_file.filename}")
