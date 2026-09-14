@@ -86,14 +86,13 @@ test_run_skill_escalation_telemetry_is_cumulative_not_overwritten` and
 
 ## Issue 5 — cache versioning + operator-override respect
 
-`CACHE_CONTRACT_VERSION` (combining `ANALYSIS_SCHEMA_VERSION` /
-`PREPROCESSOR_VERSION` / `AI_POLICY_VERSION`, defined in
-`apps/api/app/api/v1/routers/analysis.py`) is stored on every new
-`AnalysisRun` and checked, alongside `skill_name`/`skill_version`, before
-a cache hit is served — a schema, preprocessing, or policy change
-invalidates the cache wholesale by bumping one constant, rather than
-requiring every version dimension to be tracked and reasoned about
-separately by hand.
+The historical implementation used `ANALYSIS_SCHEMA_VERSION` together
+with preprocessing and policy constants. Phase 5 removes that duplicated
+schema version from the runtime contract: the immutable
+`SkillSnapshot.content_hash` covers `SKILL.md`, `skill.yaml`, and
+`output.schema.json`. The remaining cache contract covers only
+application-owned preprocessing and policy axes, and is stored on every
+new `AnalysisRun`.
 
 `_find_cached_analysis_run` also now takes the request's own
 `requested_model`/`requested_effort` and only filters on those columns
@@ -110,28 +109,29 @@ mismatch, skill-version mismatch, explicit-override-respected cases.
 See the correction note at the top of ADR 0004 for what was actually
 wrong here. Now:
 
-- `skills/daily-alert-report/SKILL.md` and `sandbox/entrypoint.py`'s
-  `_SCHEMAS["daily-alert-report"]`: Claude receives only a **compact**
-  per-incident summary (`display_id`, `title`, `status`,
-  `severity_signal`, `main_error`, `impact`, `starts_at`, `ends_at` — via
-  the new `_compact_incident_summaries`), never the full snapshot (each
-  incident's entire analysis object, screenshots, MinIO/Grafana
-  references). It produces only `{overview_en, overview_zh,
-  cross_incident_findings_en, cross_incident_findings_zh}` — the two
-  fields that are actually reasoning-dependent across incidents.
-- `bridge/noc_bridge/service.py`'s new `_merge_daily_report(snapshot,
+- Historical `daily_report_docx` snapshots used a compact per-incident
+  summary (`display_id`, `title`, `status`, `severity_signal`, `main_error`,
+  `impact`, `starts_at`, `ends_at`) and deterministic bridge-side merging.
+  The active daily-report snapshot now uses the manifest's declarative input
+  projection and emits the skill-owned `ReportDocument` block contract,
+  including evidence and analysis-reference blocks. The old assembler remains
+  only for queued/historical snapshots whose immutable manifest selects that
+  profile.
+- For historical snapshots, `bridge/noc_bridge/service.py`'s
+  `_merge_daily_report(snapshot,
   ai_output)` deterministically rebuilds the full `title`/`sections[]`
   report structure `docx_render.py` and the (unchanged) full-shape
   `_validate_daily_report` expect, carrying every per-incident field
   through from the frozen snapshot verbatim and computing the title
   itself — none of it round-tripped through Claude.
-- `bridge/noc_bridge/validation.py`: two-stage validation —
+- The historical compatibility profile keeps two-stage validation —
+  `bridge/noc_bridge/validation.py`'s
   `_validate_daily_report_ai_output` checks Claude's raw compact output
   (wired as the `daily_report` entry in `_VALIDATORS`/`validate_output`);
   `validate_merged_daily_report` checks the final assembled report before
   rendering.
-- `docx_render.py` renders a new "Cross-Incident Findings" section from
-  the AI output's two fields.
+- The active declarative profile renders its skill-owned block order; the
+  historical adapter renders the old "Cross-Incident Findings" section.
 
 Tests: `sandbox/tests/test_daily_report_compaction.py` (compact-summary
 extraction; proof the prompt actually sent to Claude excludes screenshots/

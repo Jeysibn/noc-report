@@ -82,5 +82,7 @@ Changing skill instructions, manifest behavior, dependencies, or output
 schema creates a new content identity and naturally invalidates the analysis
 cache. Historical analysis/report provenance remains queryable through
 snapshot IDs, hashes, evidence hashes, model, effort, and policy telemetry.
-The legacy daily report path remains until a declarative report snapshot is
-activated, which allows migration without changing existing reports.
+The active daily-report source now publishes a declarative
+`report-document-v1` snapshot. Historical snapshots that still declare the
+legacy `daily_report_docx` profile remain executable through the compatibility
+adapter, so migration does not change existing reports.

@@ -24,6 +24,9 @@ from noc_bridge.report_document import (
     build_report_document,
     build_daily_report_document,
 )
+from noc_bridge.validation import validate_output
+
+SKILLS_DIR = pathlib.Path(__file__).resolve().parents[2] / "skills"
 
 _RESULT = {
     "title": "Daily Alert Report — 2026-09-13",
@@ -147,6 +150,66 @@ def test_materially_different_skill_layouts_use_same_docx_adapter(tmp_path):
         text = "\n".join(p.text for p in Document(str(dest)).paragraphs)
         assert result["metadata"]["title"] in text
         assert result["blocks"][0]["text"] in text
+
+
+def test_declarative_document_supports_metadata_and_analysis_references(tmp_path):
+    result = {
+        "metadata": {"title": "Executive Report", "date": "2026-09-14", "shift": "Night"},
+        "blocks": [
+            {"type": "heading", "level": 1, "text": "Critical Incidents"},
+            {"type": "analysis_reference", "analysis_run_id": "run-307", "label": "Incident 1"},
+        ],
+    }
+    destination = tmp_path / "provenance.docx"
+    render_document(build_report_document(result), destination)
+
+    text = "\n".join(p.text for p in Document(str(destination)).paragraphs)
+    assert "date: 2026-09-14" in text
+    assert "Incident 1" in text
+    assert "Analysis reference: run-307" in text
+
+
+def test_active_daily_report_document_contract_renders_nested_analysis_blocks(tmp_path):
+    result = {
+        "metadata": {"title": "Daily Report", "date": "2026-09-14", "shift": "Night"},
+        "blocks": [
+            {"type": "heading", "level": 1, "text": "Alerts"},
+            {
+                "type": "incident_evidence",
+                "incident_id": "incident-1",
+                "heading": "Alert #1 - API failure",
+                "metadata": [{"label": "Status", "value": "RESOLVED"}],
+                "link": {"label": "Grafana", "url": "https://grafana.example/1"},
+                "log_file": "api.log",
+                "screenshots": [],
+            },
+            {"type": "heading", "level": 1, "text": "General Summary"},
+            {"type": "bilingual_text", "zh": "一项事件。", "en": "One incident."},
+            {"type": "heading", "level": 1, "text": "Log Analysis"},
+            {
+                "type": "analysis_reference",
+                "analysis_run_id": "run-1",
+                "label": "INC-001",
+                "available": True,
+                "blocks": [
+                    {"type": "bilingual_text", "zh": "数据库超时。", "en": "Database timeout."},
+                    {"type": "paragraph", "text": "Recommended action: inspect pool saturation."},
+                ],
+            },
+        ],
+    }
+    validate_output(
+        "daily_report",
+        result,
+        skill_name="daily-alert-report",
+        skills_dir=SKILLS_DIR,
+    )
+    destination = tmp_path / "active-daily-report.docx"
+    render_document(build_report_document(result), destination)
+    text = "\n".join(p.text for p in Document(str(destination)).paragraphs)
+    assert "Incident ID: incident-1" in text
+    assert "Analysis reference: run-1" in text
+    assert "Database timeout." in text
 
 
 def test_render_daily_report_docx_end_to_end_produces_a_valid_docx(tmp_path):

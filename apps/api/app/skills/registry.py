@@ -134,6 +134,11 @@ def get_or_create_snapshot(
     if should_activate:
         for other in db.scalars(select(SkillSnapshot).where(SkillSnapshot.skill_name == skill_name)):
             other.is_active = False
+        # The partial unique index is intentionally enforced by the
+        # database. Clear the previous pointer before inserting the new
+        # active snapshot so SQLAlchemy's batched flush cannot try to set two
+        # active rows in one UPDATE/INSERT ordering.
+        db.flush()
 
     files = read_skill_files(skill_name, skills_dir=skills_dir)
     # Materialize dependency history before validating a dependent snapshot,
@@ -275,6 +280,7 @@ def set_active_snapshot(db: Session, skill_name: str, version_label: int) -> Ski
     )
     for snapshot in others:
         snapshot.is_active = False
+    db.flush()
     target.is_active = True
     db.flush()
     return target

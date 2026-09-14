@@ -1,18 +1,12 @@
 """Skill Registry — bridge-side mirror (Reliability mission Batch B).
 
-Mirrors `apps/api/app/skills/registry.py::compute_skill_hash` exactly
-(same separate-deployable-kept-in-sync-by-hand convention as
-`noc_bridge/db.py`/`noc_bridge/config.py`): sha256 over SKILL.md,
-output.schema.json, and skill.yaml's bytes, each length-prefixed, in that
-fixed order. The bridge recomputes this locally, from the same `skills/`
-directory it already mounts into the sandbox (see
-`BridgeSettings.skills_dir`), and compares it against the `skill_hash` the
-API stamped into the job message at enqueue time — a mismatch means the
-skill's content has drifted between when the job was enqueued and when
-this worker is about to execute it (e.g. a deploy landed mid-flight, or a
-message sat in the retry queue across a skill edit), which is exactly the
-kind of silent-drift scenario the reliability mission calls out as
-unacceptable for a "reproducible" pipeline.
+Mirrors `apps/api/app/skills/registry.py::compute_skill_hash` for legacy
+hash-only callers. Snapshot-backed jobs use the immutable PostgreSQL row
+instead: the bridge verifies its captured SKILL.md, output.schema.json, and
+skill.yaml bytes, then materializes only those bytes into the sandbox. The
+live `skills/` checkout is therefore not part of the execution path for a
+current job; hash verification against that checkout remains only as a
+compatibility path for old messages that carry no snapshot reference.
 """
 from __future__ import annotations
 
@@ -79,7 +73,7 @@ def fetch_skill_snapshot(conn, content_hash: str | None = None, snapshot_id: str
     apps/api/app/models/models.py::SkillSnapshot."""
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(
-            "SELECT skill_name, version_label, content_hash, skill_md, "
+            "SELECT id, skill_name, version_label, content_hash, skill_md, "
             "output_schema_json, manifest_yaml, dependency_snapshot_ids FROM skill_snapshots "
             "WHERE id = %s" if snapshot_id else "WHERE content_hash = %s",
             (snapshot_id or content_hash,),
@@ -101,6 +95,104 @@ def fetch_dependency_snapshot(conn, dependency) -> dict | None:
         cur.execute(query, tuple(params))
         row = cur.fetchone()
     return dict(row) if row else None
+
+
+def _verify_snapshot_row(snapshot: dict, *, expected_hash: str | None = None) -> None:
+    """Verify the immutable bytes represented by one database row."""
+    actual = hashlib.sha256()
+    for value in (snapshot["skill_md"], snapshot["output_schema_json"], snapshot["manifest_yaml"]):
+        contents = value.encode("utf-8")
+        actual.update(len(contents).to_bytes(8, "big"))
+        actual.update(contents)
+    actual_hash = actual.hexdigest()
+    # Pre-registry fixtures used short sentinel hashes and cannot provide a
+    # cryptographic integrity claim. Real snapshots are SHA-256 values and
+    # are always checked.
+    if len(snapshot["content_hash"]) == 64 and actual_hash != snapshot["content_hash"]:
+        raise SkillSnapshotMissing(f"snapshot {snapshot.get('id') or snapshot['content_hash']} failed content hash verification")
+    if expected_hash is not None and expected_hash != snapshot["content_hash"]:
+        raise SkillSnapshotMissing(
+            f"snapshot {snapshot.get('id') or expected_hash} hash does not match the job reference"
+        )
+
+
+def _write_snapshot_files(snapshot: dict, dest_root: pathlib.Path) -> pathlib.Path:
+    skill_dir = dest_root / snapshot["skill_name"]
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / _PROMPT_FILENAME).write_text(snapshot["skill_md"])
+    (skill_dir / _SCHEMA_FILENAME).write_text(snapshot["output_schema_json"])
+    (skill_dir / _MANIFEST_FILENAME).write_text(snapshot["manifest_yaml"])
+    skill_dir.chmod(0o705)
+    for filename in (_PROMPT_FILENAME, _SCHEMA_FILENAME, _MANIFEST_FILENAME):
+        (skill_dir / filename).chmod(0o604)
+    return skill_dir
+
+
+def _materialize_snapshot_tree(
+    conn,
+    snapshot: dict,
+    *,
+    dest_root: pathlib.Path,
+    active_names: set[str],
+    materialized_ids: set[str],
+    materialized_names: dict[str, str],
+) -> None:
+    """Materialize one snapshot and every exact transitive dependency."""
+    snapshot_id = str(snapshot.get("id") or snapshot["content_hash"])
+    skill_name = snapshot["skill_name"]
+    if skill_name in active_names:
+        raise SkillSnapshotMissing(f"cyclic skill dependency: {skill_name}")
+    previous_id = materialized_names.get(skill_name)
+    if previous_id is not None and previous_id != snapshot_id:
+        raise SkillSnapshotMissing(
+            f"dependency name {skill_name} resolves to multiple snapshots: "
+            f"{previous_id} and {snapshot_id}"
+        )
+    if snapshot_id in materialized_ids:
+        return
+
+    _verify_snapshot_row(snapshot)
+    dest_root.mkdir(parents=True, exist_ok=True)
+    dest_root.chmod(0o705)
+    _write_snapshot_files(snapshot, dest_root)
+    materialized_ids.add(snapshot_id)
+    materialized_names[skill_name] = snapshot_id
+
+    manifest = yaml.safe_load(snapshot["manifest_yaml"]) or {}
+    dependencies = manifest.get("dependencies", [])
+    if not isinstance(dependencies, list):
+        raise SkillSnapshotMissing(f"dependencies for {skill_name} must be a list")
+    dependency_ids = snapshot.get("dependency_snapshot_ids") or {}
+    for dependency in dependencies:
+        dependency_name = dependency if isinstance(dependency, str) else dependency.get("id")
+        if not dependency_name:
+            raise SkillSnapshotMissing(f"dependency is missing an id: {dependency!r}")
+        dep = (
+            fetch_skill_snapshot(conn, snapshot_id=dependency_ids.get(dependency_name))
+            if dependency_ids.get(dependency_name)
+            else fetch_dependency_snapshot(conn, dependency)
+        )
+        if dep is None:
+            raise SkillSnapshotMissing(f"dependency snapshot is missing: {dependency}")
+        if dep["skill_name"] != dependency_name:
+            raise SkillSnapshotMissing(
+                f"dependency snapshot {dep['skill_name']} does not satisfy {dependency_name}"
+            )
+        if isinstance(dependency, dict) and dependency.get("version") is not None:
+            try:
+                requested_version = int(dependency["version"])
+            except (TypeError, ValueError) as exc:
+                raise SkillSnapshotMissing(f"invalid dependency version: {dependency}") from exc
+            if int(dep["version_label"]) != requested_version:
+                raise SkillSnapshotMissing(f"dependency snapshot version does not satisfy {dependency}")
+        _materialize_snapshot_tree(
+            conn,
+            dep,
+            dest_root=dest_root,
+            active_names=active_names | {skill_name},
+            materialized_ids=materialized_ids,
+            materialized_names=materialized_names,
+        )
 
 
 def materialize_snapshot(
@@ -129,54 +221,15 @@ def materialize_snapshot(
         raise SkillSnapshotMissing(
             f"snapshot {snapshot_id or content_hash} belongs to {snapshot['skill_name']}, not {skill_name}"
         )
-    # The row is the source of truth, but its hash is still an integrity
-    # guard against partial/corrupt database content.
-    digest = hashlib.sha256()
-    for value in (snapshot["skill_md"], snapshot["output_schema_json"], snapshot["manifest_yaml"]):
-        contents = value.encode("utf-8")
-        digest.update(len(contents).to_bytes(8, "big"))
-        digest.update(contents)
-    if snapshot_id is not None and digest.hexdigest() != snapshot["content_hash"]:
-        raise SkillSnapshotMissing(f"snapshot {snapshot_id or content_hash} failed content hash verification")
-
-    skill_dir = dest_root / skill_name
-    skill_dir.mkdir(parents=True, exist_ok=True)
-    (skill_dir / _PROMPT_FILENAME).write_text(snapshot["skill_md"])
-    (skill_dir / _SCHEMA_FILENAME).write_text(snapshot["output_schema_json"])
-    (skill_dir / _MANIFEST_FILENAME).write_text(snapshot["manifest_yaml"])
-
-    # dest_root is normally a fresh tempfile.TemporaryDirectory, which
-    # defaults to 0700 (host-user-only) — that alone blocks the sandbox's
-    # fixed non-root uid (10001, §28) from even traversing into it once
-    # bind-mounted read-only at /skills, regardless of skill_dir's or the
-    # files' own modes. Same reasoning as
-    # sandbox_runner.py::_grant_sandbox_uid_access: grant only the
-    # "other" bits actually needed to read (traverse+list on the two
-    # directories, read on the three files), zero "group" bits.
-    dest_root.chmod(0o705)
-    skill_dir.chmod(0o705)
-    for filename in (_PROMPT_FILENAME, _SCHEMA_FILENAME, _MANIFEST_FILENAME):
-        (skill_dir / filename).chmod(0o604)
-    # Dependencies are materialized beside the primary skill using their
-    # exact registered snapshots. The sandbox may consume them if the
-    # manifest references them; no mutable repository tree is mounted.
-    manifest = yaml.safe_load(snapshot["manifest_yaml"]) or {}
-    dependency_ids = snapshot.get("dependency_snapshot_ids") or {}
-    for dependency in manifest.get("dependencies", []):
-        dependency_name = dependency if isinstance(dependency, str) else dependency.get("id")
-        dep = (
-            fetch_skill_snapshot(conn, snapshot_id=dependency_ids.get(dependency_name))
-            if dependency_ids.get(dependency_name)
-            else fetch_dependency_snapshot(conn, dependency)
-        )
-        if dep is None:
-            raise SkillSnapshotMissing(f"dependency snapshot is missing: {dependency}")
-        dep_name = dep["skill_name"]
-        dep_dir = dest_root / dep_name
-        dep_dir.mkdir(parents=True, exist_ok=True)
-        dep_dir.chmod(0o705)
-        for filename, value in ((_PROMPT_FILENAME, dep["skill_md"]), (_SCHEMA_FILENAME, dep["output_schema_json"]), (_MANIFEST_FILENAME, dep["manifest_yaml"])):
-            path = dep_dir / filename
-            path.write_text(value)
-            path.chmod(0o604)
+    # The row is the source of truth. Verify and materialize its complete
+    # immutable dependency graph; no live checkout is involved.
+    _verify_snapshot_row(snapshot, expected_hash=content_hash)
+    _materialize_snapshot_tree(
+        conn,
+        snapshot,
+        dest_root=dest_root,
+        active_names=set(),
+        materialized_ids=set(),
+        materialized_names={},
+    )
     return dest_root

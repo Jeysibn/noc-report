@@ -412,6 +412,9 @@ def _make_completed_run(db_session, incident_id, evidence_id, sha256, **override
 
     from app.api.v1.routers import analysis as analysis_router
     from app.models.models import AnalysisRun, Job
+    from app.skills.registry import resolve_active_snapshot
+
+    skill_snapshot = resolve_active_snapshot(db_session, analysis_router.SKILL_NAME)
 
     job = Job(
         job_type="log_triage",
@@ -421,6 +424,8 @@ def _make_completed_run(db_session, incident_id, evidence_id, sha256, **override
         effort=overrides.get("effort", "low"),
         skill_name=analysis_router.SKILL_NAME,
         skill_version=analysis_router.SKILL_VERSION,
+        skill_hash=skill_snapshot.content_hash,
+        skill_snapshot_id=skill_snapshot.id,
         correlation_id=str(_uuid.uuid4()),
         completed_at=datetime.now(_tz.utc),
     )

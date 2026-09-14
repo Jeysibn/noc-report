@@ -225,6 +225,8 @@ class JobOut(BaseModel):
     effort: str | None
     skill_name: str | None
     skill_version: str | None
+    skill_snapshot_id: uuid.UUID
+    skill_hash: str | None = None
     attempt: int
     correlation_id: str
     error_code: str | None
@@ -278,6 +280,12 @@ class AnalysisRunOut(BaseModel):
     # Skill Runtime mission Phase 6: the exact SkillSnapshot row's id, not
     # just the human-readable name/version label.
     skill_snapshot_id: uuid.UUID | None = None
+    skill_hash: str | None = None
+    schema_hash: str | None = None
+    input_contract_version: str | None = None
+    preprocessor_version: str | None = None
+    ai_policy_version: str | None = None
+    ai_policy_json: dict | None = None
     attempt: int
     error_code: str | None
     error_message: str | None
@@ -353,6 +361,7 @@ class ReportOut(BaseModel):
     skill_name: str | None
     skill_version: str | None
     skill_snapshot_id: uuid.UUID | None = None
+    skill_hash: str | None = None
     generated_by: uuid.UUID | None
     generated_at: datetime | None
     error_message: str | None

@@ -8,14 +8,11 @@ dependencies baked in, and a rendering bug can be fixed/redeployed
 without touching the sandbox image at all.
 
 Skill Runtime mission Phase 9: `render_document` knows only
-`report_document`'s block types (Heading/Paragraph/BilingualText/
-IncidentEvidence/AnalysisReference/...) — it has zero knowledge of any
-skill's own field names (no `section["incident_display_id"]`,
-`analysis["summary_en"]`, ...). That translation now lives entirely in
-`noc_bridge.report_document.build_daily_report_document`. A different
-report skill/shape only needs its own assembly function; this renderer
-is untouched. `render_daily_report_docx` is kept as the one skill-aware
-entry point `service.py` calls, so that call site didn't need to change.
+`report_document`'s block types. Translation from a skill-owned result to
+those blocks lives in a report assembler, so a different report skill/shape
+only needs its own assembler; this DOCX adapter is unchanged. The legacy
+daily-report wrapper remains as a compatibility entry point for that one
+assembler.
 """
 from __future__ import annotations
 
@@ -74,6 +71,8 @@ def _add_bilingual_text(doc: Document, block: BilingualText) -> None:
 
 def _add_incident_evidence(doc: Document, block: IncidentEvidence, screenshot_fetcher: ScreenshotFetcher | None) -> None:
     doc.add_heading(block.heading, level=2)
+    if block.incident_id:
+        doc.add_paragraph(f"Incident ID: {block.incident_id}")
     if block.metadata:
         doc.add_paragraph("  ·  ".join(f"{m.label}: {m.value}" for m in block.metadata))
     if block.link:
@@ -95,11 +94,21 @@ def _add_incident_evidence(doc: Document, block: IncidentEvidence, screenshot_fe
             doc.add_paragraph(f"[could not embed screenshot: {shot.filename}]")
 
 
-def _add_analysis_reference(doc: Document, block: AnalysisReference) -> None:
+def _add_analysis_reference(
+    doc: Document,
+    block: AnalysisReference,
+    screenshot_fetcher: ScreenshotFetcher | None,
+) -> None:
     doc.add_heading(block.heading, level=2)
+    if block.analysis_run_id:
+        doc.add_paragraph(f"Analysis reference: {block.analysis_run_id}")
     if not block.available:
         doc.add_paragraph(block.unavailable_text or "No analysis available.")
         return
+    for child in block.children:
+        _render_block(doc, child, screenshot_fetcher)
+    # Compatibility fields remain readable for historical daily-report
+    # snapshots created before analysis_reference.children existed.
     if block.summary:
         _add_bilingual_text(doc, block.summary)
     if block.key_finds:
@@ -118,6 +127,36 @@ def _add_analysis_reference(doc: Document, block: AnalysisReference) -> None:
             doc.add_paragraph(block.recommended_action.text_en)
 
 
+def _render_block(doc: Document, block, screenshot_fetcher: ScreenshotFetcher | None) -> None:
+    if isinstance(block, Heading):
+        doc.add_heading(block.text, level=block.level)
+    elif isinstance(block, Paragraph):
+        doc.add_paragraph(block.text, style=block.style) if block.style else doc.add_paragraph(block.text)
+    elif isinstance(block, Metadata):
+        doc.add_paragraph(f"{block.label}: {block.value}")
+    elif isinstance(block, Link):
+        doc.add_paragraph(f"{block.label}: {block.url}")
+    elif isinstance(block, LogFileReference):
+        doc.add_paragraph(f"Log File — File Name: {block.filename}")
+    elif isinstance(block, Screenshot):
+        if screenshot_fetcher is not None:
+            data = screenshot_fetcher(block.bucket, block.object_key)
+            if data:
+                doc.add_picture(io.BytesIO(data), width=Inches(5.5))
+    elif isinstance(block, Divider):
+        doc.add_paragraph("―" * 20)
+    elif isinstance(block, PageBreak):
+        doc.add_page_break()
+    elif isinstance(block, BilingualText):
+        _add_bilingual_text(doc, block)
+    elif isinstance(block, IncidentEvidence):
+        _add_incident_evidence(doc, block, screenshot_fetcher)
+    elif isinstance(block, AnalysisReference):
+        _add_analysis_reference(doc, block, screenshot_fetcher)
+    else:
+        raise ValueError(f"render_document: unknown block type {type(block)!r}")
+
+
 def render_document(
     document: ReportDocument,
     dest_path: pathlib.Path,
@@ -129,35 +168,11 @@ def render_document(
     unchanged."""
     doc = Document()
     doc.add_heading(document.title, level=0)
+    for metadata in document.metadata:
+        doc.add_paragraph(f"{metadata.label}: {metadata.value}")
 
     for block in document.blocks:
-        if isinstance(block, Heading):
-            doc.add_heading(block.text, level=block.level)
-        elif isinstance(block, Paragraph):
-            doc.add_paragraph(block.text, style=block.style) if block.style else doc.add_paragraph(block.text)
-        elif isinstance(block, Metadata):
-            doc.add_paragraph(f"{block.label}: {block.value}")
-        elif isinstance(block, Link):
-            doc.add_paragraph(f"{block.label}: {block.url}")
-        elif isinstance(block, LogFileReference):
-            doc.add_paragraph(f"Log File — File Name: {block.filename}")
-        elif isinstance(block, Screenshot):
-            if screenshot_fetcher is not None:
-                data = screenshot_fetcher(block.bucket, block.object_key)
-                if data:
-                    doc.add_picture(io.BytesIO(data), width=Inches(5.5))
-        elif isinstance(block, Divider):
-            doc.add_paragraph("―" * 20)
-        elif isinstance(block, PageBreak):
-            doc.add_page_break()
-        elif isinstance(block, BilingualText):
-            _add_bilingual_text(doc, block)
-        elif isinstance(block, IncidentEvidence):
-            _add_incident_evidence(doc, block, screenshot_fetcher)
-        elif isinstance(block, AnalysisReference):
-            _add_analysis_reference(doc, block)
-        else:
-            raise ValueError(f"render_document: unknown block type {type(block)!r}")
+        _render_block(doc, block, screenshot_fetcher)
 
     dest_path.parent.mkdir(parents=True, exist_ok=True)
     doc.save(str(dest_path))

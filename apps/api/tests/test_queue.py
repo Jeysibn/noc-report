@@ -24,6 +24,7 @@ from app.core.queue import (
 from app.jobs import enqueue_job, open_channel
 from app.outbox import dispatch_pending_events
 from app.models.models import Job
+from app.skills.registry import resolve_active_snapshot
 
 from tests.conftest import auth_headers, make_user
 
@@ -35,6 +36,10 @@ def _purge_all(channel):
         channel.queue_purge(names["retry"])
         channel.queue_purge(names["dlq"])
     channel.queue_purge("noc.events.log")
+
+
+def _snapshot(db_session, skill_name: str):
+    return resolve_active_snapshot(db_session, skill_name)
 
 
 def test_declare_topology_is_idempotent():
@@ -106,6 +111,7 @@ def test_publish_status_event_lands_on_events_log():
 
 def test_enqueue_job_creates_row_and_publishes(db_session):
     make_user(db_session, "operator1", "NOC")
+    snapshot = _snapshot(db_session, "daily-alert-report")
 
     with open_channel() as channel:
         _purge_all(channel)
@@ -117,8 +123,10 @@ def test_enqueue_job_creates_row_and_publishes(db_session):
             object_refs=[],
             model="claude-sonnet-5",
             effort="high",
-            skill_name="daily-report",
+            skill_name="daily-alert-report",
             skill_version="1",
+            skill_hash=snapshot.content_hash,
+            skill_snapshot_id=snapshot.id,
         )
         db_session.commit()
         assert job.id is not None
@@ -148,6 +156,7 @@ def test_admin_jobs_and_dlq_endpoints(client, db_session):
 
     with open_channel() as channel:
         _purge_all(channel)
+        snapshot = _snapshot(db_session, "log-triage-summary")
         enqueue_job(
             db_session,
             job_type="log_triage",
@@ -156,8 +165,10 @@ def test_admin_jobs_and_dlq_endpoints(client, db_session):
             object_refs=[],
             model="claude-sonnet-5",
             effort="medium",
-            skill_name="log-triage",
+            skill_name="log-triage-summary",
             skill_version="1",
+            skill_hash=snapshot.content_hash,
+            skill_snapshot_id=snapshot.id,
         )
         db_session.commit()
         dispatch_pending_events(db_session, channel)
@@ -199,6 +210,7 @@ def test_dlq_requeue_and_purge(client, db_session):
 
     with open_channel() as channel:
         _purge_all(channel)
+        snapshot = _snapshot(db_session, "log-triage-summary")
         job = enqueue_job(
             db_session,
             job_type="log_triage",
@@ -207,8 +219,10 @@ def test_dlq_requeue_and_purge(client, db_session):
             object_refs=[],
             model="claude-sonnet-5",
             effort="medium",
-            skill_name="log-triage",
+            skill_name="log-triage-summary",
             skill_version="1",
+            skill_hash=snapshot.content_hash,
+            skill_snapshot_id=snapshot.id,
         )
         db_session.commit()
         dispatch_pending_events(db_session, channel)

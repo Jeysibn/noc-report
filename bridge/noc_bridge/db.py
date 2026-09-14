@@ -76,10 +76,7 @@ def fetch_job_row(conn, job_id: uuid.UUID) -> dict | None:
 # live lease, and the caller (service.py) checks Job.status == COMPLETED /
 # artifact-already-uploaded before ever attempting a claim at all.
 
-DEFAULT_LEASE_SECONDS = 600  # matches BridgeSettings.claude_cli_timeout_seconds's rough order of magnitude
-
-
-def claim_job(conn, job_id: uuid.UUID, *, worker_id: str, lease_seconds: int = DEFAULT_LEASE_SECONDS) -> dict | None:
+def claim_job(conn, job_id: uuid.UUID, *, worker_id: str, lease_seconds: int) -> dict | None:
     """Attempts to claim `job_id` for this worker. Succeeds (returns the
     updated row) only if the job is QUEUED/FAILED (a fresh or
     retry-eligible job), or PROCESSING with an *expired* lease (a prior

@@ -11,6 +11,8 @@ from sqlalchemy import (
     String,
     Table,
     Column,
+    Index,
+    text,
     func,
 )
 from sqlalchemy.dialects.postgresql import UUID
@@ -251,8 +253,8 @@ class Job(Base):
     skill_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
     # Immutable execution contract selected when the job was created.  The
     # display fields above remain for backwards-compatible reporting only.
-    skill_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("skill_snapshots.id"), nullable=True
+    skill_snapshot_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("skill_snapshots.id"), nullable=False
     )
     # Skill Registry (Reliability mission Batch B): the content hash of
     # the SkillSnapshot actually used for this row, computed by
@@ -332,6 +334,15 @@ class SkillSnapshot(Base):
     remember to bump."""
 
     __tablename__ = "skill_snapshots"
+    __table_args__ = (
+        Index(
+            "uq_skill_snapshots_one_active_per_name",
+            "skill_name",
+            unique=True,
+            postgresql_where=text("is_active IS TRUE"),
+            sqlite_where=text("is_active = 1"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = uuid_pk()
     skill_name: Mapped[str] = mapped_column(String(100), nullable=False)
@@ -394,6 +405,10 @@ class AnalysisRun(Base):
         UUID(as_uuid=True), ForeignKey("skill_snapshots.id"), nullable=True
     )
     schema_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    input_contract_version: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    preprocessor_version: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    ai_policy_version: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    ai_policy_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     input_manifest_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     output_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     current: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
@@ -423,12 +438,11 @@ class AnalysisRun(Base):
     evidence_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     preprocessing_ratio: Mapped[float | None] = mapped_column(Float, nullable=True)
 
-    # AI cost-optimization mission Phase 2, Issue 5 (cache versioning): the
-    # combined analysis-schema/preprocessor/AI-policy version this run was
-    # produced under (see app/api/v1/routers/analysis.py's
-    # CACHE_CONTRACT_VERSION) — a cache lookup must match this in addition
-    # to skill_name/skill_version, so bumping any of those three axes
-    # invalidates old cache entries without needing a SKILL_VERSION bump.
+    # Cache compatibility axes for runtime code outside the immutable skill
+    # contract (currently the deterministic preprocessor and AI policy).
+    # The output schema and skill instructions are already covered by
+    # skill_snapshot_id/content_hash, so ordinary skill changes do not need
+    # an unrelated cache-version bump.
     cache_contract_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
     # AI cost-optimization mission Phase 2, Issue 4 (cumulative escalation

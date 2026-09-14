@@ -20,6 +20,7 @@ name: log-triage-summary
 version: "1"
 kind: analysis
 input_contract:
+  version: log-evidence-v1
   filename: log.txt
   intro_text: "Here is the log excerpt to analyze:"
 output_schema:
@@ -27,7 +28,6 @@ output_schema:
 renderer_profile: null
 execution_policy:
   job_type: log_triage
-  timeout_seconds: 900
   quality_signals:
     confidence_field: confidence
     required_nonempty_list_field: key_finds

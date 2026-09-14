@@ -76,6 +76,18 @@ def test_compact_incident_summaries_handles_incident_with_no_analysis():
     assert compact[1]["impact"] is None
 
 
+def test_manifest_projection_is_the_source_of_daily_report_context(monkeypatch):
+    monkeypatch.setattr(entrypoint, "SKILLS_DIR", pathlib.Path(__file__).resolve().parents[2] / "skills")
+    manifest = entrypoint._load_manifest("daily-alert-report")
+    projected = entrypoint._project_snapshot(_SNAPSHOT, manifest["input_projection"])
+    assert projected["shift_starts_at"] == _SNAPSHOT["shift_starts_at"]
+    incident = projected["incidents"][0]
+    assert incident["summary_en"] == "NullPointerException in PaymentWorker.charge"
+    assert incident["likely_cause_en"] == "null pointer dereference"
+    assert incident["grafana_url"] == "https://grafana.example/d/abc"
+    assert incident["screenshots"] == _SNAPSHOT["incidents"][0]["screenshots"]
+
+
 def test_run_skill_sends_claude_only_the_compact_snapshot(monkeypatch, tmp_path):
     """The core Issue 6 guarantee: the prompt actually handed to Claude for
     daily-alert-report contains the compact fields, but never the full

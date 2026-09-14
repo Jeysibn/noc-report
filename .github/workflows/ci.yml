@@ -82,6 +82,9 @@ jobs:
             curl -sf http://localhost:59000/minio/health/live && break
             sleep 2
           done
+      - name: Apply DB migrations
+        working-directory: apps/api
+        run: alembic upgrade head
       - name: Run API test suite (real Postgres/RabbitMQ/MinIO)
         working-directory: apps/api
         run: python -m pytest tests/ -q

@@ -112,10 +112,17 @@ def test_admin_can_delete_incident_whose_job_has_an_outbox_event(client, db_sess
     ).json()
     incident_id = created["id"]
 
+    from app.skills.registry import resolve_active_snapshot
+
+    skill_snapshot = resolve_active_snapshot(db_session, "log-triage-summary")
     job = Job(
         job_type="log_triage",
         status="QUEUED",
         incident_id=uuid.UUID(incident_id),
+        skill_name="log-triage-summary",
+        skill_version="1",
+        skill_hash=skill_snapshot.content_hash,
+        skill_snapshot_id=skill_snapshot.id,
         correlation_id="test-corr-id",
     )
     db_session.add(job)

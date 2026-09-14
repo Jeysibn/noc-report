@@ -18,15 +18,32 @@ from datetime import datetime, timezone
 
 import pytest
 
-from app.models.models import Job, OutboxEvent
+from app.models.models import Job, OutboxEvent, SkillSnapshot
 from app.outbox import dispatch_pending_events
 from tests.conftest import TestSessionLocal
 
 
 def _make_pending_event(db, *, routing_key="log_triage") -> OutboxEvent:
+    snapshot = db.query(SkillSnapshot).filter(SkillSnapshot.skill_name == "outbox-test").one_or_none()
+    if snapshot is None:
+        snapshot = SkillSnapshot(
+            skill_name="outbox-test",
+            version_label=1,
+            content_hash="b" * 64,
+            skill_md="# outbox test",
+            output_schema_json='{"type":"object"}',
+            manifest_yaml="name: outbox-test\n",
+            is_active=True,
+        )
+        db.add(snapshot)
+        db.flush()
     job = Job(
         job_type="log_triage",
         status="QUEUED",
+        skill_name="outbox-test",
+        skill_version="1",
+        skill_hash=snapshot.content_hash,
+        skill_snapshot_id=snapshot.id,
         correlation_id=str(uuid.uuid4()),
     )
     db.add(job)

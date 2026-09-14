@@ -32,7 +32,7 @@ from app.deps import require_permission
 from app.jobs import enqueue_job
 from app.models.models import AnalysisRun, Evidence, Incident, Job, Report, ReportSnapshot, Shift, User
 from app.skills.registry import resolve_active_snapshot
-from app.skills.runtime import declared_skill_version
+from app.skills.runtime import declared_skill_version, execution_policy
 from app.schemas.schemas import (
     ReportDownloadUrlResponse,
     ReportGenerateRequest,
@@ -98,12 +98,26 @@ def _build_snapshot(db: Session, shift: Shift) -> dict:
                 # back to the exact skill version and raw output that
                 # fed it, even after the incident's current run changes.
                 "analysis_run_id": str(run.id) if run else None,
+                "analysis_log_evidence_id": str(run.log_evidence_id) if (run and run.log_evidence_id) else None,
                 "analysis_skill_snapshot_id": str(run.skill_snapshot_id) if (run and run.skill_snapshot_id) else None,
                 "analysis_skill_hash": run.skill_hash if run else None,
                 "analysis_skill_version": run.skill_version if run else None,
                 "analysis_schema_hash": run.schema_hash if run else None,
+                "analysis_input_contract_version": run.input_contract_version if run else None,
+                "analysis_preprocessor_version": run.preprocessor_version if run else None,
+                "analysis_ai_policy_version": run.ai_policy_version if run else None,
+                "analysis_ai_policy": run.ai_policy_json if run else None,
+                "analysis_input_manifest_sha256": run.input_manifest_sha256 if run else None,
                 "analysis_model": run.model if run else None,
                 "analysis_effort": run.effort if run else None,
+                "analysis_attempt_count": run.attempt_count if run else None,
+                "analysis_used_cache": run.used_cache if run else False,
+                "analysis_cache_type": run.cache_type if run else None,
+                "analysis_input_tokens": run.input_tokens if run else None,
+                "analysis_output_tokens": run.output_tokens if run else None,
+                "analysis_cache_read_tokens": run.cache_read_tokens if run else None,
+                "analysis_cache_creation_tokens": run.cache_creation_tokens if run else None,
+                "analysis_estimated_cost_usd": run.estimated_cost_usd if run else None,
                 "analysis_output_sha256": run.output_sha256 if run else None,
             }
         )
@@ -132,6 +146,7 @@ def _to_out(report: Report, job: Job) -> ReportOut:
         skill_name=report.skill_name,
         skill_version=report.skill_version,
         skill_snapshot_id=report.skill_snapshot_id,
+        skill_hash=report.skill_hash,
         generated_by=report.generated_by,
         generated_at=report.generated_at,
         error_message=job.error_message,
@@ -240,6 +255,7 @@ def generate_report(
         skill_version=declared_skill_version(skill_snapshot),
         skill_hash=skill_snapshot.content_hash,
         skill_snapshot_id=skill_snapshot.id,
+        ai_policy=execution_policy(skill_snapshot),
     )
 
     report = Report(
