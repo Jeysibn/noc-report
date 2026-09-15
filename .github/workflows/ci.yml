@@ -20,6 +20,13 @@ jobs:
       - run: npm run test
       - run: npm run build
 
+  coherence:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run branch coherence gate
+        run: npm run check:coherence
+
   # AI cost-optimization mission Phase 2, Issue 9: CI previously ran only
   # the frontend job above — none of the API, sandbox, bridge, cache,
   # telemetry, or structured-output regression tests added across the
@@ -97,6 +104,8 @@ jobs:
         with:
           python-version: "3.12"
       - name: Run sandbox preprocessing/cache/telemetry/structured-output tests
+        env:
+          PYTHONPATH: sandbox
         run: python -m pytest sandbox/tests/ -q
 
   bridge:

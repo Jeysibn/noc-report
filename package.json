@@ -11,6 +11,7 @@
     "build": "npm run build -w apps/web",
     "test": "npm run test -w apps/web",
     "lint": "npm run lint -w apps/web",
+    "check:coherence": "python3 scripts/check_coherence.py",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },

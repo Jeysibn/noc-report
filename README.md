@@ -35,6 +35,19 @@ and RabbitMQ. See [`apps/api/README.md`](apps/api/README.md) for its setup and
 test commands. The development Compose file starts those dependencies; the web
 app and API run as host processes.
 
+The release checks are intentionally component-scoped because the API fixture
+recreates its database and the bridge uses the same infrastructure:
+
+```bash
+npm run check:coherence
+(cd apps/api && pytest tests/ -q)          # after alembic upgrade head
+PYTHONPATH=sandbox python3 -m pytest sandbox/tests/ -q
+(cd bridge && PYTHONPATH=. pytest tests/ -q)
+```
+
+Run the API and bridge suites sequentially against separate test database
+lifecycles; do not run them concurrently against the same local Postgres.
+
 ## Milestones
 
 Implementation proceeds per the master plan's Development Milestones (§37).
