@@ -103,13 +103,15 @@ def score(actual: dict[str, str], cases: list[Case]) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--ollama", action="store_true", help="call the configured local Ollama model")
+    parser.add_argument("--ollama-sample-size", type=int, default=6)
+    parser.add_argument("--ollama-timeout", type=float, default=75)
     parser.add_argument("--output", type=Path, help="write JSON results to this path")
     args = parser.parse_args()
     cases = corpus()
-    # Full corpus establishes the baseline. Real CPU model calls use a stable
-    # representative sample so a routine benchmark remains bounded: six
-    # ambiguous label variants and four deterministic controls.
-    ai_cases = [cases[index] for index in (1, 2, 4, 5, 10, 20, 25, 35, 40, 7)]
+    # Full corpus establishes the baseline. Real CPU model calls use only the
+    # six ambiguous label variants; explicit-label controls are already HIGH
+    # quality and must not invoke local AI just to inflate the sample.
+    ai_cases = [cases[index] for index in (5, 10, 20, 25, 35, 40)][: max(1, args.ollama_sample_size)]
     report = {"corpus": {"cases": len(cases), "sanitized": True}, "modes": {}}
 
     start = time.perf_counter()
@@ -122,6 +124,13 @@ def main() -> int:
         **score(rules, cases),
         "duration_ms": round((time.perf_counter() - start) * 1000),
     }
+    report["comparison_on_local_ai_sample"] = {
+        "sample_cases": len(ai_cases),
+        "ocr_plus_rules": score(
+            [rules[cases.index(case)] for case in ai_cases],
+            ai_cases,
+        ),
+    }
 
     if args.ollama:
         adapter = OllamaLocalInference(
@@ -129,7 +138,7 @@ def main() -> int:
             model="qwen2.5:3b-instruct-q4_K_M",
             context_size=2048,
             keep_alive="5m",
-            timeout_seconds=45,
+            timeout_seconds=args.ollama_timeout,
             max_concurrency=1,
         )
         start = time.perf_counter()
@@ -141,7 +150,7 @@ def main() -> int:
             **score(enhanced, ai_cases),
             "duration_ms": round((time.perf_counter() - start) * 1000),
             "model": adapter.model,
-            "sample_note": "10 cases: six ambiguous label variants plus four deterministic controls; full corpus remains 50 cases",
+            "sample_note": f"{len(ai_cases)} of 6 ambiguous label variants; explicit-label controls remain deterministic; full corpus remains 50 cases",
             "peak_rss_kb_process": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
         }
     else:

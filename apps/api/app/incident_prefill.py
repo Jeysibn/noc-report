@@ -196,8 +196,9 @@ def deterministic_prefill(extraction: dict, *, known_services: tuple[str, ...] =
     trigger_match = next(((match.group(0), line) for line in lines if (match := _TRIGGER_VALUE_RE.search(line["text"]))), None)
     environment = _field(_normalize_environment(env_match[0]), env_match[1]) if env_match and _normalize_environment(env_match[0]) else PrefillField()
 
+    title_quality: FieldQuality = "HIGH" if title_match and _LABEL_RE.match(title_match[1]["text"]) else "REVIEW"
     return IncidentPrefill(
-        title=_field(title_match[0], title_match[1], quality="REVIEW") if title_match else PrefillField(),
+        title=_field(title_match[0], title_match[1], quality=title_quality) if title_match else PrefillField(),
         service=_known_service(service_match[0], service_match[1], known_services) if service_match else PrefillField(),
         notes=_field(notes_match[0], notes_match[1]) if notes_match else PrefillField(),
         status=status,
@@ -243,6 +244,19 @@ def _model_value_supported(field_name: str, value: str, source_text: str, known_
     return False
 
 
+def _normalize_model_value(field_name: str, value: str, source_text: str) -> str:
+    """Remove a label the small model may echo; retain only cited evidence."""
+    if field_name == "title":
+        match = re.match(
+            r"^\s*(?:alert\s*(?:title|name)?|title|incident|告警|标题)\s*[:：=\-]\s*(?P<value>.+?)\s*$",
+            source_text,
+            re.I,
+        )
+        if match:
+            return match.group("value").strip()
+    return value.strip()
+
+
 def _apply_model_output(prefill: IncidentPrefill, model_output: dict, extraction: dict, known_services: tuple[str, ...]) -> IncidentPrefill:
     lines = _lines(extraction)
     line_texts = {line["text"] for line in lines}
@@ -253,6 +267,11 @@ def _apply_model_output(prefill: IncidentPrefill, model_output: dict, extraction
             continue
         value = candidate.get("value")
         source_text = candidate.get("source_text")
+        if source_text is None and isinstance(candidate.get("source_index"), int):
+            source_text = next(
+                (line["text"] for line in lines if line["index"] == candidate["source_index"]),
+                None,
+            )
         if not isinstance(value, str) or not value.strip() or not isinstance(source_text, str) or source_text not in line_texts:
             continue
         if not _model_value_supported(field_name, value, source_text, known_services):
@@ -261,6 +280,7 @@ def _apply_model_output(prefill: IncidentPrefill, model_output: dict, extraction
             value = _normalize_environment(value) or ""
             if not value:
                 continue
+        value = _normalize_model_value(field_name, value, source_text)
         if field_name == "status":
             value = {"triggered": "open", "open": "open", "investigating": "investigating", "recovered": "recovered"}.get(value.casefold(), "")
             if not value:
@@ -297,12 +317,49 @@ def build_mapper_prompt(
     candidate_text = "\n".join(candidate_lines) or "none"
     return (
         "Map only unresolved Incident fields from the OCR evidence below. "
-        "Return one JSON object with each requested field as {value, source_text}; use null values when unsupported. "
-        "source_text must equal one complete OCR line copied exactly, including its label. "
-        "Do not use a substring as source_text and do not invent facts.\n"
+        "Return one JSON object with each requested field as {value, source_index}; use null values when unsupported. "
+        "source_index must identify the complete OCR line supporting the value. "
+        "Do not use a substring and do not invent facts.\n"
         f"Fields: {allowed}\nKnown services: {services}\nDeterministic candidates:\n{candidate_text}\n"
-        f"OCR:\n{normalize_ocr_text(extraction.get('raw_text'))}"
+        "OCR lines (indices are zero-based):\n"
+        + "\n".join(f"[{line['index']}] {line['text']}" for line in _lines(extraction))
     )
+
+
+def build_mapper_response_schema(unresolved_fields: list[str]) -> dict:
+    """Build the smallest strict schema for the current mapping request."""
+    field_schema = {
+        "type": "object",
+        "properties": {
+            "value": {"type": ["string", "null"]},
+            "source_index": {"type": ["integer", "null"]},
+        },
+        "required": ["value", "source_index"],
+        "additionalProperties": False,
+    }
+    return {
+        "type": "object",
+        "properties": {field: field_schema for field in unresolved_fields},
+        "required": unresolved_fields,
+        "additionalProperties": False,
+    }
+
+
+def _has_field_evidence(field_name: str, lines: list[dict]) -> bool:
+    """Avoid asking the local model to fill facts absent from the OCR."""
+    if field_name == "title":
+        return bool(lines)
+    patterns = {
+        "service": r"service|app(?:lication)?|component|服务|应用",
+        "notes": r"description|details|notes|描述|备注",
+        "status": r"recovered|triggered|investigating|恢复|触发",
+        "triggered_at": r"triggered|触发|20\d{2}[-/]\d{1,2}[-/]\d{1,2}|\b(?:[01]?\d|2[0-3]):[0-5]\d",
+        "recovered_at": r"recovered|恢复",
+        "trigger_value": r"trigger\s*value|\b\d+(?:\.\d+)?\s?(?:%|ms|s|K|M|G|MB|GB)\b",
+        "environment": r"environment|env|环境",
+    }
+    pattern = patterns.get(field_name)
+    return bool(pattern and any(re.search(pattern, line["text"], re.I) for line in lines))
 
 
 def build_incident_prefill(
@@ -314,14 +371,26 @@ def build_incident_prefill(
     prefill = deterministic_prefill(extraction, known_services=known_services)
     if inference is None:
         return prefill
+    evidence_lines = _lines(extraction)
     unresolved = [
         name for name in ("title", "service", "notes", "status", "triggered_at", "recovered_at", "trigger_value", "environment")
-        if getattr(prefill, name).value is None or getattr(prefill, name).quality != "HIGH"
+        if (getattr(prefill, name).value is None or getattr(prefill, name).quality != "HIGH")
+        and _has_field_evidence(name, evidence_lines)
     ]
     if not unresolved:
         return prefill
     try:
-        output = inference.complete_json(build_mapper_prompt(extraction, unresolved, known_services, prefill))
+        prompt = build_mapper_prompt(extraction, unresolved, known_services, prefill)
+        response_schema = build_mapper_response_schema(unresolved)
+        try:
+            output = inference.complete_json(prompt, response_schema=response_schema)
+        except TypeError as exc:
+            # Keep third-party/test adapters written against the original
+            # one-argument seam usable while the Ollama adapter gets the
+            # stronger structured-output contract.
+            if "response_schema" not in str(exc):
+                raise
+            output = inference.complete_json(prompt)
         result = _apply_model_output(prefill, output, extraction, known_services)
         result.mapper_model = inference.model
         return result

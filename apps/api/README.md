@@ -47,8 +47,9 @@ docker exec noc-report-ollama ollama pull qwen2.5:3b-instruct-q4_K_M
 
 Set `LOCAL_PREFILL_AI_ENABLED=true` and
 `LOCAL_PREFILL_BASE_URL=http://localhost:11434`. Defaults are a small Q4 3B
-instruct model, context 2048, five-minute keep-alive, one inference, and a
-bounded queue. If Ollama is unavailable, OCR and deterministic fields remain
+instruct model, context 2048, five-minute keep-alive, one inference, a
+measured local mapping timeout of 75 seconds, and a bounded queue. If Ollama
+is unavailable, OCR and deterministic fields remain
 available and ambiguous fields stay manual. This path never invokes Claude.
 
 Run tests (against the same real Postgres + MinIO — models use

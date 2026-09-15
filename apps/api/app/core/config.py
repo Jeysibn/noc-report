@@ -65,7 +65,10 @@ class Settings(BaseSettings):
     local_prefill_model: str = "qwen2.5:3b-instruct-q4_K_M"
     local_prefill_context_size: int = 2048
     local_prefill_keep_alive: str = "5m"
-    local_prefill_timeout_seconds: float = 45.0
+    # Measured CPU latency for the constrained Q4 3B profile is about 60s on
+    # the validation host; keep a bounded margin without inheriting Claude's
+    # much larger job timeout.
+    local_prefill_timeout_seconds: float = 75.0
     local_prefill_max_concurrency: int = 1
     local_prefill_max_queue: int = 8
     local_prefill_known_services: str = ""

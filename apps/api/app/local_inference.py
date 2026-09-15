@@ -27,7 +27,7 @@ class LocalInference(Protocol):
     name: str
     model: str
 
-    def complete_json(self, prompt: str) -> dict:
+    def complete_json(self, prompt: str, response_schema: dict | None = None) -> dict:
         """Return strict JSON or raise LocalInferenceError."""
 
 
@@ -40,8 +40,9 @@ class FakeLocalInference:
     model: str = "fake-local"
     delay_seconds: float = 0.0
 
-    def complete_json(self, prompt: str) -> dict:
+    def complete_json(self, prompt: str, response_schema: dict | None = None) -> dict:
         del prompt
+        del response_schema
         if self.delay_seconds:
             time.sleep(self.delay_seconds)
         return self.response
@@ -73,16 +74,16 @@ class OllamaLocalInference:
         self._inference_slot = threading.Lock()
         self._queue_slots = threading.BoundedSemaphore(max_queue)
 
-    def complete_json(self, prompt: str) -> dict:
+    def complete_json(self, prompt: str, response_schema: dict | None = None) -> dict:
         if not self._queue_slots.acquire(blocking=False):
             raise LocalInferenceBusy("local prefill queue is full")
         try:
             with self._inference_slot:
-                return self._complete_with_bounded_retry(prompt)
+                return self._complete_with_bounded_retry(prompt, response_schema)
         finally:
             self._queue_slots.release()
 
-    def _complete_with_bounded_retry(self, prompt: str) -> dict:
+    def _complete_with_bounded_retry(self, prompt: str, response_schema: dict | None) -> dict:
         retry_prompt = prompt
         for attempt in range(2):
             try:
@@ -98,11 +99,18 @@ class OllamaLocalInference:
                             {"role": "user", "content": retry_prompt},
                         ],
                         "stream": False,
-                        "format": "json",
+                        # Ollama accepts a JSON Schema here. Supplying the
+                        # narrow per-request schema materially reduces
+                        # truncated/extra-field responses from small models.
+                        "format": response_schema or "json",
                         "keep_alive": self.keep_alive,
                         "options": {
                             "num_ctx": self.context_size,
-                            "num_predict": 128,
+                            # The mapper returns compact evidence objects;
+                            # cap generation so CPU stalls fail closed quickly
+                            # instead of consuming the full report-worker
+                            # timeout.
+                            "num_predict": 64,
                             "temperature": 0,
                         },
                     },

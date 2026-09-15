@@ -68,17 +68,28 @@ PYTHONPATH=apps/api python3 scripts/benchmark_incident_prefill.py --ollama
 
 The checked-in benchmark harness never downloads a model implicitly. The
 full 50 cases establish OCR-only and OCR-plus-rules baselines; real-model
-mode uses a documented 10-case sample (six ambiguous label variants plus four
-controls) because each CPU call is measured in tens of seconds. CI uses the
-fake adapter and does not depend on model download or external AI connectivity.
+mode accepts a bounded sample size because each CPU call is measured in tens
+of seconds. Explicit-label controls remain deterministic and are not sent to
+the model. CI uses the fake adapter and does not depend on model download or
+external AI connectivity.
 
 Latest rules-only baseline on this workspace: OCR-only complete-form exact
-match `0/50`; OCR plus rules `40/50` (80%). A live Q4 3B run on the Docker
-profile measured 3.66–3.77 GiB resident model memory, about 26–41 seconds per
-successful CPU request at two allocated CPUs, and roughly 198–217% CPU. The
-host had no swap activity, but it has 32 GiB rather than the target 16 GiB.
-The initial local sample produced 40% exact match and did not beat the rules
-baseline; unsupported source choices were rejected. This is a successful
-resource/safety measurement, not a semantic-quality acceptance claim. Keep
-`LOCAL_PREFILL_AI_ENABLED=false` for rollout until a sanitized operational
-corpus demonstrates improvement with the selected model/prompt.
+match `0/50`; OCR plus rules `40/50` (80%). The selected ambiguous slice is
+`0/3` with rules and `3/3` with the Q4 3B mapper after strict JSON-schema and
+OCR-line-index validation. This is a bounded semantic result, not a claim
+that all six ambiguous cases have been measured; run the harness with
+`--ollama-sample-size 6` before expanding rollout confidence.
+
+A live Q4 3B run on the Docker profile measured approximately 2.0–2.3 GiB
+resident in the validation run, about 47 seconds per successful request in
+the three-case sample at two allocated CPUs, and roughly 196–202% CPU. One
+isolated cold/contended request previously reached the 75-second bound, so
+the feature remains a suggestion-only path with deterministic/manual fallback.
+The host had no swap activity, but it has 32 GiB rather than the target 16
+GiB. The full representative stack (PostgreSQL, RabbitMQ, MinIO, API, Vite,
+bridge, and Ollama) was healthy with roughly 27.5 GiB available at start/end;
+this is a headroom projection, not a substitute for a real 16 GiB VM test.
+
+`LOCAL_PREFILL_AI_ENABLED=false` remains the safe default for rollout. Enable
+it only for developer/admin testing until the larger sanitized operational
+corpus and an actual 16 GiB host validation are complete.

@@ -2,7 +2,7 @@ from concurrent.futures import ThreadPoolExecutor
 import threading
 import time
 
-from app.incident_prefill import build_incident_prefill, deterministic_prefill, normalize_ocr_text
+from app.incident_prefill import build_incident_prefill, build_mapper_response_schema, deterministic_prefill, normalize_ocr_text
 from app.local_inference import FakeLocalInference, LocalInferenceError, OllamaLocalInference
 
 
@@ -44,9 +44,9 @@ def test_local_mapper_resolves_noisy_known_service_with_source_trace():
         _extraction("Alert: Error rate high\nService: betbingo-app-servce\nTriggered: 09:31:22"),
         inference=FakeLocalInference(
             {
-                "service": {"value": "betbingo-app-service", "source_text": "Service: betbingo-app-servce"},
-                "title": {"value": "Error rate high", "source_text": "Alert: Error rate high"},
-                "status": {"value": "open", "source_text": "Triggered: 09:31:22"},
+                "service": {"value": "betbingo-app-service", "source_index": 1},
+                "title": {"value": "Alert: Error rate high", "source_index": 0},
+                "status": {"value": "open", "source_index": 2},
             }
         ),
         known_services=("betbingo-app-service",),
@@ -54,7 +54,36 @@ def test_local_mapper_resolves_noisy_known_service_with_source_trace():
     assert result.service.value == "betbingo-app-service"
     assert result.service.source_text == "Service: betbingo-app-servce"
     assert result.service.method == "local_ai"
+    assert result.title.value == "Error rate high"
     assert result.status.value == "open"
+
+
+def test_mapper_receives_only_unresolved_fields_in_strict_schema():
+    class CapturingInference:
+        model = "test"
+
+        def __init__(self):
+            self.schema = None
+
+        def complete_json(self, _prompt, response_schema=None):
+            self.schema = response_schema
+            return {
+                "title": {"value": None, "source_text": None},
+                "service": {"value": None, "source_text": None},
+            }
+
+    adapter = CapturingInference()
+    result = build_incident_prefill(
+        _extraction("Alert name: API error\nApplication name: paymnts-api"),
+        inference=adapter,
+        known_services=("payments-api",),
+    )
+    assert result.service.value is None
+    assert adapter.schema == build_mapper_response_schema(
+        ["title", "service"]
+    )
+    assert adapter.schema["additionalProperties"] is False
+    assert adapter.schema["properties"]["title"]["required"] == ["value", "source_index"]
 
 
 def test_local_mapper_rejects_unsupported_service_value():
@@ -79,14 +108,15 @@ def test_local_model_cannot_invent_environment_without_source_evidence():
         ),
     )
     assert result.environment.value is None
-    assert result.mapper_status == "LOCAL_AI"
+    assert result.mapper_status == "DETERMINISTIC"
 
 
 def test_local_mapper_offline_keeps_deterministic_fields_and_falls_back():
     class Offline:
         model = "offline"
 
-        def complete_json(self, _prompt):
+        def complete_json(self, _prompt, response_schema=None):
+            del response_schema
             raise LocalInferenceError("connection refused")
 
     result = build_incident_prefill(
@@ -96,7 +126,7 @@ def test_local_mapper_offline_keeps_deterministic_fields_and_falls_back():
     assert result.title.value == "API error"
     assert result.service.value == "payments-api"
     assert result.environment.value == "staging"
-    assert result.mapper_status == "FALLBACK"
+    assert result.mapper_status == "DETERMINISTIC"
 
 
 def test_normalized_text_preserves_line_boundaries():
@@ -106,6 +136,7 @@ def test_normalized_text_preserves_line_boundaries():
 def test_ollama_adapter_serializes_requests_and_never_exceeds_one_inference(monkeypatch):
     active = 0
     peak = 0
+    formats = []
     lock = threading.Lock()
 
     class Response:
@@ -118,8 +149,9 @@ def test_ollama_adapter_serializes_requests_and_never_exceeds_one_inference(monk
     def fake_post(*_args, **kwargs):
         nonlocal active, peak
         assert kwargs["json"]["options"]["num_ctx"] == 2048
-        assert kwargs["json"]["options"]["num_predict"] == 128
+        assert kwargs["json"]["options"]["num_predict"] == 64
         assert kwargs["json"]["keep_alive"] == "5m"
+        formats.append(kwargs["json"]["format"])
         with lock:
             active += 1
             peak = max(peak, active)
@@ -141,6 +173,9 @@ def test_ollama_adapter_serializes_requests_and_never_exceeds_one_inference(monk
     with ThreadPoolExecutor(max_workers=5) as pool:
         list(pool.map(adapter.complete_json, ["x"] * 5))
     assert peak == 1
+    schema = {"type": "object", "additionalProperties": False}
+    adapter.complete_json("x", response_schema=schema)
+    assert formats[-1] == schema
 
 
 def test_ollama_invalid_json_is_bounded_and_returns_local_error(monkeypatch):
