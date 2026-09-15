@@ -17,3 +17,7 @@ This glossary is the shared vocabulary for maintainers and coding agents.
 - **Job** — the durable unit processed through the outbox/RabbitMQ pipeline. Its AI usage budget is cumulative across deliveries and retries.
 - **AI Usage Budget** — the atomic per-Job paid-call reservation/consumption fence. `used` never decreases and `used + active reservation` never exceeds the configured budget.
 - **Report Composition** — the deterministic authority that derives coverage from the frozen snapshot, validates narrative requirements, controls canonical section order, and materializes the final ReportDocument.
+- **OCRExtraction** — persisted PaddleOCR output containing raw and normalized text, line confidence/coordinates, engine metadata, and screenshot provenance.
+- **IncidentPrefill** — review-only, schema-validated suggestions built from OCR evidence before an Incident exists.
+- **Prefill Evidence** — the exact OCR source line attached to each suggestion; unsupported model values are rejected.
+- **Local Inference** — the optional single-concurrency Ollama adapter for lightweight OCR semantic mapping, separate from Claude reasoning.

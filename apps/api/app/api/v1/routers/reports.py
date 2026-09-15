@@ -54,6 +54,31 @@ def _get_shift_or_404(db: Session, shift_id: uuid.UUID) -> Shift:
     return shift
 
 
+def _lock_shift_or_404(db: Session, shift_id: uuid.UUID) -> Shift:
+    """Serialize report identity allocation on the Shift row.
+
+    The database unique constraint remains the final guard, while this
+    short-lived row lock makes concurrent MAX(version)+1 allocation
+    deterministic without introducing an external lock manager.
+    """
+    shift = db.scalar(select(Shift).where(Shift.id == shift_id).with_for_update())
+    if shift is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Shift not found")
+    return shift
+
+
+def _allocate_report_version(db: Session, shift: Shift) -> int:
+    """Return the next version while the caller holds the Shift row lock."""
+    return (
+        db.scalar(
+            select(Report.version)
+            .where(Report.shift_id == shift.id)
+            .order_by(Report.version.desc())
+        )
+        or 0
+    ) + 1
+
+
 def _build_snapshot(db: Session, shift: Shift, report_skill_snapshot) -> dict:
     """Real query over this shift's incidents and their current analysis
     run, frozen into one JSON document — this is what the skill actually
@@ -244,7 +269,9 @@ def generate_report(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("report.generate")),
 ) -> ReportOut:
-    shift = _get_shift_or_404(db, shift_id)
+    shift = _lock_shift_or_404(db, shift_id)
+
+    next_version = _allocate_report_version(db, shift)
 
     # Resolve before freezing the snapshot so report composition and the Job
     # carry one immutable report-skill identity from the same transaction.
@@ -276,15 +303,6 @@ def generate_report(
         Body=snapshot_bytes,
         ContentType="application/json",
     )
-
-    next_version = (
-        db.scalar(
-            select(Report.version)
-            .where(Report.shift_id == shift.id)
-            .order_by(Report.version.desc())
-        )
-        or 0
-    ) + 1
 
     # Skill Registry (Reliability mission Batch B): resolves/creates the
     # immutable SkillSnapshot for this skill's current on-disk content —

@@ -37,8 +37,15 @@ def main() -> int:
     report_schema = json.loads(read("skills/daily-alert-report/output.schema.json"))
     report_manifest = read("skills/daily-alert-report/skill.yaml")
     model = read("apps/api/app/models/models.py")
+    phase12_migration = read("apps/api/alembic/versions/0a1b2c3d4e5f_phase12_transactional_prefill.py")
+    prefill = read("apps/api/app/incident_prefill.py")
+    local_inference = read("apps/api/app/local_inference.py")
+    ocr_router = read("apps/api/app/api/v1/routers/ocr.py")
+    local_config = read("apps/api/app/core/config.py")
+    prefill_contract = read("apps/web/src/services/ocr.service.ts")
     current_migration = read("apps/api/alembic/versions/f9a0b1c2d3e4_analysis_current_unique.py")
     job_schema = json.loads(read("packages/contracts/job_message.schema.json"))
+    prefill_schema = json.loads(read("packages/contracts/incident_prefill.schema.json"))
     context = read("CONTEXT.md")
 
     # Authentication is cookie/session based end-to-end.
@@ -58,6 +65,21 @@ def main() -> int:
     require("paid_ai_calls_used +" in bridge_db, "paid AI usage must add to the durable cumulative total")
     require("def record_paid_ai_calls" in bridge_db, "paid AI consumption must have one accounting seam")
     require("ai_governance.effective_model" in bridge_service and "ai_governance.effective_effort" in bridge_service, "bridge must resolve Auto through AI governance")
+
+    # Phase 12 transactional seams and local OCR semantic mapping.
+    require('"uq_shifts_one_active"' in model and "state = 'active'" in model, "Shift must have one durable active-row invariant")
+    require('"uq_reports_shift_version"' in model, "Report must have a durable shift/version identity")
+    require("uq_shifts_one_active" in phase12_migration and "uq_reports_shift_version" in phase12_migration, "Phase 12 migration must install both transactional invariants")
+    require("with_for_update" in reports_router and "_allocate_report_version" in reports_router, "report allocation must serialize on the Shift row")
+    require("class IncidentPrefill" in prefill and "source_text" in prefill, "IncidentPrefill must be evidence-backed")
+    require("class OllamaLocalInference" in local_inference and "class FakeLocalInference" in local_inference, "local inference must have Ollama and fake adapters")
+    require("max_concurrency: int = 1" in local_inference, "local inference must be single-concurrency")
+    require("LOCAL_PREFILL_AI_ENABLED" in local_config.upper() and "local_prefill_model" in local_config, "local prefill must be feature-flagged/configured")
+    require('"/ocr/prefill"' in ocr_router and "configured_local_inference" in ocr_router, "OCR prefill route must use the local seam")
+    require("attachPrefill" in prefill_contract and "IncidentPrefill" in prefill_contract, "frontend must consume the IncidentPrefill contract")
+    require(set(prefill_schema.get("required", [])) >= {"title", "service", "status", "environment", "mapper_status"}, "IncidentPrefill contract is incomplete")
+    require(prefill_schema.get("additionalProperties") is False, "IncidentPrefill contract must be strict")
+    require("claude" not in ocr_router.casefold(), "OCR prefill must not use the Claude bridge")
 
     # Daily Report is narrative-only; deterministic coverage stays in composition.
     require("general_summary" in report_schema.get("required", []), "Daily Report must require general_summary")

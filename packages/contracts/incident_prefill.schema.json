@@ -1,0 +1,35 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://noc-report.internal/contracts/incident_prefill.schema.json",
+  "title": "Evidence-backed IncidentPrefill v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["title", "service", "notes", "status", "triggered_at", "recovered_at", "trigger_value", "environment", "mapper_status"],
+  "properties": {
+    "title": {"$ref": "#/$defs/field"},
+    "service": {"$ref": "#/$defs/field"},
+    "notes": {"$ref": "#/$defs/field"},
+    "status": {"$ref": "#/$defs/field"},
+    "triggered_at": {"$ref": "#/$defs/field"},
+    "recovered_at": {"$ref": "#/$defs/field"},
+    "trigger_value": {"$ref": "#/$defs/field"},
+    "environment": {"$ref": "#/$defs/field"},
+    "mapper_status": {"enum": ["DETERMINISTIC", "LOCAL_AI", "FALLBACK"]},
+    "mapper_model": {"type": ["string", "null"]},
+    "mapper_error": {"type": ["string", "null"]}
+  },
+  "$defs": {
+    "field": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "source_text", "quality", "method", "ocr_confidence"],
+      "properties": {
+        "value": {"type": ["string", "null"]},
+        "source_text": {"type": ["string", "null"]},
+        "quality": {"enum": ["HIGH", "REVIEW", "UNRESOLVED"]},
+        "method": {"enum": ["deterministic", "deterministic_fuzzy", "local_ai", "unresolved"]},
+        "ocr_confidence": {"type": ["number", "null"], "minimum": 0, "maximum": 1}
+      }
+    }
+  }
+}

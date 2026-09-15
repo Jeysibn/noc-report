@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.audit import record_audit
@@ -50,16 +51,27 @@ def open_shift(
         opened_by=current_user.id,
     )
     db.add(shift)
-    db.flush()
-    record_audit(
-        db,
-        actor_user_id=current_user.id,
-        action="shift.open",
-        resource_type="shift",
-        resource_id=str(shift.id),
-        metadata={"shift_definition_id": str(definition.id)},
-    )
-    db.commit()
+    try:
+        db.flush()
+        record_audit(
+            db,
+            actor_user_id=current_user.id,
+            action="shift.open",
+            resource_type="shift",
+            resource_id=str(shift.id),
+            metadata={"shift_definition_id": str(definition.id)},
+        )
+        db.commit()
+    except IntegrityError as exc:
+        # The partial PostgreSQL unique index is authoritative. Two open
+        # requests can both observe the old state; exactly one transaction
+        # wins the active-row insert and the loser receives a deterministic
+        # conflict instead of creating a second active shift.
+        db.rollback()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Another shift was opened concurrently; reload the current shift.",
+        ) from exc
     db.refresh(shift)
     return shift
 

@@ -20,8 +20,10 @@ export interface IncidentCreateInput {
   title: string;
   service: string;
   environment: string;
+  status?: IncidentStatus;
   alertSource?: string;
   triggeredAt: string;
+  recoveredAt?: string;
   triggerValue?: string;
   teamsUrl?: string;
   grafanaUrl?: string;

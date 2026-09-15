@@ -6,6 +6,7 @@ import { ApiReportService } from "@/api/ApiReportService";
 import { ApiSearchService } from "@/api/ApiSearchService";
 import { ApiAnalyticsService } from "@/api/ApiAnalyticsService";
 import { ApiAdminService } from "@/api/ApiAdminService";
+import { ApiOcrService } from "@/api/ApiOcrService";
 
 /**
  * Single wiring point: swap the Mock* implementations for Api* ones here
@@ -24,3 +25,4 @@ export const reportService = new ApiReportService();
 export const searchService = new ApiSearchService();
 export const analyticsService = new ApiAnalyticsService();
 export const adminService = new ApiAdminService();
+export const ocrService = new ApiOcrService();

@@ -69,6 +69,19 @@ async function rawFetch(path: string, opts: RequestOptions, token: string | null
   });
 }
 
+async function rawUpload(path: string, file: File, token: string | null): Promise<Response> {
+  const body = new FormData();
+  body.append("file", file);
+  const headers: Record<string, string> = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return fetch(buildUrl(path), {
+    method: "POST",
+    headers,
+    body,
+    credentials: "include",
+  });
+}
+
 let refreshInFlight: Promise<string | null> | null = null;
 
 async function refreshAccessToken(): Promise<string | null> {
@@ -143,6 +156,32 @@ export async function httpRequestBlob(path: string, opts: RequestOptions = {}): 
   }
 
   return resp.blob();
+}
+
+/** Multipart request helper for the pre-incident screenshot OCR endpoint. */
+export async function uploadRequest<T>(path: string, file: File): Promise<T> {
+  let resp = await rawUpload(path, file, getAccessToken());
+  if (resp.status === 401) {
+    refreshInFlight ??= refreshAccessToken().finally(() => {
+      refreshInFlight = null;
+    });
+    const refreshed = await refreshInFlight;
+    if (refreshed) resp = await rawUpload(path, file, refreshed);
+  }
+  if (!resp.ok) {
+    let detail: unknown;
+    try {
+      detail = await resp.json();
+    } catch {
+      /* body wasn't JSON */
+    }
+    const message =
+      (typeof detail === "object" && detail && "detail" in detail && String((detail as { detail: unknown }).detail)) ||
+      resp.statusText ||
+      `Request failed with ${resp.status}`;
+    throw new ApiError(resp.status, message, detail);
+  }
+  return (await resp.json()) as T;
 }
 
 /** For the one non-JSON request in the app: PUT-ing a file straight to a presigned storage URL. */

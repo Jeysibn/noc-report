@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 import httpx
 from PIL import Image, ImageDraw
 
+from app.core.ocr import OcrLine, OcrResult
+from app.models.models import AuditLog
 from tests.conftest import auth_headers, make_user
 
 
@@ -98,3 +100,56 @@ def test_ocr_on_missing_evidence_404(client, db_session):
         "/api/v1/evidence/00000000-0000-0000-0000-000000000000/ocr", headers=headers
     )
     assert resp.status_code == 404
+
+
+def test_incident_prefill_is_review_only_and_attaches_after_confirmation(client, db_session, monkeypatch):
+    make_user(db_session, "operator1", "NOC")
+    headers = auth_headers(client, "operator1")
+    monkeypatch.setattr(
+        "app.api.v1.routers.ocr.run_ocr",
+        lambda _content: OcrResult(
+            raw_text="Alert: PaymentGatewayTimeout\nService: payments-api\nEnvironment: production\nTriggered: 2026-09-15 01:00:00+08:00",
+            lines=[
+                OcrLine("Alert: PaymentGatewayTimeout", 0.99, []),
+                OcrLine("Service: payments-api", 0.98, []),
+                OcrLine("Environment: production", 0.98, []),
+                OcrLine("Triggered: 2026-09-15 01:00:00+08:00", 0.96, []),
+            ],
+        ),
+    )
+
+    response = client.post(
+        "/api/v1/ocr/prefill",
+        files={"file": ("alert.png", b"not-a-real-image-but-the-engine-is-mocked", "image/png")},
+        headers=headers,
+    )
+    assert response.status_code == 201, response.text
+    prefill = response.json()
+    assert prefill["status"] == "REVIEW_REQUIRED"
+    assert prefill["incident_id"] is None
+    assert prefill["prefill_json"]["service"]["source_text"] == "Service: payments-api"
+
+    incident = client.post(
+        "/api/v1/incidents",
+        json={
+            "title": "Operator corrected title",
+            "service": "payments-api",
+            "environment": "production",
+            "triggered_at": "2026-09-15T01:00:00+08:00",
+        },
+        headers=headers,
+    ).json()
+    attached = client.post(
+        f"/api/v1/ocr/prefills/{prefill['id']}/attach/{incident['id']}",
+        headers=headers,
+    )
+    assert attached.status_code == 201, attached.text
+    assert attached.json()["evidence_type"] == "ALERT_SCREENSHOT"
+    correction_audit = (
+        db_session.query(AuditLog)
+        .filter(AuditLog.action == "incident.prefill.attached")
+        .order_by(AuditLog.created_at.desc())
+        .first()
+    )
+    assert correction_audit is not None
+    assert correction_audit.metadata_json["corrections"]["title"]["final"] == "Operator corrected title"

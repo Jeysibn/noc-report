@@ -35,6 +35,11 @@ and RabbitMQ. See [`apps/api/README.md`](apps/api/README.md) for its setup and
 test commands. The development Compose file starts those dependencies; the web
 app and API run as host processes.
 
+Optional local OCR semantic mapping is feature-flagged and uses PaddleOCR for
+text extraction, deterministic rules first, and Ollama only for unresolved
+field mapping. Suggestions require operator review before an Incident is
+created. See [`docs/phase-12-local-ai.md`](docs/phase-12-local-ai.md).
+
 The release checks are intentionally component-scoped because the API fixture
 recreates its database and the bridge uses the same infrastructure:
 

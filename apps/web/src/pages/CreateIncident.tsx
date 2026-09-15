@@ -5,13 +5,17 @@ import { FormField, Input, Select, Textarea } from "@/components/ui/Form";
 import { Button } from "@/components/ui/Button";
 import { FileUpload } from "@/components/ui/FileUpload";
 import { OcrReviewPanel } from "@/components/incidents/OcrReviewPanel";
-import { incidentService, evidenceService } from "@/services";
+import { incidentService, evidenceService, ocrService } from "@/services";
 import { ApiError } from "@/lib/http";
+import type { IncidentStatus } from "@/types/domain";
 
 interface IncidentDraft {
   title: string;
   service: string;
   environment: string;
+  status: IncidentStatus;
+  triggeredAt: string;
+  recoveredAt: string;
   triggerValue: string;
   notes: string;
 }
@@ -20,6 +24,9 @@ const emptyDraft: IncidentDraft = {
   title: "",
   service: "",
   environment: "production",
+  status: "open",
+  triggeredAt: "",
+  recoveredAt: "",
   triggerValue: "",
   notes: "",
 };
@@ -36,6 +43,7 @@ export function CreateIncident() {
   const navigate = useNavigate();
   const [draft, setDraft] = useState<IncidentDraft>(emptyDraft);
   const [logFile, setLogFile] = useState<File | null>(null);
+  const [prefill, setPrefill] = useState<{ id: string; file: File } | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -43,13 +51,28 @@ export function CreateIncident() {
     setDraft((prev) => ({ ...prev, [key]: value }));
   }
 
-  function handleOcrApply(values: Record<string, string>) {
+  function handleOcrApply(values: Record<string, string>, appliedPrefill: { id: string; file: File }) {
+    const triggeredAt = values.triggered_at
+      ? values.triggered_at.replace(/\.\d{3}Z$/, '').replace(/Z$/, '').slice(0, 16)
+      : '';
+    const status = ["open", "investigating", "recovered"].includes(values.status)
+      ? (values.status as IncidentStatus)
+      : undefined;
+    const recoveredAt = values.recovered_at
+      ? values.recovered_at.replace(/\.\d{3}Z$/, '').replace(/Z$/, '').slice(0, 16)
+      : '';
     setDraft((prev) => ({
       ...prev,
       title: values.title ?? prev.title,
       service: values.service ?? prev.service,
       environment: values.environment ?? prev.environment,
+      status: status ?? prev.status,
+      triggeredAt: triggeredAt || prev.triggeredAt,
+      recoveredAt: recoveredAt || prev.recoveredAt,
+      triggerValue: values.trigger_value ?? prev.triggerValue,
+      notes: values.notes ?? prev.notes,
     }));
+    setPrefill(appliedPrefill);
   }
 
   async function save() {
@@ -60,10 +83,15 @@ export function CreateIncident() {
         title: draft.title,
         service: draft.service || "unspecified",
         environment: draft.environment,
-        triggeredAt: new Date().toISOString(),
+        status: draft.status,
+        triggeredAt: draft.triggeredAt ? new Date(draft.triggeredAt).toISOString() : new Date().toISOString(),
+        recoveredAt: draft.recoveredAt ? new Date(draft.recoveredAt).toISOString() : undefined,
         triggerValue: draft.triggerValue || undefined,
         notes: draft.notes || undefined,
       });
+      if (prefill) {
+        await ocrService.attachPrefill(prefill.id, incident.id);
+      }
       if (logFile) {
         await evidenceService.upload(incident.id, logFile, "LOG");
       }
@@ -109,11 +137,34 @@ export function CreateIncident() {
               </Select>
             </FormField>
           </div>
+          <FormField label="Status" htmlFor="status">
+            <Select id="status" value={draft.status} onChange={(e) => update("status", e.target.value as IncidentStatus)}>
+              <option value="open">Triggered / open</option>
+              <option value="investigating">Investigating</option>
+              <option value="recovered">Recovered</option>
+            </Select>
+          </FormField>
           <FormField label="Trigger value" htmlFor="triggerValue" hint="Optional — the alert threshold value">
             <Input
               id="triggerValue"
               value={draft.triggerValue}
               onChange={(e) => update("triggerValue", e.target.value)}
+            />
+          </FormField>
+          <FormField label="Recovery time" htmlFor="recoveredAt" hint="Optional — used for recovered alerts">
+            <Input
+              id="recoveredAt"
+              type="datetime-local"
+              value={draft.recoveredAt}
+              onChange={(e) => update("recoveredAt", e.target.value)}
+            />
+          </FormField>
+          <FormField label="Trigger time" htmlFor="triggeredAt" hint="Optional — defaults to now">
+            <Input
+              id="triggeredAt"
+              type="datetime-local"
+              value={draft.triggeredAt}
+              onChange={(e) => update("triggeredAt", e.target.value)}
             />
           </FormField>
           <FormField label="Notes" htmlFor="notes">
@@ -139,7 +190,7 @@ export function CreateIncident() {
         </Card>
 
         <Card>
-          <OcrReviewPanel onApply={handleOcrApply} />
+          <OcrReviewPanel onApply={handleOcrApply} onPrefillInvalidated={() => setPrefill(null)} />
         </Card>
       </div>
     </div>

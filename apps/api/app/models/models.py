@@ -12,6 +12,7 @@ from sqlalchemy import (
     Table,
     Column,
     Index,
+    UniqueConstraint,
     text,
     func,
 )
@@ -136,6 +137,15 @@ class ShiftDefinition(Base):
 
 class Shift(Base):
     __tablename__ = "shifts"
+    __table_args__ = (
+        Index(
+            "uq_shifts_one_active",
+            "state",
+            unique=True,
+            postgresql_where=text("state = 'active'"),
+            sqlite_where=text("state = 'active'"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = uuid_pk()
     shift_definition_id: Mapped[uuid.UUID] = mapped_column(
@@ -245,6 +255,50 @@ class OcrRun(Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="PENDING")
     extracted_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     raw_text: Mapped[str | None] = mapped_column(String, nullable=True)
+    normalized_text: Mapped[str | None] = mapped_column(String, nullable=True)
+    engine_version: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    ocr_duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    prefill_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    prefill_status: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    prefill_model: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    prefill_duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    prefill_error: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class IncidentPrefillRun(Base):
+    """Pre-incident screenshot OCR and evidence-backed field suggestions.
+
+    A prefill exists before an Incident exists, so it cannot reuse the
+    incident-owned Evidence/OcrRun pair. The source screenshot remains in
+    object storage and is attached to the created Incident only after the
+    operator confirms the form.
+    """
+
+    __tablename__ = "incident_prefill_runs"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    incident_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("incidents.id", ondelete="SET NULL"), nullable=True
+    )
+    source_bucket: Mapped[str] = mapped_column(String(100), nullable=False)
+    source_object_key: Mapped[str] = mapped_column(String(1000), nullable=False)
+    source_filename: Mapped[str] = mapped_column(String(500), nullable=False)
+    source_mime_type: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    source_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    raw_ocr_text: Mapped[str | None] = mapped_column(String, nullable=True)
+    normalized_ocr_text: Mapped[str | None] = mapped_column(String, nullable=True)
+    ocr_engine: Mapped[str] = mapped_column(String(50), nullable=False, default="paddleocr")
+    ocr_engine_version: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    ocr_extraction_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    prefill_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="PROCESSING")
+    prefill_model: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    ocr_duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    prefill_duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -551,6 +605,9 @@ class ReportSnapshot(Base):
 
 class Report(Base):
     __tablename__ = "reports"
+    __table_args__ = (
+        UniqueConstraint("shift_id", "version", name="uq_reports_shift_version"),
+    )
 
     id: Mapped[uuid.UUID] = uuid_pk()
     shift_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("shifts.id"), nullable=False)

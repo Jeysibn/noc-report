@@ -22,6 +22,12 @@ vi.mock("@/services", async () => {
     searchService: new MockSearchService(),
     analyticsService: new MockAnalyticsService(),
     adminService: new MockAdminService(),
+    ocrService: {
+      prefill: async () => {
+        throw new Error("ocrService.prefill is not mocked in this test");
+      },
+      attachPrefill: async () => undefined,
+    },
     analysisService: {
       listRuns: async () => [],
       getRun: async () => {

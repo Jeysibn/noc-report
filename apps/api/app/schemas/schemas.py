@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -108,8 +109,10 @@ class IncidentCreate(BaseModel):
     title: str
     service: str
     environment: str
+    status: Literal["open", "investigating", "recovered"] = "open"
     alert_source: str | None = None
     triggered_at: datetime
+    recovered_at: datetime | None = None
     trigger_value: str | None = None
     teams_url: str | None = None
     grafana_url: str | None = None
@@ -210,6 +213,33 @@ class OcrRunOut(BaseModel):
     status: str
     extracted_json: dict
     raw_text: str | None
+    normalized_text: str | None = None
+    engine_version: str | None = None
+    ocr_duration_ms: int | None = None
+    prefill_json: dict | None = None
+    prefill_status: str | None = None
+    prefill_model: str | None = None
+    prefill_duration_ms: int | None = None
+    prefill_error: str | None = None
+    created_at: datetime
+    completed_at: datetime | None
+
+
+class IncidentPrefillOut(BaseModel):
+    id: uuid.UUID
+    status: str
+    source_filename: str
+    source_sha256: str
+    raw_ocr_text: str | None
+    normalized_ocr_text: str | None
+    ocr_engine: str
+    ocr_engine_version: str | None
+    ocr_duration_ms: int | None
+    prefill_json: dict | None
+    prefill_model: str | None
+    prefill_duration_ms: int | None
+    error_message: str | None
+    incident_id: uuid.UUID | None
     created_at: datetime
     completed_at: datetime | None
 

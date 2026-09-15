@@ -55,6 +55,25 @@ class Settings(BaseSettings):
     # by the operator (50 MB) — no master-plan-specified limit exists.
     max_evidence_upload_bytes: int = 50 * 1024 * 1024
 
+    # Phase 12 local Incident Prefill AI. Disabled by default so OCR/manual
+    # workflows remain the safe rollout path. The intended production
+    # profile is a small Q4 ~3B Ollama model, CPU-only, one inference at a
+    # time, with a short keep-alive so the model can leave RAM when idle.
+    local_prefill_ai_enabled: bool = False
+    local_prefill_provider: Literal["ollama", "fake"] = "ollama"
+    local_prefill_base_url: str = "http://localhost:11434"
+    local_prefill_model: str = "qwen2.5:3b-instruct-q4_K_M"
+    local_prefill_context_size: int = 2048
+    local_prefill_keep_alive: str = "5m"
+    local_prefill_timeout_seconds: float = 45.0
+    local_prefill_max_concurrency: int = 1
+    local_prefill_max_queue: int = 8
+    local_prefill_known_services: str = ""
+
+    @property
+    def known_prefill_services(self) -> tuple[str, ...]:
+        return tuple(value.strip() for value in self.local_prefill_known_services.split(",") if value.strip())
+
 
 settings = Settings()
 
