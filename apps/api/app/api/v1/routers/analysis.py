@@ -300,7 +300,11 @@ def request_analysis(
 
     log_evidence = db.scalar(
         select(Evidence)
-        .where(Evidence.incident_id == incident.id, Evidence.evidence_type == "LOG")
+        .where(
+            Evidence.incident_id == incident.id,
+            Evidence.evidence_type == "LOG",
+            Evidence.lifecycle_state == "ACTIVE",
+        )
         .order_by(Evidence.created_at.desc())
     )
     if log_evidence is None:

@@ -11,7 +11,7 @@ import { incidentStatusMap, formatTime } from "@/lib/incidentStatus";
 import { Link } from "react-router-dom";
 import { useOperationalHealth } from "@/lib/operationalHealth";
 
-function healthPill(status: "healthy" | "degraded" | "unavailable" | "unknown") {
+function healthPill(status: "healthy" | "degraded" | "unavailable" | "unknown" | "disabled" | "not_applicable") {
   return {
     status: status === "healthy" ? "good" : status === "degraded" ? "warning" : status === "unavailable" ? "critical" : "neutral",
     label: status === "healthy" ? "Dependencies healthy" : status === "degraded" ? "Dependencies degraded" : status === "unavailable" ? "Dependencies unavailable" : "Dependencies unknown",

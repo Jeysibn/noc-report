@@ -84,7 +84,7 @@ jobs:
           python-version: "3.12"
       - name: Install API dependencies
         working-directory: apps/api
-        run: pip install -r requirements.txt
+        run: pip install -r requirements.txt -c constraints.txt
       - name: Wait for MinIO
         run: |
           for i in $(seq 1 30); do
@@ -94,6 +94,9 @@ jobs:
       - name: Apply DB migrations
         working-directory: apps/api
         run: alembic upgrade head
+      - name: Verify ORM and migrations are coherent
+        working-directory: apps/api
+        run: alembic check
       - name: Run API test suite (real Postgres/RabbitMQ/MinIO)
         working-directory: apps/api
         run: python -m pytest tests/ -q
@@ -105,6 +108,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Install declared sandbox test dependencies
+        run: pip install pytest pyyaml
       - name: Run sandbox preprocessing/cache/telemetry/structured-output tests
         env:
           PYTHONPATH: sandbox
@@ -151,11 +156,11 @@ jobs:
       - name: Apply DB migrations
         working-directory: apps/api
         run: |
-          pip install -r requirements.txt
+          pip install -r requirements.txt -c constraints.txt
           alembic upgrade head
       - name: Install bridge dependencies
         working-directory: bridge
-        run: pip install -r requirements.txt pytest
+        run: pip install -r requirements.txt -c constraints.txt pytest
       - name: Run bridge test suite
         working-directory: bridge
         run: python -m pytest tests/ -q

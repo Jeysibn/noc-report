@@ -246,6 +246,62 @@ def test_download_is_pinned_to_completed_object_version(client, db_session):
     assert httpx.get(download.json()["download_url"]).content == b"original"
 
 
+def test_delete_is_database_first_and_retains_tombstone(client, db_session):
+    make_user(db_session, "operator-delete", "NOC")
+    headers = auth_headers(client, "operator-delete")
+    incident_id = _create_incident(client, headers)
+    upload = client.post(
+        f"/api/v1/incidents/{incident_id}/evidence/upload-url",
+        json={"evidence_type": "LOG", "filename": "cleanup.log", "content_type": "text/plain"},
+        headers=headers,
+    ).json()
+    assert httpx.put(upload["upload_url"], content=b"cleanup", headers={"Content-Type": "text/plain"}).status_code == 200
+    evidence = client.post(
+        f"/api/v1/incidents/{incident_id}/evidence/complete",
+        json={"upload_id": upload["upload_id"]},
+        headers=headers,
+    ).json()
+
+    assert client.delete(f"/api/v1/evidence/{evidence['id']}", headers=headers).status_code == 204
+    from app.models.models import Evidence
+
+    tombstone = db_session.get(Evidence, evidence["id"])
+    assert tombstone.lifecycle_state == "PURGED"
+    assert client.get(f"/api/v1/evidence/{evidence['id']}/download-url", headers=headers).status_code == 410
+
+
+def test_delete_rejects_evidence_referenced_by_historical_snapshot(client, db_session):
+    from tests.test_shifts import _create_active_shift
+
+    make_user(db_session, "operator-retain", "NOC")
+    headers = auth_headers(client, "operator-retain")
+    shift = _create_active_shift(db_session)
+    incident_id = _create_incident(client, headers)
+    upload = client.post(
+        f"/api/v1/incidents/{incident_id}/evidence/upload-url",
+        json={"evidence_type": "LOG", "filename": "history.log", "content_type": "text/plain"},
+        headers=headers,
+    ).json()
+    assert httpx.put(upload["upload_url"], content=b"history", headers={"Content-Type": "text/plain"}).status_code == 200
+    evidence = client.post(
+        f"/api/v1/incidents/{incident_id}/evidence/complete",
+        json={"upload_id": upload["upload_id"]},
+        headers=headers,
+    ).json()
+    from app.models.models import ReportSnapshot
+    db_session.add(
+        ReportSnapshot(
+            shift_id=shift.id,
+            snapshot_json={"incidents": [{"log_evidence": {"evidence_id": evidence["id"]}}]},
+            sha256="a" * 64,
+        )
+    )
+    db_session.commit()
+
+    response = client.delete(f"/api/v1/evidence/{evidence['id']}", headers=headers)
+    assert response.status_code == 409
+
+
 def test_completion_rejects_authoritative_size_and_mime_mismatches(client, db_session):
     make_user(db_session, "operator1", "NOC")
     headers = auth_headers(client, "operator1")

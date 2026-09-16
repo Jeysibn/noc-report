@@ -270,15 +270,22 @@ def test_update_system_config(client, db_session, seeded):
     make_user(db_session, "root", "Admin")
     headers = auth_headers(client, "root")
 
+    invalid_capacity = client.patch(
+        "/api/v1/admin/system-config",
+        json={"max_concurrent_jobs": 4},
+        headers=headers,
+    )
+    assert invalid_capacity.status_code == 422
+
     resp = client.patch(
         "/api/v1/admin/system-config",
-        json={"default_effort": "high", "max_concurrent_jobs": 4, "claude_max_budget_usd": 1.25},
+        json={"default_effort": "high", "max_concurrent_jobs": 1, "claude_max_budget_usd": 1.25},
         headers=headers,
     )
     assert resp.status_code == 200
     body = resp.json()
     assert body["default_effort"] == "high"
-    assert body["max_concurrent_jobs"] == 4
+    assert body["max_concurrent_jobs"] == 1
     assert body["claude_max_budget_usd"] == 1.25
     assert body["default_model"] == "claude-sonnet-5"  # unset fields untouched
 

@@ -59,8 +59,11 @@ def classify_failure(exc: BaseException) -> str:
     # Import locally (not at module scope) to avoid a circular import
     # with service.py, which imports this module.
     from noc_bridge.service import UnsupportedJobType  # noqa: PLC0415
+    from noc_bridge.ai_governance import InvalidExecutionPolicy  # noqa: PLC0415
 
     if isinstance(exc, UnsupportedJobType):
+        return TERMINAL
+    if isinstance(exc, InvalidExecutionPolicy):
         return TERMINAL
     if isinstance(exc, EvidenceIntegrityError):
         return TERMINAL

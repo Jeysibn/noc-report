@@ -16,11 +16,11 @@ type IncidentReadiness = "READY" | "ANALYSIS_REQUIRED" | "NO_LOG";
 
 const readinessPill: Record<
   IncidentReadiness,
-  { label: string; status: "good" | "warning" | "critical" }
+  { label: string; status: "good" | "warning" | "info" }
 > = {
   READY: { label: "Ready", status: "good" },
   ANALYSIS_REQUIRED: { label: "Analysis required", status: "warning" },
-  NO_LOG: { label: "No log", status: "critical" },
+  NO_LOG: { label: "No log attached", status: "info" },
 };
 
 const jobPill: Record<

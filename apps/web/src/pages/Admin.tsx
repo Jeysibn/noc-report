@@ -711,21 +711,20 @@ export function Admin() {
                     </div>
                     <div>
                       <label className="mb-1.5 block text-sm font-medium">
-                        Max concurrent jobs
+                        Bridge worker concurrency
                       </label>
                       <input
                         type="number"
                         min={1}
+                        max={1}
+                        readOnly
                         className="w-full rounded border border-border bg-transparent px-2 py-1.5 text-sm"
-                        value={systemConfigDraft.maxConcurrentJobs}
-                        disabled={!canManageSystemConfig}
-                        onChange={(e) =>
-                          setSystemConfigDraft((d) => ({
-                            ...d,
-                            maxConcurrentJobs: Number(e.target.value),
-                          }))
-                        }
+                        value={1}
+                        disabled
                       />
+                      <p className="mt-1 text-xs text-muted">
+                        Serial host bridge; RabbitMQ prefetch is not worker parallelism.
+                      </p>
                     </div>
                     <div>
                       <label className="mb-1.5 block text-sm font-medium">

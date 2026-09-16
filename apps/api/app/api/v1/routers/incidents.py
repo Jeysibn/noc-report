@@ -8,8 +8,9 @@ from sqlalchemy.orm import Session
 from app.audit import record_audit
 from app.db.session import get_db
 from app.deps import require_permission
+from app.evidence_lifecycle import EvidenceReferencedError, mark_purged, purge_storage, request_purge
 from app.incident_scope import shift_incident_statement
-from app.models.models import AnalysisRun, Evidence, Incident, Job, OcrRun, OutboxEvent, Shift, User
+from app.models.models import AnalysisRun, Evidence, EvidenceUploadIntent, Incident, Job, OcrRun, OutboxEvent, Shift, User
 from app.schemas.schemas import (
     IncidentCreate,
     IncidentOut,
@@ -59,7 +60,11 @@ def _attach_derived(db: Session, incidents: list[Incident]) -> list[IncidentOut]
     log_incident_ids = set(
         db.scalars(
             select(Evidence.incident_id)
-            .where(Evidence.incident_id.in_(ids), Evidence.evidence_type == "LOG")
+            .where(
+                Evidence.incident_id.in_(ids),
+                Evidence.evidence_type == "LOG",
+                Evidence.lifecycle_state == "ACTIVE",
+            )
             .distinct()
         )
     )
@@ -317,15 +322,17 @@ def delete_incident(
     if incident is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Incident not found")
 
-    # Deleting an incident with real evidence/jobs on it fails on FK
-    # constraints (evidence.incident_id, jobs.incident_id, analysis_runs.*,
-    # ocr_runs.evidence_id, outbox_events.job_id) unless those dependent
-    # rows go first — nothing here is soft-deletable data worth keeping
-    # once the incident itself is gone, so this is a real cascading
-    # delete, not a workaround.
-    evidence_ids = list(
-        db.scalars(select(Evidence.id).where(Evidence.incident_id == incident_id))
-    )
+    # Delete dependent execution rows, but retain evidence tombstones until
+    # their exact MinIO versions have been safely cleaned up. Referenced
+    # evidence is rejected above rather than silently destroying historical
+    # report inputs.
+    evidence_records = list(db.scalars(select(Evidence).where(Evidence.incident_id == incident_id)))
+    try:
+        purge_plans = [request_purge(db, evidence) for evidence in evidence_records]
+    except EvidenceReferencedError as exc:
+        db.rollback()
+        raise HTTPException(status.HTTP_409_CONFLICT, f"Incident evidence is retained: {exc}") from exc
+    evidence_ids = [evidence.id for evidence in evidence_records]
     if evidence_ids:
         db.execute(delete(OcrRun).where(OcrRun.evidence_id.in_(evidence_ids)))
     job_ids = list(db.scalars(select(Job.id).where(Job.incident_id == incident_id)))
@@ -336,7 +343,15 @@ def delete_incident(
         # meaning once the job it describes no longer exists.
         db.execute(delete(OutboxEvent).where(OutboxEvent.job_id.in_(job_ids)))
     db.execute(delete(AnalysisRun).where(AnalysisRun.incident_id == incident_id))
-    db.execute(delete(Evidence).where(Evidence.incident_id == incident_id))
+    # Keep tombstones so storage cleanup can be retried after this
+    # transaction. The incident foreign key is intentionally nullable for
+    # this lifecycle state.
+    db.execute(
+        Evidence.__table__.update()
+        .where(Evidence.incident_id == incident_id)
+        .values(incident_id=None)
+    )
+    db.execute(delete(EvidenceUploadIntent).where(EvidenceUploadIntent.incident_id == incident_id))
     db.execute(delete(Job).where(Job.incident_id == incident_id))
 
     db.delete(incident)
@@ -349,3 +364,10 @@ def delete_incident(
         metadata={},
     )
     db.commit()
+    for plan in purge_plans:
+        try:
+            purge_storage(plan)
+        except Exception:
+            # The PURGE_PENDING tombstone is durable and can be retried.
+            continue
+        mark_purged(db, plan.evidence_id)

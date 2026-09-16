@@ -302,10 +302,21 @@ def test_poll_syncs_docx_once_job_completes_and_download_url_works(client, db_se
     out = listed.json()[0]
     assert out["status"] == "COMPLETED"
     assert out["downloadable"] is True
+    assert out["report_version_id"]
+
+    # A later write at the same key must not change the immutable artifact
+    # identified by the Report row.
+    minio.put_object(
+        Bucket=settings.minio_bucket_reports,
+        Key=f"reports/{job_id}/report.docx",
+        Body=b"replacement report bytes",
+        ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
 
     download = client.get(f"/api/v1/reports/{report_id}/download-url", headers=headers)
     assert download.status_code == 200
     assert "download_url" in download.json()
+    assert client.get(f"/api/v1/reports/{report_id}/download", headers=headers).content == b"fake docx bytes for test"
 
 
 def test_document_preview_and_screenshot_proxy_serve_bridge_written_artifacts(client, db_session):

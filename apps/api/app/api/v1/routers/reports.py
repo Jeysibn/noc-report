@@ -25,6 +25,7 @@ from app.core.config import settings
 from app.core.storage import (
     get_client,
     get_object_bytes,
+    head_object,
     presigned_download_url,
     sha256_of_bytes,
 )
@@ -126,7 +127,12 @@ def _build_snapshot(db: Session, shift: Shift, report_skill_snapshot) -> dict:
                 if isinstance(presentation, dict):
                     analysis_presentation_contract = presentation.get("contract")
         evidence_items = list(
-            db.scalars(select(Evidence).where(Evidence.incident_id == incident.id))
+            db.scalars(
+                select(Evidence).where(
+                    Evidence.incident_id == incident.id,
+                    Evidence.lifecycle_state == "ACTIVE",
+                )
+            )
         )
         log_evidence = next((e for e in evidence_items if e.evidence_type == "LOG"), None)
         screenshot_evidence = [
@@ -244,6 +250,7 @@ def _to_out(report: Report, job: Job) -> ReportOut:
         error_message=job.error_message,
         created_at=report.created_at,
         downloadable=bool(report.report_object_key),
+        report_version_id=report.report_version_id,
     )
 
 
@@ -252,21 +259,33 @@ def _sync_completed_report(db: Session, report: Report, job: Job) -> None:
     but the artifact here is a DOCX in noc-reports (not a JSON result in
     noc-job-artifacts) — the bridge writes it to a deterministic key this
     function re-derives rather than being told."""
-    if report.report_object_key is not None or job.status != "COMPLETED":
+    if job.status != "COMPLETED" or (
+        report.report_object_key is not None and report.report_version_id is not None
+    ):
         return
 
-    key = _report_object_key(job.id)
+    key = report.report_object_key or _report_object_key(job.id)
+    bucket = report.report_bucket or settings.minio_bucket_reports
     try:
-        head = get_object_bytes(settings.minio_bucket_reports, key)
+        metadata = head_object(bucket, key)
+        version_id = metadata.get("VersionId")
+        body = get_object_bytes(
+            bucket,
+            key,
+            version_id=version_id,
+        )
     except ClientError:
         # Bridge marked the Job COMPLETED but the DOCX isn't visible yet
         # (or was never written) — leave the report unfilled, try again
         # next poll, never fabricate a download.
         return
 
-    report.report_bucket = settings.minio_bucket_reports
+    report.report_bucket = bucket
     report.report_object_key = key
-    report.report_sha256 = sha256_of_bytes(head)
+    report.report_version_id = version_id
+    report.report_sha256 = sha256_of_bytes(body)
+    report.report_byte_size = len(body)
+    report.report_content_type = metadata.get("ContentType") or mimetypes.guess_type(key)[0]
     report.generated_at = job.completed_at
     if report.model is None:
         report.model = job.model
@@ -417,7 +436,13 @@ def get_report_download_url(
     db.commit()
     if not report.report_object_key:
         raise HTTPException(status.HTTP_409_CONFLICT, "Report is not ready to download yet")
-    url = presigned_download_url(report.report_bucket, report.report_object_key)
+    if not report.report_version_id:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Report artifact is not version-pinned yet")
+    url = presigned_download_url(
+        report.report_bucket,
+        report.report_object_key,
+        version_id=report.report_version_id,
+    )
     return ReportDownloadUrlResponse(download_url=url)
 
 
@@ -444,10 +469,18 @@ def download_report(
     db.commit()
     if not report.report_object_key:
         raise HTTPException(status.HTTP_409_CONFLICT, "Report is not ready to download yet")
+    if not report.report_version_id:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Report artifact is not version-pinned yet")
     try:
-        body = get_object_bytes(report.report_bucket, report.report_object_key)
+        body = get_object_bytes(
+            report.report_bucket,
+            report.report_object_key,
+            version_id=report.report_version_id,
+        )
     except ClientError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Could not fetch report from storage") from exc
+    if report.report_sha256 and sha256_of_bytes(body) != report.report_sha256:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Report artifact checksum mismatch")
     filename = f"shift-report-v{report.version}.docx"
     return Response(
         content=body,

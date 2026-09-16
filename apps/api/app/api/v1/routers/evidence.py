@@ -18,6 +18,7 @@ from app.core.storage import (
 )
 from app.db.session import get_db
 from app.deps import require_permission
+from app.evidence_lifecycle import EvidenceReferencedError, mark_purged, purge_storage, request_purge
 from app.models.models import Evidence, EvidenceUploadIntent, Incident, User
 from app.schemas.schemas import (
     EvidenceCompleteRequest,
@@ -173,7 +174,7 @@ def list_evidence(
     return list(
         db.scalars(
             select(Evidence)
-            .where(Evidence.incident_id == incident_id)
+            .where(Evidence.incident_id == incident_id, Evidence.lifecycle_state == "ACTIVE")
             .order_by(Evidence.created_at)
         )
     )
@@ -188,6 +189,8 @@ def get_download_url(
     record = db.get(Evidence, evidence_id)
     if record is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Evidence not found")
+    if record.lifecycle_state != "ACTIVE":
+        raise HTTPException(status.HTTP_410_GONE, "Evidence is no longer available")
     url = presigned_download_url(record.bucket, record.object_key, version_id=record.version_id)
     return EvidenceDownloadUrlResponse(download_url=url)
 
@@ -202,15 +205,11 @@ def delete_evidence(
     if record is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Evidence not found")
 
-    # Master plan §11: uploaded evidence is immutable; delete removes the
-    # object from storage (no soft-delete flag defined at Milestone 9 scope)
-    # but the audit trail keeps a permanent record that it existed.
     try:
-        delete_object(record.bucket, record.object_key, version_id=record.version_id)
-    except ClientError:
-        pass
-
-    db.delete(record)
+        plan = request_purge(db, record)
+    except EvidenceReferencedError as exc:
+        db.rollback()
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     record_audit(
         db,
         actor_user_id=current_user.id,
@@ -220,3 +219,8 @@ def delete_evidence(
         metadata={"incident_id": str(record.incident_id)},
     )
     db.commit()
+    try:
+        purge_storage(plan)
+    except ClientError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Evidence cleanup is pending retry") from exc
+    mark_purged(db, evidence_id)

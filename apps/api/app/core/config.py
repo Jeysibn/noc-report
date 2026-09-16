@@ -95,6 +95,8 @@ settings = Settings()
 # doesn't leak anything.
 _INSECURE_DEFAULTS = {
     "jwt_secret": "dev-only-secret-change-me",
+    "database_url": "postgresql+psycopg2://noc:noc@localhost:55432/noc_report",
+    "minio_access_key": "noc-minio",
     "minio_secret_key": "noc-minio-secret",
     "rabbitmq_url": "amqp://noc:noc-rabbit-secret@localhost:55672/",
 }
@@ -114,6 +116,10 @@ def assert_production_secrets_are_safe(config: Settings = settings) -> None:
         return
 
     still_default = [name for name, default in _INSECURE_DEFAULTS.items() if getattr(config, name) == default]
+    if not config.allowed_cors_origins or "*" in config.allowed_cors_origins:
+        still_default.append("cors_origins")
+    if any(origin.startswith("http://localhost") or origin.startswith("http://127.0.0.1") for origin in config.allowed_cors_origins):
+        still_default.append("cors_origins")
     if still_default:
         raise RuntimeError(
             "Refusing to start with environment=production while still using the "

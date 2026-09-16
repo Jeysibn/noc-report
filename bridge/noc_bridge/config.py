@@ -14,6 +14,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class BridgeSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="BRIDGE_")
 
+    environment: str = "development"
+
     rabbitmq_url: str = "amqp://noc:noc-rabbit-secret@localhost:55672/"
     database_url: str = "postgresql://noc:noc@localhost:55432/noc_report"
 
@@ -68,3 +70,27 @@ class BridgeSettings(BaseSettings):
 
 
 settings = BridgeSettings()
+
+
+def assert_production_config_is_safe(config: BridgeSettings = settings) -> None:
+    """Fail closed before starting privileged host-side infrastructure."""
+    if config.environment != "production":
+        return
+    insecure = []
+    if config.rabbitmq_url == "amqp://noc:noc-rabbit-secret@localhost:55672/":
+        insecure.append("rabbitmq_url")
+    if config.database_url == "postgresql://noc:noc@localhost:55432/noc_report":
+        insecure.append("database_url")
+    if config.minio_access_key == "noc-minio" or config.minio_secret_key == "noc-minio-secret":
+        insecure.append("minio_credentials")
+    if config.max_concurrency != 1:
+        insecure.append("max_concurrency must be 1 for the serial bridge")
+    if not config.claude_binary_path.is_file():
+        insecure.append("claude_binary_path")
+    if not config.claude_credentials_path.is_file():
+        insecure.append("claude_credentials_path")
+    if insecure:
+        raise RuntimeError(
+            "Refusing to start bridge in production with unsafe configuration: "
+            + ", ".join(insecure)
+        )

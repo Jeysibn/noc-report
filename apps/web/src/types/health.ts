@@ -1,4 +1,4 @@
-export type DependencyStatus = "healthy" | "degraded" | "unavailable" | "unknown";
+export type DependencyStatus = "healthy" | "degraded" | "unavailable" | "unknown" | "disabled" | "not_applicable";
 
 export interface DependencyHealth {
   status: DependencyStatus;
@@ -7,6 +7,11 @@ export interface DependencyHealth {
 
 export interface OperationalHealth {
   status: DependencyStatus;
+  dependency_status?: DependencyStatus;
+  pipeline?: {
+    status: "healthy" | "degraded";
+    detail?: unknown;
+  };
   checked_at: string;
   dependencies: Record<string, DependencyHealth>;
 }

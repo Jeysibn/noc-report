@@ -72,7 +72,9 @@ def search(
     if date_to:
         stmt = stmt.where(Incident.triggered_at <= date_to)
 
-    log_exists = exists().where(and_(Evidence.incident_id == Incident.id, Evidence.evidence_type == "LOG"))
+    log_exists = exists().where(
+        and_(Evidence.incident_id == Incident.id, Evidence.evidence_type == "LOG", Evidence.lifecycle_state == "ACTIVE")
+    )
     if has_log is True:
         stmt = stmt.where(log_exists)
     elif has_log is False:
@@ -87,6 +89,7 @@ def search(
             and_(
                 Evidence.incident_id == Incident.id,
                 Evidence.id == OcrRun.evidence_id,
+                Evidence.lifecycle_state == "ACTIVE",
                 OcrRun.raw_text.isnot(None),
                 OcrRun.raw_text.ilike(f"%{q}%"),
             )
@@ -121,7 +124,7 @@ def search(
     items: list[SearchResultOut] = []
     for incident in incidents:
         has_log_value = db.scalar(
-            select(exists().where(and_(Evidence.incident_id == incident.id, Evidence.evidence_type == "LOG")))
+        select(exists().where(and_(Evidence.incident_id == incident.id, Evidence.evidence_type == "LOG", Evidence.lifecycle_state == "ACTIVE")))
         )
         current_run = db.scalar(
             select(AnalysisRun).where(AnalysisRun.incident_id == incident.id, AnalysisRun.current.is_(True))

@@ -3,6 +3,17 @@ from datetime import datetime, time
 from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from app.ai_policy import (
+    BUDGET_MAX,
+    BUDGET_MIN,
+    CONCURRENCY_MAX,
+    CONCURRENCY_MIN,
+    SUPPORTED_EFFORTS,
+    SUPPORTED_MODELS,
+    TIMEOUT_MAX,
+    TIMEOUT_MIN,
+)
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
@@ -207,7 +218,7 @@ class EvidenceOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
-    incident_id: uuid.UUID
+    incident_id: uuid.UUID | None
     evidence_type: str
     bucket: str
     object_key: str
@@ -219,6 +230,8 @@ class EvidenceOut(BaseModel):
     uploaded_by: uuid.UUID | None
     created_at: datetime
     superseded_by: uuid.UUID | None
+    lifecycle_state: str
+    deleted_at: datetime | None
 
 
 class EvidenceDownloadUrlResponse(BaseModel):
@@ -314,8 +327,8 @@ class AnalysisRequest(BaseModel):
     # Configuration's cheaper defaults for every request that didn't
     # explicitly override them (i.e. nearly all of them, since the web
     # client doesn't send these fields).
-    model: str | None = None
-    effort: str | None = None
+    model: Literal[tuple(SUPPORTED_MODELS)] | None = None
+    effort: Literal[tuple(SUPPORTED_EFFORTS)] | None = None
 
 
 class AnalysisRunOut(BaseModel):
@@ -397,8 +410,8 @@ class ReportGenerateRequest(BaseModel):
     # Same fix as AnalysisRequest above: None, not a hardcoded model/
     # effort, so system_config's default_model/default_effort actually
     # takes effect instead of being silently overridden every time.
-    model: str | None = None
-    effort: str | None = None
+    model: Literal[tuple(SUPPORTED_MODELS)] | None = None
+    effort: Literal[tuple(SUPPORTED_EFFORTS)] | None = None
 
 
 class ReportOut(BaseModel):
@@ -425,6 +438,7 @@ class ReportOut(BaseModel):
     error_message: str | None
     created_at: datetime
     downloadable: bool = False
+    report_version_id: str | None = None
 
 
 class ReportDownloadUrlResponse(BaseModel):
@@ -500,11 +514,13 @@ class SystemConfigUpdate(BaseModel):
     """Milestone 17 gap follow-up (AI Configuration). All fields optional —
     partial-update semantics via `exclude_unset`, same as ShiftDefinitionUpdate."""
 
-    default_model: str | None = None
-    default_effort: str | None = None
-    job_timeout_seconds: int | None = None
-    max_concurrent_jobs: int | None = None
-    claude_max_budget_usd: float | None = Field(default=None, gt=0, le=10)
+    default_model: Literal[tuple(SUPPORTED_MODELS)] | None = None
+    default_effort: Literal[tuple(SUPPORTED_EFFORTS)] | None = None
+    job_timeout_seconds: int | None = Field(default=None, ge=TIMEOUT_MIN, le=TIMEOUT_MAX)
+    max_concurrent_jobs: int | None = Field(
+        default=None, ge=CONCURRENCY_MIN, le=CONCURRENCY_MAX
+    )
+    claude_max_budget_usd: float | None = Field(default=None, ge=BUDGET_MIN, le=BUDGET_MAX)
 
 
 class StorageBucketStatusOut(BaseModel):

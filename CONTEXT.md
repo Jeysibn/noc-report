@@ -8,6 +8,7 @@ This glossary is the shared vocabulary for maintainers and coding agents.
 - **UploadIntent** — a short-lived, server-owned upload capability. The client submits only its opaque ID at completion; bucket and object key are never client authority.
 - **Log Evidence** — the immutable log object analyzed for an Incident; its checksum and filename are preserved.
 - **Evidence Byte Identity** — bucket, object key, MinIO version ID, SHA-256, content type, filename, and byte size captured when evidence is completed.
+- **Evidence Retention / Purge** — referenced evidence is protected; an unreferenced deletion first commits a `PURGE_PENDING` tombstone, then removes the exact object version and records `PURGED`.
 - **AnalysisRun** — one execution or cache reuse of an analysis Skill against log evidence. Only the current run is selected for a new snapshot.
 - **Skill** — a named analysis/report capability with its input contract, schema, and policy.
 - **SkillSnapshot** — immutable Skill content identified by hash. Jobs execute the snapshot stamped on their Job row.
@@ -25,3 +26,7 @@ This glossary is the shared vocabulary for maintainers and coding agents.
 - **Prefill Evidence** — the exact OCR source line attached to each suggestion; unsupported model values are rejected.
 - **Local Inference** — the optional single-concurrency Ollama adapter for lightweight OCR semantic mapping, separate from Claude reasoning.
 - **Operational Health** — dependency checks for PostgreSQL, RabbitMQ, MinIO, the Claude bridge, and optional Ollama. Unknown or failed dependencies are never displayed as healthy.
+- **Artifact Identity** — the immutable bucket, object key, MinIO version, checksum, size, and content type that identify one generated report artifact.
+- **Execution Policy** — the shared model, effort, timeout, budget, and bridge-capacity contract validated by both API and bridge.
+- **Bridge Capacity** — the effective number of Claude jobs the host bridge can execute concurrently. The current synchronous callback is deliberately serial (`1`).
+- **Resource Scope** — this installation is a shared NOC workspace: RBAC controls actions, while incidents, evidence, analyses, and reports are team-visible resources. It is not strict per-user tenancy.

@@ -13,8 +13,17 @@
    Renderers retrieve that exact version and verify the hash.
 
 Completion is user-bound, idempotent for the same intent, and rejects client
-storage coordinates. Apply the upload-intent Alembic migration before serving
-this API.
+storage coordinates. Evidence deletion is database-first: it commits a
+`PURGE_PENDING` tombstone, then removes the exact MinIO version and records
+`PURGED`. OCR runs, AnalysisRuns, and historical ReportSnapshots protect
+referenced bytes; failed cleanup remains retryable and never leaves a live
+Evidence row pointing at bytes that this request deleted. Incident deletion
+uses the same tombstone path.
+
+Reports also store `report_version_id`, byte size, content type, and SHA-256.
+Report downloads use the pinned MinIO version and verify the checksum. Rows
+created before artifact version pinning are legacy and are not downloadable
+until a poll reconciles and pins their artifact.
 
 ## RabbitMQ job lifecycle
 
@@ -31,6 +40,9 @@ unsupported messages. Messages contain references, never evidence bytes.
   counts), MinIO, the bridge heartbeat endpoint, and optional Ollama.
 - `/health/readiness` returns HTTP 503 when PostgreSQL, RabbitMQ, or MinIO is
   unavailable.
+- Optional Ollama is reported as `disabled` when the feature flag is off; it
+  does not turn a healthy installation into `unknown`. RabbitMQ reachability
+  and queue/DLQ pipeline state remain separate details.
 
 The web dashboard polls dependency health every 30 seconds. `unknown` is a
 neutral state, not a green state. The bridge endpoint is bound to loopback by
@@ -43,7 +55,11 @@ privileged worker boundary that can access Docker and the Claude credential;
 the sandbox remains non-root, capability-restricted, resource-limited, and
 network constrained. PostgreSQL, RabbitMQ, and MinIO are infrastructure
 dependencies and must use deployment-specific credentials. Production startup
-rejects the known development secret defaults.
+rejects the known development secret defaults. The bridge also refuses
+production startup with development infrastructure credentials, missing
+Claude credentials, or a non-serial capacity setting. Its callback is
+intentionally serial, so `max_concurrent_jobs=1`; RabbitMQ prefetch is not
+worker parallelism.
 
 Set `CORS_ORIGINS` to the explicit comma-separated HTTPS web origin(s) in a
 deployed environment; the local Vite origins are development defaults only.

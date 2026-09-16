@@ -48,6 +48,8 @@ def run_ocr_on_evidence(
     evidence = db.get(Evidence, evidence_id)
     if evidence is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Evidence not found")
+    if evidence.lifecycle_state != "ACTIVE":
+        raise HTTPException(status.HTTP_410_GONE, "Evidence is no longer available")
 
     ocr_started = time.perf_counter()
     ocr_run = OcrRun(evidence_id=evidence_id, engine="paddleocr", status="PROCESSING")
@@ -55,7 +57,11 @@ def run_ocr_on_evidence(
     db.flush()
 
     try:
-        image_bytes = get_object_bytes(evidence.bucket, evidence.object_key)
+        image_bytes = get_object_bytes(
+            evidence.bucket,
+            evidence.object_key,
+            version_id=evidence.version_id,
+        )
         result = run_ocr(image_bytes)
     except Exception as exc:  # noqa: BLE001 - any engine/storage failure marks the run FAILED
         ocr_run.status = "FAILED"

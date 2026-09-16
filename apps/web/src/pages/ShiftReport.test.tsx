@@ -60,7 +60,7 @@ describe("ShiftReport", () => {
       generatedAt: null,
       errorMessage: null,
       createdAt: new Date().toISOString(),
-      downloadable: false,
+      downloadable: false, reportVersionId: null,
     });
 
     render(
@@ -85,7 +85,7 @@ describe("ShiftReport", () => {
       id: "report-2", shiftId: "shift-1", snapshotId: "snap-2", jobId: "job-2",
       version: 1, status: "QUEUED", model: "claude-opus-5", effort: null,
       skillName: "daily-alert-report", skillVersion: "1", generatedBy: null,
-      generatedAt: null, errorMessage: null, createdAt: new Date().toISOString(), downloadable: false,
+      generatedAt: null, errorMessage: null, createdAt: new Date().toISOString(), downloadable: false, reportVersionId: null,
     });
     render(<MemoryRouter><ShiftReport /></MemoryRouter>);
     await act(async () => {});
@@ -112,7 +112,7 @@ describe("ShiftReport", () => {
         generatedAt: new Date().toISOString(),
         errorMessage: null,
         createdAt: new Date().toISOString(),
-        downloadable: true,
+      downloadable: true, reportVersionId: "version-1",
       },
     ]);
 

@@ -18,6 +18,7 @@ export interface ReportRun {
   errorMessage: string | null;
   createdAt: string;
   downloadable: boolean;
+  reportVersionId: string | null;
 }
 
 // Mirrors bridge/noc_bridge/report_document_json.py's browser-safe

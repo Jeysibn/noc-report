@@ -11,6 +11,7 @@ from sqlalchemy import (
     String,
     Table,
     Column,
+    CheckConstraint,
     Index,
     UniqueConstraint,
     text,
@@ -110,6 +111,7 @@ class RefreshSession(Base):
     """
 
     __tablename__ = "refresh_sessions"
+    __table_args__ = (Index("ix_refresh_sessions_user_id", "user_id"),)
 
     id: Mapped[uuid.UUID] = uuid_pk()
     user_id: Mapped[uuid.UUID] = mapped_column(
@@ -172,6 +174,11 @@ class Shift(Base):
 
 class SystemConfig(Base):
     __tablename__ = "system_config"
+    __table_args__ = (
+        CheckConstraint("job_timeout_seconds > 0", name="ck_system_config_job_timeout_positive"),
+        CheckConstraint("max_concurrent_jobs = 1", name="ck_system_config_serial_bridge_capacity"),
+        CheckConstraint("claude_max_budget_usd > 0", name="ck_system_config_budget_positive"),
+    )
 
     id: Mapped[uuid.UUID] = uuid_pk()
     default_model: Mapped[str] = mapped_column(String(100), nullable=False, default="claude-sonnet-5")
@@ -187,7 +194,7 @@ class SystemConfig(Base):
     # per-Job paid-call budget stored on Job.
     claude_max_budget_usd: Mapped[float] = mapped_column(Float, nullable=False, default=0.50)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=True
     )
 
 
@@ -196,6 +203,19 @@ class SystemConfig(Base):
 
 class Incident(Base):
     __tablename__ = "incidents"
+    __table_args__ = (
+        Index(
+            "incidents_fts_idx",
+            text("to_tsvector('english'::regconfig, (((((COALESCE(title, ''::character varying)::text || ' '::text) || COALESCE(service, ''::character varying)::text) || ' '::text) || COALESCE(environment, ''::character varying)::text) || ' '::text) || COALESCE(notes, ''::character varying)::text)"),
+            postgresql_using="gin",
+        ),
+        Index(
+            "incidents_title_trgm_idx",
+            "title",
+            postgresql_using="gin",
+            postgresql_ops={"title": "gin_trgm_ops"},
+        ),
+    )
 
     id: Mapped[uuid.UUID] = uuid_pk()
     display_id: Mapped[str] = mapped_column(String(20), unique=True, nullable=False)
@@ -227,7 +247,7 @@ class Evidence(Base):
 
     id: Mapped[uuid.UUID] = uuid_pk()
     incident_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("incidents.id"), nullable=False
+        UUID(as_uuid=True), ForeignKey("incidents.id", ondelete="SET NULL"), nullable=True
     )
     evidence_type: Mapped[str] = mapped_column(String(30), nullable=False)
     bucket: Mapped[str] = mapped_column(String(100), nullable=False)
@@ -242,6 +262,10 @@ class Evidence(Base):
     superseded_by: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("evidence.id"), nullable=True
     )
+    # Evidence is retained as a tombstone after a purge request so a failed
+    # storage cleanup can be retried without resurrecting a live record.
+    lifecycle_state: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class EvidenceUploadIntent(Base):
@@ -255,6 +279,7 @@ class EvidenceUploadIntent(Base):
     __tablename__ = "evidence_upload_intents"
     __table_args__ = (
         UniqueConstraint("bucket", "object_key", name="uq_evidence_upload_intent_object"),
+        Index("ix_evidence_upload_intents_incident_id", "incident_id"),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
@@ -313,6 +338,7 @@ class IncidentPrefillRun(Base):
     """
 
     __tablename__ = "incident_prefill_runs"
+    __table_args__ = (Index("ix_incident_prefill_runs_incident_id", "incident_id"),)
 
     id: Mapped[uuid.UUID] = uuid_pk()
     incident_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -431,6 +457,7 @@ class OutboxEvent(Base):
     the resulting idempotency on the consumer side)."""
 
     __tablename__ = "outbox_events"
+    __table_args__ = (Index("ix_outbox_events_unpublished", "published_at", "created_at"),)
 
     id: Mapped[uuid.UUID] = uuid_pk()
     event_type: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -439,7 +466,7 @@ class OutboxEvent(Base):
     job_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("jobs.id"), nullable=False)
     routing_key: Mapped[str] = mapped_column(String(200), nullable=False)
     payload: Mapped[dict] = mapped_column(JSON, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=True)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_error: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -465,6 +492,7 @@ class SkillSnapshot(Base):
             postgresql_where=text("is_active IS TRUE"),
             sqlite_where=text("is_active = 1"),
         ),
+        Index("ix_skill_snapshots_skill_name", "skill_name"),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
@@ -478,7 +506,7 @@ class SkillSnapshot(Base):
     output_schema_json: Mapped[str] = mapped_column(String, nullable=False)
     manifest_yaml: Mapped[str] = mapped_column(String, nullable=False)
     dependency_snapshot_ids: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=True)
     # Skill Admin activation workflow (Phase 12, Batch D): the snapshot a
     # skill_name currently resolves to for *new* jobs. Exactly one active
     # snapshot per skill_name at a time; older/newer inactive snapshots
@@ -659,7 +687,10 @@ class Report(Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="QUEUED")
     report_bucket: Mapped[str | None] = mapped_column(String(100), nullable=True)
     report_object_key: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    report_version_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
     report_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    report_byte_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    report_content_type: Mapped[str | None] = mapped_column(String(200), nullable=True)
     model: Mapped[str | None] = mapped_column(String(100), nullable=True)
     effort: Mapped[str | None] = mapped_column(String(20), nullable=True)
     skill_name: Mapped[str | None] = mapped_column(String(100), nullable=True)

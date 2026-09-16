@@ -242,8 +242,13 @@ class BridgeService:
         # dispatch, not cached at startup, so an admin's PATCH via
         # GET/PATCH /admin/system-config takes effect on the very next job.
         config = db.load_system_config(pg_conn)
+        ai_governance.validate_system_config(config)
         if config["max_concurrent_jobs"] != self._last_max_concurrency:
-            channel.basic_qos(prefetch_count=config["max_concurrent_jobs"])
+            # The callback executes synchronously on pika's consumer thread.
+            # Prefetch is therefore a delivery buffer, not worker
+            # concurrency. The shared policy contract constrains this value
+            # to one until a genuinely parallel executor exists.
+            channel.basic_qos(prefetch_count=1)
             self._last_max_concurrency = config["max_concurrent_jobs"]
 
         # Skill Runtime mission Phase 1: SkillSnapshot is execution truth,
@@ -801,7 +806,7 @@ class BridgeService:
                     connection = get_connection(self.settings.rabbitmq_url)
                     channel = connection.channel()
                     declare_topology(channel)
-                    channel.basic_qos(prefetch_count=self.settings.max_concurrency)
+                    channel.basic_qos(prefetch_count=1)
 
                     pg_conn = db.get_connection(self.settings.database_url)
                     minio_client = get_client(self.settings)
