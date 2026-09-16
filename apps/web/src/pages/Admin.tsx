@@ -87,6 +87,7 @@ export function Admin() {
     defaultEffort: "medium",
     jobTimeoutSeconds: 300,
     maxConcurrentJobs: 1,
+    claudeMaxBudgetUsd: 0.5,
   });
   const [systemConfigError, setSystemConfigError] = useState<string | null>(
     null,
@@ -143,6 +144,7 @@ export function Admin() {
           defaultEffort: config.defaultEffort,
           jobTimeoutSeconds: config.jobTimeoutSeconds,
           maxConcurrentJobs: config.maxConcurrentJobs,
+          claudeMaxBudgetUsd: config.claudeMaxBudgetUsd,
         });
         setSystemConfigError(null);
       })
@@ -724,6 +726,29 @@ export function Admin() {
                           }))
                         }
                       />
+                    </div>
+                    <div>
+                      <label className="mb-1.5 block text-sm font-medium">
+                        Claude budget per invocation (USD)
+                      </label>
+                      <input
+                        type="number"
+                        min={0.01}
+                        max={10}
+                        step={0.01}
+                        className="w-full rounded border border-border bg-transparent px-2 py-1.5 text-sm"
+                        value={systemConfigDraft.claudeMaxBudgetUsd}
+                        disabled={!canManageSystemConfig}
+                        onChange={(e) =>
+                          setSystemConfigDraft((d) => ({
+                            ...d,
+                            claudeMaxBudgetUsd: Number(e.target.value),
+                          }))
+                        }
+                      />
+                      <p className="mt-1 text-xs text-muted">
+                        Maximum Claude spend for one CLI invocation. Allowed range: $0.01–$10.00.
+                      </p>
                     </div>
                   </div>
                   {canManageSystemConfig && (

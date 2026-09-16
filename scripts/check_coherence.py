@@ -69,6 +69,10 @@ def main() -> int:
     require("paid_ai_calls_used +" in bridge_db, "paid AI usage must add to the durable cumulative total")
     require("def record_paid_ai_calls" in bridge_db, "paid AI consumption must have one accounting seam")
     require("ai_governance.effective_model" in bridge_service and "ai_governance.effective_effort" in bridge_service, "bridge must resolve Auto through AI governance")
+    require(
+        all("claude_max_budget_usd" in source for source in (model, token_schema, bridge_db, bridge_service, web_src)),
+        "Claude per-invocation budget must be coherent across API, bridge, and frontend",
+    )
 
     # Phase 12 transactional seams and local OCR semantic mapping.
     require('"uq_shifts_one_active"' in model and "state = 'active'" in model, "Shift must have one durable active-row invariant")

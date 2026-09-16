@@ -255,6 +255,7 @@ _SYSTEM_CONFIG_DEFAULTS = {
     "default_effort": "low",
     "job_timeout_seconds": 300,
     "max_concurrent_jobs": 1,
+    "claude_max_budget_usd": 0.50,
 }
 
 
@@ -266,7 +267,7 @@ def load_system_config(conn) -> dict:
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(
             "SELECT default_model, default_effort, job_timeout_seconds, "
-            "max_concurrent_jobs FROM system_config WHERE id = %s",
+            "max_concurrent_jobs, claude_max_budget_usd FROM system_config WHERE id = %s",
             (_SYSTEM_CONFIG_ID,),
         )
         row = cur.fetchone()

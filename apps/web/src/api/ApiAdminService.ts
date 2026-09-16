@@ -103,6 +103,7 @@ interface RawSystemConfigOut {
   default_effort: string;
   job_timeout_seconds: number;
   max_concurrent_jobs: number;
+  claude_max_budget_usd: number;
   updated_at: string;
 }
 
@@ -112,6 +113,7 @@ function toSystemConfig(raw: RawSystemConfigOut): SystemConfig {
     defaultEffort: raw.default_effort,
     jobTimeoutSeconds: raw.job_timeout_seconds,
     maxConcurrentJobs: raw.max_concurrent_jobs,
+    claudeMaxBudgetUsd: raw.claude_max_budget_usd,
     updatedAt: raw.updated_at,
   };
 }
@@ -281,6 +283,7 @@ export class ApiAdminService implements AdminService {
           default_effort: update.defaultEffort,
           job_timeout_seconds: update.jobTimeoutSeconds,
           max_concurrent_jobs: update.maxConcurrentJobs,
+          claude_max_budget_usd: update.claudeMaxBudgetUsd,
         },
       },
     );

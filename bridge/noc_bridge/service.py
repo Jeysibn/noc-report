@@ -419,7 +419,11 @@ class BridgeService:
                     "SKILL_ESCALATION_CONFIDENCE_THRESHOLD": str(
                         self.settings.claude_escalation_confidence_threshold
                     ),
-                    "SKILL_MAX_BUDGET_USD": str(self.settings.claude_max_budget_usd),
+                    # Read the admin-controlled value on every dispatch so
+                    # the next job sees a change without a bridge restart.
+                    "SKILL_MAX_BUDGET_USD": str(
+                        config.get("claude_max_budget_usd", self.settings.claude_max_budget_usd)
+                    ),
                     "SKILL_CLI_TIMEOUT_SECONDS": str(self.settings.claude_cli_timeout_seconds),
                     "SKILL_MAX_LOG_CHARS": str(self.settings.skill_max_log_chars),
                     "SKILL_MAX_PATTERN_GROUPS": str(self.settings.skill_max_pattern_groups),

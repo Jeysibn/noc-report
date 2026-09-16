@@ -99,6 +99,8 @@ export interface SystemConfig {
   defaultEffort: string;
   jobTimeoutSeconds: number;
   maxConcurrentJobs: number;
+  /** Claude CLI --max-budget-usd cap for one invocation. */
+  claudeMaxBudgetUsd: number;
   updatedAt: string;
 }
 
@@ -107,4 +109,5 @@ export interface SystemConfigUpdate {
   defaultEffort?: string;
   jobTimeoutSeconds?: number;
   maxConcurrentJobs?: number;
+  claudeMaxBudgetUsd?: number;
 }

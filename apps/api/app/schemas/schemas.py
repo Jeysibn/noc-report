@@ -492,6 +492,7 @@ class SystemConfigOut(BaseModel):
     default_effort: str
     job_timeout_seconds: int
     max_concurrent_jobs: int
+    claude_max_budget_usd: float
     updated_at: datetime
 
 
@@ -503,6 +504,7 @@ class SystemConfigUpdate(BaseModel):
     default_effort: str | None = None
     job_timeout_seconds: int | None = None
     max_concurrent_jobs: int | None = None
+    claude_max_budget_usd: float | None = Field(default=None, gt=0, le=10)
 
 
 class StorageBucketStatusOut(BaseModel):

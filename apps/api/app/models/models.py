@@ -166,8 +166,8 @@ class Shift(Base):
 # "real config, live-wired to the bridge" — not just admin-page display, the
 # bridge (bridge/noc_bridge/service.py) actually reads this table and applies
 # it when dispatching sandbox jobs. Single-row table (id is always the same
-# fixed UUID, see app/seed.py) rather than a key/value table — there are
-# exactly four known settings and no near-term need for arbitrary new ones.
+# fixed UUID, see app/seed.py) rather than a key/value table — these are
+# explicitly governed settings, not arbitrary user-defined keys.
 
 
 class SystemConfig(Base):
@@ -183,6 +183,9 @@ class SystemConfig(Base):
     default_effort: Mapped[str] = mapped_column(String(20), nullable=False, default="low")
     job_timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=300)
     max_concurrent_jobs: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    # Claude CLI's per-invocation USD ceiling; distinct from the durable
+    # per-Job paid-call budget stored on Job.
+    claude_max_budget_usd: Mapped[float] = mapped_column(Float, nullable=False, default=0.50)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
