@@ -7,6 +7,7 @@ interface RawFind {
   label_zh: string;
   count: number | null;
   percentage: number | null;
+  pattern_ids?: string[];
   detail_en: string;
   detail_zh: string;
 }
@@ -45,6 +46,7 @@ function toFind(raw: RawFind): AnalysisFind {
     labelZh: raw.label_zh,
     count: raw.count,
     percentage: raw.percentage,
+    patternIds: raw.pattern_ids,
     detailEn: raw.detail_en,
     detailZh: raw.detail_zh,
   };

@@ -72,7 +72,17 @@ describe("LogAnalysisPanel", () => {
             detailZh: "在请求路径中发现。",
           },
         ],
-        secondaryFinds: [],
+        secondaryFinds: [
+          {
+            labelEn: "Other log entries not separately classified",
+            labelZh: "未单独分类的其他日志条目",
+            count: 2964,
+            percentage: 99.97,
+            patternIds: ["other"],
+            detailEn: "Exact remainder.",
+            detailZh: "精确剩余。",
+          },
+        ],
         likelyCauseEn: "unhandled exception in request path",
         likelyCauseZh: "请求路径中存在未处理的异常",
         severitySignal: "high",
@@ -100,6 +110,8 @@ describe("LogAnalysisPanel", () => {
     await act(() => vi.advanceTimersByTimeAsync(3000));
     expect(getRun).toHaveBeenCalledWith("incident-1", "job-1");
     expect(screen.getByText(/exact log entries analyzed: 2,965/i)).toBeInTheDocument();
+    expect(screen.getByText(/finding coverage: 2,965 \/ 2,965 \(100.00%\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/named findings: 1 \(0\.03%\)/i)).toBeInTheDocument();
     expect(screen.getByText(/one error found/i)).toBeInTheDocument();
     expect(screen.getAllByText(/completed/i).length).toBeGreaterThan(0);
   });

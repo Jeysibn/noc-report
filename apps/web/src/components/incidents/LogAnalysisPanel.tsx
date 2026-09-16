@@ -165,9 +165,7 @@ export function LogAnalysisPanel({
           {currentRun?.status === "COMPLETED" && currentRun.result && (
             <div className="rounded-lg bg-ground p-4 text-sm">
               {typeof currentRun.result.totalEntries === "number" && (
-                <p className="mb-3 text-xs text-muted">
-                  Exact log entries analyzed: {currentRun.result.totalEntries.toLocaleString()}
-                </p>
+                <FindingCoverage result={currentRun.result} />
               )}
               <p className="flex items-center gap-2 font-medium">
                 Severity
@@ -272,6 +270,47 @@ export function LogAnalysisPanel({
         </>
       )}
     </Card>
+  );
+}
+
+function FindingCoverage({ result }: { result: AnalysisRun["result"] }) {
+  if (!result || typeof result.totalEntries !== "number") return null;
+
+  const findings = [...result.keyFinds, ...result.secondaryFinds];
+  const accounted = findings.reduce(
+    (sum, find) => sum + (typeof find.count === "number" ? find.count : 0),
+    0,
+  );
+  const unclassified = findings.reduce(
+    (sum, find) =>
+      sum +
+      (find.patternIds?.includes("other") && typeof find.count === "number"
+        ? find.count
+        : 0),
+    0,
+  );
+  const named = Math.max(0, accounted - unclassified);
+  const coverage = result.totalEntries
+    ? Math.min(100, (accounted / result.totalEntries) * 100)
+    : 100;
+  const coverageLabel = `${accounted.toLocaleString()} / ${result.totalEntries.toLocaleString()} (${coverage.toFixed(2)}%)`;
+
+  return (
+    <div className="mb-3 rounded-md border border-line bg-surface px-3 py-2 text-xs text-muted">
+      <p>Exact log entries analyzed: {result.totalEntries.toLocaleString()}</p>
+      <p>Finding coverage: {coverageLabel}</p>
+      {unclassified > 0 && (
+        <p className="mt-1 text-warning">
+          Named findings: {named.toLocaleString()} ({((named / result.totalEntries) * 100).toFixed(2)}%);{" "}
+          other/unclassified: {unclassified.toLocaleString()} ({((unclassified / result.totalEntries) * 100).toFixed(2)}%).
+        </p>
+      )}
+      {unclassified === 0 && accounted !== result.totalEntries && (
+        <p className="mt-1 text-warning">
+          {Math.max(0, result.totalEntries - accounted).toLocaleString()} entries have no validated finding count.
+        </p>
+      )}
+    </div>
   );
 }
 

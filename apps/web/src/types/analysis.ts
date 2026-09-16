@@ -22,6 +22,7 @@ export interface AnalysisFind {
   labelZh: string;
   count: number | null;
   percentage: number | null;
+  patternIds?: string[];
   detailEn: string;
   detailZh: string;
 }
