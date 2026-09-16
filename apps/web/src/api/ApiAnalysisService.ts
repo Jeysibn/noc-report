@@ -24,6 +24,7 @@ interface RawAnalysisRunOut {
   error_message: string | null;
   run_id: string | null;
   result: {
+    total_entries?: number;
     summary_en: string;
     summary_zh: string;
     key_finds: RawFind[];
@@ -62,6 +63,7 @@ function toRun(raw: RawAnalysisRunOut): AnalysisRun {
     isCurrent: raw.current,
     result: raw.result
       ? {
+          totalEntries: raw.result.total_entries,
           summaryEn: raw.result.summary_en,
           summaryZh: raw.result.summary_zh,
           keyFinds: (raw.result.key_finds ?? []).map(toFind),

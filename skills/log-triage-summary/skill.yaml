@@ -17,7 +17,7 @@
 # instead of inventing new out-of-band config.
 id: log-triage-summary
 name: log-triage-summary
-version: "1"
+version: "2"
 kind: analysis
 exports:
   reasoning:

@@ -316,6 +316,121 @@ def _pattern_stats(lines: list[str]) -> tuple[list[str], dict[str, list[str]], d
     return order, groups, counts, severe
 
 
+def _count_manifest(input_text: str) -> tuple[int, dict[str, int], dict[str, str]]:
+    """Build the deterministic numeric seam for log-triage-summary.
+
+    Claude may decide which displayed patterns belong in a finding, but it
+    must refer to these stable IDs. Counts and percentages are then derived
+    from the full physical log by this process, never copied from model text.
+    The reserved ``other`` bucket makes coverage explicit when the model only
+    discusses the most operationally important patterns.
+    """
+    lines = _extract_lines(input_text)
+    order, _groups, counts, severe = _pattern_stats(lines)
+    ranked = sorted(order, key=lambda sig: counts[sig], reverse=True)
+    shown = ranked[:MAX_PATTERN_GROUPS]
+    for sig in ranked:
+        if severe[sig] and sig not in shown:
+            shown.append(sig)
+    ids_by_signature = {sig: f"p{index:03d}" for index, sig in enumerate(shown, start=1)}
+    counts_by_id = {pattern_id: counts[sig] for sig, pattern_id in ids_by_signature.items()}
+    counts_by_id["other"] = max(0, len(lines) - sum(counts_by_id.values()))
+    return len(lines), counts_by_id, ids_by_signature
+
+
+def _count_manifest_text(input_text: str) -> str | None:
+    lines = _extract_lines(input_text)
+    if not lines:
+        return None
+    total, counts_by_id, ids_by_signature = _count_manifest(input_text)
+    _order, _groups, counts, severe = _pattern_stats(lines)
+    parts = [
+        f"[DETERMINISTIC COUNT MANIFEST: total_entries={total:,}. "
+        "For every finding, return pattern_ids from this manifest only. "
+        "The runtime overwrites count and percentage from these IDs. "
+        "The 'other' ID is the exact remainder of entries not listed below; "
+        "do not estimate any number.]"]
+    by_id = {pattern_id: signature for signature, pattern_id in ids_by_signature.items()}
+    for pattern_id, signature in by_id.items():
+        tag = " [SEVERE]" if severe.get(signature) else ""
+        parts.append(f"- id={pattern_id} occurs {counts_by_id[pattern_id]:,} time(s){tag}: {signature}")
+    parts.append(f"- id=other occurs {counts_by_id['other']:,} time(s): all remaining patterns")
+    return "\n".join(parts)
+
+
+def _reconcile_log_triage_counts(result: dict, input_text: str) -> dict:
+    """Replace model-supplied log arithmetic with exact application math."""
+    total, counts_by_id, _ids_by_signature = _count_manifest(input_text)
+    normalized = dict(result)
+    normalized["total_entries"] = total
+    # Keep the narrative's total aligned with the same deterministic value.
+    # Numeric breakdowns belong in structured finding fields; the skill prompt
+    # also tells Claude not to repeat estimated percentages in prose.
+    summary_en = normalized.get("summary_en")
+    if isinstance(summary_en, str):
+        normalized["summary_en"] = re.sub(
+            r"(?i)(?:approximately|roughly|about|~)?\s*[\d,]+\s+(?:warn/error\s+)?log entries",
+            f"{total:,} log entries",
+            summary_en,
+        )
+        normalized["summary_en"] = f"Exact log-entry total: {total:,}. {normalized['summary_en']}"
+    summary_zh = normalized.get("summary_zh")
+    if isinstance(summary_zh, str):
+        normalized["summary_zh"] = re.sub(
+            r"(?:约|大约|近)?\s*[\d,]+\s*条(?:日志(?:条目)?|WARN/ERROR日志(?:条目)?)",
+            f"{total:,}条日志条目",
+            summary_zh,
+        )
+        normalized["summary_zh"] = f"日志条目总数（确定值）：{total:,}。{normalized['summary_zh']}"
+    used: set[str] = set()
+    accounted = 0
+
+    for group_name in ("key_finds", "secondary_finds"):
+        findings = normalized.get(group_name)
+        if not isinstance(findings, list):
+            continue
+        for finding in findings:
+            if not isinstance(finding, dict):
+                continue
+            raw_ids = finding.get("pattern_ids")
+            ids = raw_ids if isinstance(raw_ids, list) else []
+            valid_ids = []
+            for pattern_id in ids:
+                if isinstance(pattern_id, str) and pattern_id in counts_by_id and pattern_id not in used:
+                    valid_ids.append(pattern_id)
+                    used.add(pattern_id)
+            if valid_ids:
+                count = sum(counts_by_id[pattern_id] for pattern_id in valid_ids)
+                finding["pattern_ids"] = valid_ids
+                finding["count"] = count
+                finding["percentage"] = round((count / total) * 100, 2) if total else 0.0
+                accounted += count
+            else:
+                # A narrative finding without deterministic evidence remains
+                # useful, but it must not carry an unverified number.
+                # Keep this distinct from the real ``other`` remainder. The
+                # latter is a quantified bucket; this marker deliberately is
+                # not counted and makes the missing evidence explicit.
+                finding["pattern_ids"] = ["unquantified"]
+                finding["count"] = None
+                finding["percentage"] = None
+
+    remainder = max(0, total - accounted)
+    if remainder:
+        normalized.setdefault("secondary_finds", []).append(
+            {
+                "label_en": "Other log entries not separately classified",
+                "label_zh": "未单独分类的其他日志条目",
+                "count": remainder,
+                "percentage": round((remainder / total) * 100, 2) if total else 0.0,
+                "pattern_ids": ["other"],
+                "detail_en": "Exact remainder after the cited deterministic patterns; no model estimate was used.",
+                "detail_zh": "这是扣除已引用确定性模式后的精确剩余条目数，未使用模型估算。",
+            }
+        )
+    return normalized
+
+
 def _compact_log_if_oversized(input_text: str) -> str:
     if len(input_text) <= MAX_LOG_CHARS:
         return input_text
@@ -364,6 +479,9 @@ def _compact_log_if_oversized(input_text: str) -> str:
             f"--- {len(omitted):,} additional low-frequency, non-severe pattern(s) not shown "
             f"({omitted_lines:,} lines total) ---"
         )
+    manifest = _count_manifest_text(input_text)
+    if manifest:
+        parts.append(manifest)
     return "\n".join(parts)
 
 
@@ -390,31 +508,10 @@ def _deterministic_stats_appendix(input_text: str) -> str | None:
     stats` gives the oversized path, as a short appendix appended after
     the (still verbatim, untruncated) raw log — never a replacement for
     it. Returns None for an empty log (nothing to ground)."""
-    lines = _extract_lines(input_text)
-    if not lines:
-        return None
-
-    order, _groups, counts, severe = _pattern_stats(lines)
-    ranked = sorted(order, key=lambda sig: counts[sig], reverse=True)
-    shown = ranked[:MAX_GROUNDING_PATTERN_GROUPS]
-    # Same "never frequency alone" rule as the oversized path: a rare but
-    # severe pattern is always surfaced even if it would rank below the
-    # top-N by frequency.
-    for sig in ranked:
-        if severe[sig] and sig not in shown:
-            shown.append(sig)
-
-    parts = [
-        f"[Deterministic line-pattern counts over the full log above ({len(lines):,} "
-        f"lines, {len(order):,} distinct patterns) — exact, not estimates. Use these "
-        f"directly for any count/percentage fields whose pattern matches one below; "
-        f"'SEVERE' means a critical-severity marker (OOM, FATAL, data loss, corruption, "
-        f"deadlock, etc) was found in at least one occurrence.]"
-    ]
-    for sig in shown:
-        tag = " [SEVERE]" if severe[sig] else ""
-        parts.append(f"- occurs {counts[sig]:,} time(s){tag}: {sig}")
-    return "\n".join(parts)
+    manifest = _count_manifest_text(input_text)
+    if manifest:
+        return manifest.replace("DETERMINISTIC COUNT MANIFEST", "DETERMINISTIC COUNT MANIFEST — exact, not estimates")
+    return None
 
 
 # Phase 4 (effort escalation): ordering used to decide whether escalating
@@ -688,6 +785,7 @@ def _run_skill_impl(input_text: str, skill_name: str) -> tuple[dict, dict]:
         # path has already required one before invoking run_skill.
         manifest = {}
     raw_input_bytes = len(input_text.encode("utf-8"))
+    raw_log_input = input_text
     if skill_name == "log-triage-summary":
         if len(input_text) > MAX_LOG_CHARS:
             input_text = _compact_log_if_oversized(input_text)
@@ -835,6 +933,9 @@ def _run_skill_impl(input_text: str, skill_name: str) -> tuple[dict, dict]:
             # calls); the escalated call's value is kept since it's the
             # one whose result was actually used.
             telemetry["num_turns"] = escalation.get("num_turns")
+
+    if skill_name == "log-triage-summary":
+        result = _reconcile_log_triage_counts(result, raw_log_input)
 
     telemetry["confidence"] = result.get("confidence")
     telemetry["claude_calls"] = _AI_CALL_COUNT.get()

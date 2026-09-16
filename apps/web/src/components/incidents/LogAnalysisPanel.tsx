@@ -164,6 +164,11 @@ export function LogAnalysisPanel({
 
           {currentRun?.status === "COMPLETED" && currentRun.result && (
             <div className="rounded-lg bg-ground p-4 text-sm">
+              {typeof currentRun.result.totalEntries === "number" && (
+                <p className="mb-3 text-xs text-muted">
+                  Exact log entries analyzed: {currentRun.result.totalEntries.toLocaleString()}
+                </p>
+              )}
               <p className="flex items-center gap-2 font-medium">
                 Severity
                 <StatusPill

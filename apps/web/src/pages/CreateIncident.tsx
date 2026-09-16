@@ -63,14 +63,17 @@ export function CreateIncident() {
       : '';
     setDraft((prev) => ({
       ...prev,
-      title: values.title ?? prev.title,
-      service: values.service ?? prev.service,
-      environment: values.environment ?? prev.environment,
+      // Unresolved OCR fields are represented by empty strings in the review
+      // panel. Empty suggestions must never erase a manual value or the
+      // form's safe default (notably environment=production).
+      title: values.title || prev.title,
+      service: values.service || prev.service,
+      environment: values.environment || prev.environment,
       status: status ?? prev.status,
       triggeredAt: triggeredAt || prev.triggeredAt,
       recoveredAt: recoveredAt || prev.recoveredAt,
-      triggerValue: values.trigger_value ?? prev.triggerValue,
-      notes: values.notes ?? prev.notes,
+      triggerValue: values.trigger_value || prev.triggerValue,
+      notes: values.notes || prev.notes,
     }));
     setPrefill(appliedPrefill);
   }

@@ -46,7 +46,7 @@ jobs:
         env:
           POSTGRES_USER: noc
           POSTGRES_PASSWORD: noc
-          POSTGRES_DB: noc_report
+          POSTGRES_DB: noc_report_test
         ports: ["55432:5432"]
         options: >-
           --health-cmd="pg_isready -U noc"
@@ -75,7 +75,8 @@ jobs:
         # already binding :9000. Console (:9091) isn't required by the
         # app (only the S3 API is used), so a missing console is fine.
     env:
-      DATABASE_URL: postgresql+psycopg2://noc:noc@localhost:55432/noc_report
+      DATABASE_URL: postgresql+psycopg2://noc:noc@localhost:55432/noc_report_test
+      TEST_DATABASE_URL: postgresql+psycopg2://noc:noc@localhost:55432/noc_report_test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

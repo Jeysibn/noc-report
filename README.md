@@ -48,7 +48,9 @@ recreates its database and the bridge uses the same infrastructure:
 
 ```bash
 npm run check:coherence
-(cd apps/api && pytest tests/ -q)          # after alembic upgrade head
+(cd apps/api && DATABASE_URL=postgresql+psycopg2://noc:noc@localhost:55432/noc_report_test \
+  TEST_DATABASE_URL=postgresql+psycopg2://noc:noc@localhost:55432/noc_report_test \
+  pytest tests/ -q)  # disposable DB only
 PYTHONPATH=sandbox python3 -m pytest sandbox/tests/ -q
 (cd bridge && PYTHONPATH=. pytest tests/ -q)
 ```

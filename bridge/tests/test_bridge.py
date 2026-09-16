@@ -233,13 +233,14 @@ def test_validate_log_triage_accepts_well_formed_output():
     validate_output(
         "log_triage",
         {
+            "total_entries": 1,
             "summary_en": "one error found",
             "summary_zh": "发现一个错误",
             "key_finds": [
                 {
                     "label_en": "NullPointerException", "label_zh": "空指针异常",
                     "detail_en": "null pointer", "detail_zh": "空指针",
-                    "count": 1, "percentage": 100.0,
+                    "count": 1, "percentage": 100.0, "pattern_ids": ["p001"],
                 }
             ],
             "secondary_finds": [],

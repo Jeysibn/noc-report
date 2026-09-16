@@ -59,6 +59,7 @@ describe("LogAnalysisPanel", () => {
       errorMessage: null,
       isCurrent: true,
       result: {
+        totalEntries: 2965,
         summaryEn: "One error found in the log excerpt.",
         summaryZh: "日志摘录中发现一个错误。",
         keyFinds: [
@@ -98,6 +99,7 @@ describe("LogAnalysisPanel", () => {
 
     await act(() => vi.advanceTimersByTimeAsync(3000));
     expect(getRun).toHaveBeenCalledWith("incident-1", "job-1");
+    expect(screen.getByText(/exact log entries analyzed: 2,965/i)).toBeInTheDocument();
     expect(screen.getByText(/one error found/i)).toBeInTheDocument();
     expect(screen.getAllByText(/completed/i).length).toBeGreaterThan(0);
   });

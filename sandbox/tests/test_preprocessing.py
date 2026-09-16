@@ -160,6 +160,75 @@ def test_deterministic_stats_appendix_is_none_for_an_empty_log():
     assert entrypoint._deterministic_stats_appendix("") is None
 
 
+def test_log_triage_counts_are_recomputed_from_pattern_ids():
+    log_text = "\n".join(["ERROR timeout"] * 7 + ["WARN retry"] * 3)
+    result = {
+        "summary_en": "summary",
+        "summary_zh": "摘要",
+        "key_finds": [{
+            "label_en": "timeouts", "label_zh": "超时", "count": 999,
+            "percentage": 99.9, "pattern_ids": ["p001"],
+            "detail_en": "d", "detail_zh": "细节",
+        }],
+        "secondary_finds": [{
+            "label_en": "retries", "label_zh": "重试", "count": 1,
+            "percentage": 1.0, "pattern_ids": ["p002"],
+            "detail_en": "d", "detail_zh": "细节",
+        }],
+    }
+
+    normalized = entrypoint._reconcile_log_triage_counts(result, log_text)
+
+    assert normalized["total_entries"] == 10
+    assert normalized["key_finds"][0]["count"] == 7
+    assert normalized["key_finds"][0]["percentage"] == 70.0
+    assert normalized["secondary_finds"][0]["count"] == 3
+    assert normalized["secondary_finds"][0]["percentage"] == 30.0
+    assert sum(
+        finding["count"] or 0
+        for group in ("key_finds", "secondary_finds")
+        for finding in normalized[group]
+    ) == 10
+
+
+def test_log_triage_adds_exact_remainder_for_unselected_patterns():
+    log_text = "\n".join(["ERROR timeout"] * 7 + ["WARN retry"] * 3 + ["INFO done"] * 2)
+    result = {
+        "key_finds": [{
+            "label_en": "timeouts", "label_zh": "超时", "count": 7,
+            "percentage": 70.0, "pattern_ids": ["p001"],
+            "detail_en": "d", "detail_zh": "细节",
+        }],
+        "secondary_finds": [],
+    }
+
+    normalized = entrypoint._reconcile_log_triage_counts(result, log_text)
+    remainder = normalized["secondary_finds"][-1]
+
+    assert normalized["total_entries"] == 12
+    assert remainder["pattern_ids"] == ["other"]
+    assert remainder["count"] == 5
+    assert remainder["percentage"] == round(5 / 12 * 100, 2)
+
+
+def test_unmatched_narrative_finding_is_not_mislabeled_as_exact_other():
+    normalized = entrypoint._reconcile_log_triage_counts(
+        {
+            "key_finds": [{
+                "label_en": "ambiguous", "label_zh": "不明确", "count": 999,
+                "percentage": 99.0, "detail_en": "d", "detail_zh": "细节",
+            }],
+            "secondary_finds": [],
+        },
+        "ERROR timeout\nWARN retry",
+    )
+
+    assert normalized["key_finds"][0]["pattern_ids"] == ["unquantified"]
+    assert normalized["key_finds"][0]["count"] is None
+    assert normalized["secondary_finds"][-1]["pattern_ids"] == ["other"]
+    assert normalized["secondary_finds"][-1]["count"] == 2
+
+
 def test_run_skill_appends_deterministic_grounding_for_a_small_log(monkeypatch, tmp_path):
     """run_skill's log-triage-summary branch must append the grounding
     appendix (not just compact when oversized) so a small log's prompt

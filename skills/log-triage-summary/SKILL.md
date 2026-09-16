@@ -18,10 +18,16 @@ Output shape:
   the log, ordered by frequency (highest count first). Each entry:
   - `label_en` / `label_zh` — short name for the pattern (e.g. the exception
     class or failing call).
-  - `count` — number of log lines/entries matching this pattern (integer, or
-    `null` if the log doesn't support a count).
-  - `percentage` — that count as a percentage of total error entries
-    (number, or `null` if not computable).
+  - `pattern_ids` — one or more IDs from the deterministic count manifest
+    appended to the log. Select the IDs whose patterns belong to this finding;
+    do not invent IDs. The runtime calculates the count from these IDs. The
+    runtime-reserved `other` ID is the exact remainder; do not combine it with
+    a specific pattern ID. `unquantified` is reserved for a finding that has
+    no defensible manifest match and is intentionally left uncounted.
+  - `count` — returned for schema compatibility, but ignored and replaced by
+    the runtime with the exact sum of the selected pattern IDs.
+  - `percentage` — returned for schema compatibility, but ignored and
+    replaced by the runtime using the exact total entry count.
   - `detail_en` / `detail_zh` — one or two sentences: which class/method/
     endpoint is involved, what the underlying exception/condition is, and
     any other context worth a NOC operator's attention.
@@ -36,6 +42,17 @@ Output shape:
   NOC operator should do next.
 - `severity_signal` — one of `low`, `medium`, `high`, `critical`.
 - `confidence` — float 0.0–1.0.
+
+- `total_entries` — returned for schema compatibility, but ignored and
+  replaced by the runtime with the exact number of physical log entries.
+
+Numerical truth is deterministic. The runtime owns `total_entries`, every
+finding `count` and `percentage`, and adds an explicit remainder finding when
+the selected findings do not cover every entry. Claude owns only grouping
+selection, labels, explanations, severity, and narrative. Never estimate a
+number from the prose or repeat a total that is not present in the manifest.
+Do not put numeric count/percentage breakdowns in narrative sentences; use the
+structured finding fields instead.
 
 If the log itself contains non-English (e.g. Chinese) text, the `_zh` fields
 should be genuine Chinese analysis (not a translation-only echo of the `_en`

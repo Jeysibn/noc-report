@@ -1,3 +1,5 @@
+import os
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
@@ -10,7 +12,20 @@ from app.main import app
 from app.models.models import Role, User
 from app.seed import seed
 
-engine = create_engine(settings.database_url, pool_pre_ping=True)
+TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
+if not TEST_DATABASE_URL:
+    raise RuntimeError(
+        "Refusing to run API tests without TEST_DATABASE_URL. Tests drop and "
+        "recreate their schema; point both DATABASE_URL and TEST_DATABASE_URL "
+        "at a disposable test database."
+    )
+if settings.database_url != TEST_DATABASE_URL:
+    raise RuntimeError(
+        "DATABASE_URL and TEST_DATABASE_URL must match for API tests because "
+        "the application and test fixtures must use the same disposable database."
+    )
+
+engine = create_engine(TEST_DATABASE_URL, pool_pre_ping=True)
 TestSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 

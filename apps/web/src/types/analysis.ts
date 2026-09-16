@@ -27,6 +27,8 @@ export interface AnalysisFind {
 }
 
 export interface AnalysisResult {
+  /** Exact physical log-entry total supplied by the deterministic runtime. */
+  totalEntries?: number;
   summaryEn: string;
   summaryZh: string;
   keyFinds: AnalysisFind[];

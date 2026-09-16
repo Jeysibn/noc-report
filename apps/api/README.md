@@ -52,14 +52,14 @@ measured local mapping timeout of 75 seconds, and a bounded queue. If Ollama
 is unavailable, OCR and deterministic fields remain
 available and ambiguous fields stay manual. This path never invokes Claude.
 
-Run tests (against the same real Postgres + MinIO — models use
-Postgres-only UUID types and evidence tests PUT/GET real objects, so
-SQLite/mocked-S3 substitutes are not valid stand-ins):
+Run tests against a disposable real Postgres database. The fixture drops and
+recreates its schema, so never point it at the live development database:
 
 ```bash
+DATABASE_URL=postgresql+psycopg2://noc:noc@localhost:55432/noc_report_test \
+TEST_DATABASE_URL=postgresql+psycopg2://noc:noc@localhost:55432/noc_report_test \
 python3 -m pytest -q
 ```
 
-Tests drop and recreate the Postgres schema per test; after running the
-suite, re-run the two commands above to restore a normal dev-mode
-database.
+Models use Postgres-only UUID types and evidence tests PUT/GET real objects,
+so SQLite/mocked-S3 substitutes are not valid stand-ins.

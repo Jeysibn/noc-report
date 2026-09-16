@@ -1,6 +1,6 @@
 # 0008 — Findings from live end-to-end personal testing
 
-- Status: **implemented**
+- Status: **implemented** (item 4 superseded by ADR 0023)
 - Date: 2026-09-13
 
 ## Context
@@ -83,3 +83,9 @@ development data.
   future session, a CI misconfiguration pointed at the wrong host, or a
   teammate's shared dev environment — will silently destroy its data
   again with no warning.
+
+## Follow-up
+
+The test-isolation risk described in item 4 was fixed after this historical
+entry by requiring `TEST_DATABASE_URL` and using a disposable database in CI;
+see the current test instructions and ADR 0023.
