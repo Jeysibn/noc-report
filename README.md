@@ -16,6 +16,8 @@ context.
 - `infrastructure/` — docker/caddy/rabbitmq/minio/postgres/systemd/backup configs
 - `docs/adr/` — architecture decision records
 - `docs/ui/` — UI specs, including the UI Product Freeze gate doc
+- `docs/production-hardening.md` — evidence identity, job protocol, health,
+  deployment, and verification runbook
 
 ## Development
 
@@ -27,6 +29,7 @@ npm run dev      # start the frontend dev server
 npm run test     # run frontend tests
 npm run build    # build the frontend
 npm run lint     # lint the frontend
+npm run typecheck
 npm run format   # format the whole repo with Prettier
 ```
 
@@ -52,6 +55,10 @@ PYTHONPATH=sandbox python3 -m pytest sandbox/tests/ -q
 
 Run the API and bridge suites sequentially against separate test database
 lifecycles; do not run them concurrently against the same local Postgres.
+
+The API exposes `/health` for liveness and `/health/dependencies` plus
+`/health/readiness` for real dependency state. The dashboard treats degraded,
+unavailable, and unknown dependencies distinctly.
 
 ## Milestones
 

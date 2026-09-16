@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import io
 import json
+import hashlib
+import hashlib
 import logging
 import pathlib
 import tempfile
@@ -39,6 +41,7 @@ from noc_bridge.failures import (
 )
 from noc_bridge.queue_topology import (
     JOB_TYPES,
+    PROTOCOL_VERSION,
     declare_topology,
     get_connection,
     publish_status_event,
@@ -57,6 +60,23 @@ from noc_bridge.validation import (
     validate_against_schema,
 )
 from noc_bridge.report_validation import validate_merged_daily_report
+
+
+def _read_frozen_object(client, *, bucket: str, object_key: str, version_id: str | None,
+                        expected_sha256: str | None) -> bytes:
+    """Read the exact evidence version frozen by a ReportSnapshot.
+
+    `version_id=None` is retained only for historical snapshots created before
+    version-pinned evidence was introduced. New snapshots always carry the
+    version and checksum, so a key replacement cannot change their bytes.
+    """
+    params = {"Bucket": bucket, "Key": object_key}
+    if version_id:
+        params["VersionId"] = version_id
+    body = client.get_object(**params)["Body"].read()
+    if expected_sha256 and hashlib.sha256(body).hexdigest() != expected_sha256:
+        raise EvidenceIntegrityError(f"frozen screenshot checksum mismatch: {bucket}/{object_key}")
+    return body
 
 # Skill Runtime mission Phase 14: the job message protocol's single source
 # of truth — see packages/contracts/job_message.schema.json's own
@@ -312,6 +332,7 @@ class BridgeService:
                     object_key=ref["key"],
                     dest_path=input_dir / input_filename,
                     expected_sha256=ref.get("sha256"),
+                    version_id=ref.get("version_id"),
                 )
 
             publish_status_event(channel, job_id=job_id, event="progress", detail={"stage": "sandbox"})
@@ -455,27 +476,39 @@ class BridgeService:
                 if renderer_profile == "report-document-v1":
                     snapshot = json.loads((input_dir / "snapshot.json").read_text())
                     allowed_screenshots = {
-                        (str(item.get("bucket")), str(item.get("object_key")))
+                        (
+                            str(item.get("bucket")),
+                            str(item.get("object_key")),
+                            item.get("version_id"),
+                            item.get("sha256"),
+                        )
                         for incident in snapshot.get("incidents", [])
                         for item in (incident.get("screenshots") or [])
                         if item.get("bucket") and item.get("object_key")
                     }
 
-                    def _fetch_trusted_screenshot(bucket: str, object_key: str, _client=minio_client) -> bytes | None:
+                    def _fetch_trusted_screenshot(
+                        bucket: str, object_key: str, version_id: str | None = None,
+                        expected_sha256: str | None = None, _client=minio_client
+                    ) -> bytes | None:
                         # The composition module creates screenshot blocks only
                         # from this frozen allow-list. Keep this second guard
                         # at the storage boundary so a future renderer call
                         # cannot turn model output into an arbitrary MinIO
                         # read.
-                        if (bucket, object_key) not in allowed_screenshots:
+                        if (bucket, object_key, version_id, expected_sha256) not in allowed_screenshots:
                             logger.error("rejected non-frozen screenshot reference %s/%s", bucket, object_key)
                             raise OutputValidationError(
                                 f"screenshot reference is outside the frozen report snapshot: {bucket}/{object_key}"
                             )
                         try:
-                            buf = io.BytesIO()
-                            _client.download_fileobj(bucket, object_key, buf)
-                            return buf.getvalue()
+                            return _read_frozen_object(
+                                _client,
+                                bucket=bucket,
+                                object_key=object_key,
+                                version_id=version_id,
+                                expected_sha256=expected_sha256,
+                            )
                         except ClientError as exc:
                             code = str((exc.response or {}).get("Error", {}).get("Code", ""))
                             if code in {"NoSuchKey", "NoSuchBucket", "404", "NotFound"}:
@@ -532,11 +565,18 @@ class BridgeService:
                     result.output = _merge_daily_report(snapshot, result.output)
                     validate_merged_daily_report(result.output)
 
-                    def _fetch_screenshot(bucket: str, object_key: str, _client=minio_client) -> bytes | None:
+                    def _fetch_screenshot(
+                        bucket: str, object_key: str, version_id: str | None = None,
+                        expected_sha256: str | None = None, _client=minio_client
+                    ) -> bytes | None:
                         try:
-                            buf = io.BytesIO()
-                            _client.download_fileobj(bucket, object_key, buf)
-                            return buf.getvalue()
+                            return _read_frozen_object(
+                                _client,
+                                bucket=bucket,
+                                object_key=object_key,
+                                version_id=version_id,
+                                expected_sha256=expected_sha256,
+                            )
                         except ClientError as exc:
                             code = str((exc.response or {}).get("Error", {}).get("Code", ""))
                             if code in {"NoSuchKey", "NoSuchBucket", "404", "NotFound"}:
@@ -610,6 +650,10 @@ class BridgeService:
         # uncaught exception (there's no reliable job_id to update in
         # Postgres for a message this malformed).
         try:
+            if payload.get("protocol_version") != PROTOCOL_VERSION:
+                raise OutputValidationError(
+                    f"unsupported job protocol version: {payload.get('protocol_version')!r}"
+                )
             validate_against_schema(payload, _job_message_schema, label="job_message")
         except OutputValidationError as exc:
             logger.error("job message failed protocol validation, routing to DLQ: %s", exc)

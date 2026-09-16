@@ -310,7 +310,12 @@ def request_analysis(
         )
 
     object_refs = [
-        {"bucket": log_evidence.bucket, "key": log_evidence.object_key, "sha256": log_evidence.sha256}
+        {
+            "bucket": log_evidence.bucket,
+            "key": log_evidence.object_key,
+            "sha256": log_evidence.sha256,
+            "version_id": log_evidence.version_id,
+        }
     ]
 
     # Skill Registry (Reliability mission Batch B): resolves (or creates)

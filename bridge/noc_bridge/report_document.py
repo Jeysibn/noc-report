@@ -79,6 +79,27 @@ class Screenshot:
     bucket: str
     object_key: str
     filename: str | None = None
+    version_id: str | None = None
+    sha256: str | None = None
+    content_type: str | None = None
+    byte_size: int | None = None
+
+
+def screenshot_from_dict(raw: dict) -> Screenshot:
+    """Build a frozen screenshot reference, retaining byte identity metadata.
+
+    Older report snapshots do not have version/hash fields; their compatibility
+    behavior remains represented by the optional values.
+    """
+    return Screenshot(
+        bucket=raw["bucket"],
+        object_key=raw["object_key"],
+        filename=raw.get("filename"),
+        version_id=raw.get("version_id"),
+        sha256=raw.get("sha256"),
+        content_type=raw.get("content_type"),
+        byte_size=raw.get("byte_size"),
+    )
 
 
 @dataclass(frozen=True)
@@ -224,7 +245,7 @@ def _parse_blocks(raw_blocks: list[dict]) -> list[Block]:
         elif kind == "log_file_reference":
             parsed.append(LogFileReference(raw["filename"], raw.get("url")))
         elif kind == "screenshot":
-            parsed.append(Screenshot(raw["bucket"], raw["object_key"], raw.get("filename")))
+            parsed.append(screenshot_from_dict(raw))
         elif kind == "bilingual_find_list":
             parsed.append(BilingualFindList(
                 heading_zh=str(raw["heading_zh"]),
@@ -259,7 +280,7 @@ def _parse_blocks(raw_blocks: list[dict]) -> list[Block]:
                     if isinstance(raw.get("log_file"), dict)
                     else None
                 ),
-                screenshots=tuple(Screenshot(s["bucket"], s["object_key"], s.get("filename")) for s in raw.get("screenshots", [])),
+                screenshots=tuple(screenshot_from_dict(s) for s in raw.get("screenshots", [])),
             ))
         elif kind == "divider":
             parsed.append(Divider())
@@ -278,7 +299,7 @@ def _parse_blocks(raw_blocks: list[dict]) -> list[Block]:
                     provenance=tuple(Metadata(str(item["label"]), str(item["value"])) for item in raw.get("provenance", [])),
                     children=tuple(_parse_blocks(raw.get("children", raw.get("blocks", [])))),
                     screenshots=tuple(
-                        Screenshot(s["bucket"], s["object_key"], s.get("filename"))
+                        screenshot_from_dict(s)
                         for s in raw.get("screenshots", [])
                     ),
                     log_file=(
@@ -368,7 +389,7 @@ def _analysis_reference(section: dict) -> AnalysisReference:
         available=True,
         incident_id=section.get("incident_id"),
         screenshots=tuple(
-            Screenshot(s["bucket"], s["object_key"], s.get("filename"))
+            screenshot_from_dict(s)
             for s in (section.get("screenshots") or [])
         ),
         log_file=(
@@ -423,7 +444,7 @@ def build_daily_report_document(result: dict) -> ReportDocument:
         )
         log_file = LogFileReference(section["log_filename"]) if section.get("log_filename") else None
         screenshots = tuple(
-            Screenshot(bucket=s["bucket"], object_key=s["object_key"], filename=s.get("filename"))
+            screenshot_from_dict(s)
             for s in (section.get("screenshots") or [])
         )
         blocks.append(

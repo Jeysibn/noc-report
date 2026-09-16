@@ -1,24 +1,30 @@
-"""RabbitMQ topology — kept in sync BY HAND with
-`apps/api/app/core/queue.py` (master plan §26). Duplicated rather than
-imported because the bridge is a separate host-side deployable
-(master plan §27) that shouldn't require apps/api on its PYTHONPATH.
+"""RabbitMQ topology loaded from the repository's shared job protocol.
+
+The bridge remains separately deployable and does not import ``apps/api``;
+both processes consume ``packages/contracts/job_protocol.json`` instead of
+keeping topology constants in sync by hand.
 """
 from __future__ import annotations
 
 import json
+import pathlib
 import uuid
 from datetime import datetime, timezone
 
 import pika
 from pika.exchange_type import ExchangeType
 
-JOB_TYPES = ["log_triage", "daily_report"]
+_CONTRACTS_DIR = pathlib.Path(__file__).resolve().parents[2] / "packages" / "contracts"
+_job_protocol = json.loads((_CONTRACTS_DIR / "job_protocol.json").read_text())
 
-JOBS_EXCHANGE = "noc.jobs"
-EVENTS_EXCHANGE = "noc.events"
-DLX_EXCHANGE = "noc.dlx"
+PROTOCOL_VERSION = _job_protocol["protocol_version"]
+JOB_TYPES = _job_protocol["job_types"]
 
-RETRY_TTL_MS = 30_000
+JOBS_EXCHANGE = _job_protocol["exchanges"]["jobs"]
+EVENTS_EXCHANGE = _job_protocol["exchanges"]["events"]
+DLX_EXCHANGE = _job_protocol["exchanges"]["dead_letter"]
+
+RETRY_TTL_MS = _job_protocol["retry_ttl_ms"]
 
 
 def queue_names(job_type: str) -> dict:

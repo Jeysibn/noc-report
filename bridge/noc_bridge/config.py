@@ -1,11 +1,8 @@
-"""Bridge configuration (master plan §27). A separate host-side deployable
-from apps/api — deliberately does not import the FastAPI app package, so it
-duplicates the small slice of connection config/topology it needs rather than
-depending on apps/api being installed on the same PYTHONPATH. Keep the
-topology constants here (`JOB_TYPES`, `_queue_names`, exchange names) in sync
-with `apps/api/app/core/queue.py` by hand — flagged as a known open item,
-consistent with the project's already-tracked `packages/contracts`
-duplication concern.
+"""Bridge configuration (master plan §27).
+
+The bridge is a separate host-side deployable and deliberately does not
+import the FastAPI package. Shared job wire/topology definitions live in
+``packages/contracts``; process-local configuration remains here.
 """
 from __future__ import annotations
 

@@ -37,6 +37,7 @@ from noc_bridge.report_document import (
     Paragraph,
     ReportDocument,
     Screenshot,
+    screenshot_from_dict,
 )
 
 
@@ -67,7 +68,19 @@ def _block_to_json(block: Any, screenshots: list[dict], *, include_provenance: b
         return {"type": "log_file_reference", "filename": block.filename, "url": block.url}
     if isinstance(block, Screenshot):
         index = len(screenshots)
-        screenshots.append({"bucket": block.bucket, "object_key": block.object_key, "filename": block.filename})
+        screenshots.append({
+            key: value
+            for key, value in {
+                "bucket": block.bucket,
+                "object_key": block.object_key,
+                "filename": block.filename,
+                "version_id": block.version_id,
+                "sha256": block.sha256,
+                "content_type": block.content_type,
+                "byte_size": block.byte_size,
+            }.items()
+            if value is not None
+        })
         return {"type": "screenshot", "index": index, "filename": block.filename}
     if isinstance(block, BilingualText):
         return {

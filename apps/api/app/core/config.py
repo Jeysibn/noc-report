@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     refresh_token_expire_minutes: int = 60 * 24 * 7
     refresh_cookie_name: str = "noc_refresh"
     refresh_cookie_samesite: Literal["lax", "strict"] = "lax"
+    # Comma-separated browser origins. Keep local defaults narrow; production
+    # deployments should set the public web origin explicitly.
+    cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 
     # Milestone 9 — MinIO (S3-compatible object storage, master plan §25)
     minio_endpoint_url: str = "http://localhost:59000"
@@ -37,6 +40,8 @@ class Settings(BaseSettings):
 
     # Milestone 11 — RabbitMQ (master plan §26)
     rabbitmq_url: str = "amqp://noc:noc-rabbit-secret@localhost:55672/"
+    bridge_health_url: str = "http://127.0.0.1:8091/health"
+    health_timeout_seconds: float = 2.0
 
     # Skill Runtime mission Phase 12: whether the outbox dispatcher runs as
     # a background thread embedded in this API process ("embedded", the
@@ -54,6 +59,7 @@ class Settings(BaseSettings):
     # whose actual uploaded size exceeds this, after the fact. Value chosen
     # by the operator (50 MB) — no master-plan-specified limit exists.
     max_evidence_upload_bytes: int = 50 * 1024 * 1024
+    evidence_upload_intent_ttl_seconds: int = 15 * 60
 
     # Phase 12 local Incident Prefill AI. Disabled by default so OCR/manual
     # workflows remain the safe rollout path. The intended production
@@ -76,6 +82,10 @@ class Settings(BaseSettings):
     @property
     def known_prefill_services(self) -> tuple[str, ...]:
         return tuple(value.strip() for value in self.local_prefill_known_services.split(",") if value.strip())
+
+    @property
+    def allowed_cors_origins(self) -> list[str]:
+        return [value.strip() for value in self.cors_origins.split(",") if value.strip()]
 
 
 settings = Settings()

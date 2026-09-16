@@ -36,21 +36,22 @@ from app.core.config import settings
 # same file against its own incoming payloads in
 # bridge/noc_bridge/service.py) rather than each side's shape living only
 # in Python code kept in sync by hand.
-_JOB_MESSAGE_SCHEMA_PATH = (
-    pathlib.Path(__file__).resolve().parents[4] / "packages" / "contracts" / "job_message.schema.json"
-)
+_CONTRACTS_DIR = pathlib.Path(__file__).resolve().parents[4] / "packages" / "contracts"
+_JOB_MESSAGE_SCHEMA_PATH = _CONTRACTS_DIR / "job_message.schema.json"
 _job_message_schema = json.loads(_JOB_MESSAGE_SCHEMA_PATH.read_text())
+_job_protocol = json.loads((_CONTRACTS_DIR / "job_protocol.json").read_text())
 
-JOB_TYPES = ["log_triage", "daily_report"]
+PROTOCOL_VERSION = _job_protocol["protocol_version"]
+JOB_TYPES = _job_protocol["job_types"]
 
-JOBS_EXCHANGE = "noc.jobs"
-EVENTS_EXCHANGE = "noc.events"
-DLX_EXCHANGE = "noc.dlx"
+JOBS_EXCHANGE = _job_protocol["exchanges"]["jobs"]
+EVENTS_EXCHANGE = _job_protocol["exchanges"]["events"]
+DLX_EXCHANGE = _job_protocol["exchanges"]["dead_letter"]
 
 # Retry queues route back to the DLX after their own TTL expires, so a
 # message that has failed once waits before being redelivered to the main
 # queue rather than hammering a struggling consumer immediately.
-RETRY_TTL_MS = 30_000
+RETRY_TTL_MS = _job_protocol["retry_ttl_ms"]
 
 
 def _queue_names(job_type: str) -> dict:
@@ -85,7 +86,7 @@ def build_job_message(
     skill_hash: str | None = None,
     skill_execution_hash: str | None = None,
     skill_snapshot_id: uuid.UUID | None = None,
-    protocol_version: str = "1",
+    protocol_version: int = PROTOCOL_VERSION,
     expected_output_type: str | None = None,
     ai_policy: dict | None = None,
 ) -> dict:

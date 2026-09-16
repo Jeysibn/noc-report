@@ -45,6 +45,10 @@ def main() -> int:
     prefill_contract = read("apps/web/src/services/ocr.service.ts")
     current_migration = read("apps/api/alembic/versions/f9a0b1c2d3e4_analysis_current_unique.py")
     job_schema = json.loads(read("packages/contracts/job_message.schema.json"))
+    job_protocol = json.loads(read("packages/contracts/job_protocol.json"))
+    evidence_router = read("apps/api/app/api/v1/routers/evidence.py")
+    health_router = read("apps/api/app/main.py")
+    health_module = read("apps/api/app/operational_health.py")
     prefill_schema = json.loads(read("packages/contracts/incident_prefill.schema.json"))
     context = read("CONTEXT.md")
 
@@ -92,6 +96,11 @@ def main() -> int:
     require("uq_analysis_runs_current_incident" in current_migration and "current IS TRUE" in current_migration, "Alembic must create the current-run partial index")
     required_job_fields = set(job_schema.get("required", []))
     require({"job_id", "job_type", "object_refs", "correlation_id", "attempt"} <= required_job_fields, "job message schema is missing core protocol fields")
+    require("protocol_version" in required_job_fields and job_protocol.get("protocol_version") == 1, "job protocol version must be explicit and shared")
+    require("EvidenceUploadIntent" in evidence_router and "body.bucket" not in evidence_router and "body.object_key" not in evidence_router, "evidence completion must resolve server-owned storage identity")
+    require('"version_id"' in reports_router and "sha256_of_bytes(image_bytes)" in reports_router, "report screenshot reads must remain version/checksum pinned")
+    require('"/health/dependencies"' in health_router and '"/health/readiness"' in health_router, "operational health endpoints are missing")
+    require("_check_database" in health_module and "_check_rabbitmq" in health_module and "_check_minio" in health_module, "health module must check core dependencies")
 
     for term in (
         "Shift", "Incident", "SkillSnapshot", "ReportFragment", "AnalysisPresentation",

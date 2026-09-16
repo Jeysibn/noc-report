@@ -46,13 +46,7 @@ def _create_incident_with_uploaded_evidence(client, headers) -> tuple[str, str]:
 
     evidence = client.post(
         f"/api/v1/incidents/{incident['id']}/evidence/complete",
-        json={
-            "evidence_type": "ALERT_SCREENSHOT",
-            "bucket": upload_req["bucket"],
-            "object_key": upload_req["object_key"],
-            "original_filename": "alert.png",
-            "mime_type": "image/png",
-        },
+        json={"upload_id": upload_req["upload_id"]},
         headers=headers,
     ).json()
 

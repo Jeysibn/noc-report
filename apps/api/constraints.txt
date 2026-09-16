@@ -1,0 +1,23 @@
+# Generated from the validated development/runtime environment.
+# Keep requirements.txt readable; this file pins production builds while
+# leaving transitive resolution to pip's resolver.
+pytest==9.1.1
+alembic==1.19.2
+boto3==1.43.89
+fastapi==0.141.1
+httpx==0.28.1
+jsonschema==4.10.3
+numpy==2.3.5
+paddleocr==3.7.0
+paddlepaddle==3.3.1
+passlib==1.7.4
+pika==1.4.4
+pillow==12.3.0
+pydantic==2.13.4
+pydantic-settings==2.15.0
+python-docx==1.2.0
+python-jose==3.5.0
+python-multipart==0.0.32
+PyYAML==6.0.2
+SQLAlchemy==2.0.52
+uvicorn==0.52.4

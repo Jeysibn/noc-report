@@ -49,13 +49,18 @@ def _make_handler(service):
                 self.end_headers()
                 return
 
+            docker_connected = _check_docker()
+            rabbitmq_connected = _check_rabbitmq(service.settings.rabbitmq_url)
+            minio_connected = _check_minio(service)
+            connected = (docker_connected, rabbitmq_connected, minio_connected)
+            overall = "healthy" if all(connected) else ("degraded" if any(connected) else "unavailable")
             body = json.dumps(
                 {
-                    "status": "ok",
+                    "status": overall,
                     "version": service.settings.version,
-                    "docker_connected": _check_docker(),
-                    "rabbitmq_connected": _check_rabbitmq(service.settings.rabbitmq_url),
-                    "minio_connected": _check_minio(service),
+                    "docker_connected": docker_connected,
+                    "rabbitmq_connected": rabbitmq_connected,
+                    "minio_connected": minio_connected,
                     "active_jobs": service.active_jobs,
                     "max_concurrency": service.settings.max_concurrency,
                 }

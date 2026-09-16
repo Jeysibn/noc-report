@@ -17,6 +17,7 @@ from app.core.storage import get_client
 from tests.conftest import auth_headers, make_user
 from tests.test_shifts import _create_active_shift
 from app.models.models import Incident, Shift, ShiftDefinition
+from app.models.models import Evidence
 
 
 def _purge_all(channel):
@@ -225,6 +226,42 @@ def test_report_snapshot_carries_per_incident_analysis_provenance(client, db_ses
     assert row["analysis_skill_snapshot_id"] == str(active_snapshot.id)
     assert row["analysis_skill_hash"] == active_snapshot.content_hash
     assert row["analysis_output_sha256"] == "a" * 64
+
+
+def test_report_snapshot_freezes_evidence_byte_identity(client, db_session):
+    make_user(db_session, "operator-snapshot", "NOC")
+    headers = auth_headers(client, "operator-snapshot")
+    shift = _create_active_shift(db_session)
+    incident_id = _create_incident(client, headers)
+    evidence = Evidence(
+        incident_id=incident_id,
+        evidence_type="ALERT_SCREENSHOT",
+        bucket="noc-evidence",
+        object_key="incidents/frozen/alert.png",
+        original_filename="alert.png",
+        mime_type="image/png",
+        byte_size=7,
+        sha256="a" * 64,
+        version_id="version-7",
+    )
+    db_session.add(evidence)
+    db_session.commit()
+    from app.api.v1.routers.reports import _build_snapshot
+    from app.skills.registry import resolve_active_snapshot
+
+    snapshot = _build_snapshot(db_session, shift, resolve_active_snapshot(db_session, "daily-alert-report"))
+    frozen = snapshot["incidents"][0]["screenshots"][0]
+    assert frozen == {
+        "evidence_id": str(evidence.id),
+        "evidence_type": "ALERT_SCREENSHOT",
+        "bucket": "noc-evidence",
+        "object_key": "incidents/frozen/alert.png",
+        "version_id": "version-7",
+        "sha256": "a" * 64,
+        "filename": "alert.png",
+        "content_type": "image/png",
+        "byte_size": 7,
+    }
 
 
 def test_poll_syncs_docx_once_job_completes_and_download_url_works(client, db_session):

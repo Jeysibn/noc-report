@@ -1,12 +1,14 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.routers import admin, analysis, analytics, auth, evidence, incidents, ocr, reports, search, shifts
 from app.core.config import assert_production_secrets_are_safe, settings
 from app.core.storage import ensure_buckets
 from app.outbox_worker import start_background_thread
+from app.operational_health import dependency_health
 
 
 @asynccontextmanager
@@ -43,7 +45,7 @@ app.add_middleware(
     # Support both names browsers commonly use for the local Vite server.
     # `localhost` and `127.0.0.1` are different browser origins even though
     # they resolve to the same machine.
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=settings.allowed_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -63,4 +65,19 @@ app.include_router(admin.router, prefix="/api/v1")
 
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok"}
+    return {"status": "healthy"}
+
+
+@app.get("/health/dependencies")
+def dependency_status() -> dict:
+    return dependency_health()
+
+
+@app.get("/health/readiness")
+def readiness() -> JSONResponse:
+    result = dependency_health()
+    # Ollama is optional while its feature flag is off; core persistence and
+    # queue/storage dependencies determine whether the API is ready.
+    core = [result["dependencies"][name]["status"] for name in ("postgresql", "rabbitmq", "minio")]
+    status_code = 200 if all(value == "healthy" for value in core) else 503
+    return JSONResponse(result, status_code=status_code)

@@ -361,6 +361,45 @@ def test_handle_delivery_routes_a_malformed_message_to_dlq_without_crashing(pg_c
     assert json.loads(dlq_body)["job_id"] == str(job_id)
 
 
+def test_handle_delivery_routes_unsupported_protocol_version_to_dlq(pg_conn, mq_channel):
+    job_id = uuid.uuid4()
+    payload = {
+        "protocol_version": 999,
+        "job_id": str(job_id),
+        "job_type": "log_triage",
+        "incident_id": None,
+        "object_refs": [],
+        "model": "claude-sonnet-5",
+        "effort": "medium",
+        "skill_name": "log-triage-summary",
+        "skill_version": "1",
+        "skill_hash": None,
+        "correlation_id": str(uuid.uuid4()),
+        "attempt": 1,
+    }
+    names = queue_names("log_triage")
+    mq_channel.confirm_delivery()
+    mq_channel.basic_publish(
+        exchange="noc.jobs",
+        routing_key=names["routing_key"],
+        body=json.dumps(payload).encode("utf-8"),
+    )
+    method, properties, body = mq_channel.basic_get(names["main"])
+    assert method is not None
+    BridgeService(SETTINGS)._handle_delivery(
+        mq_channel,
+        method,
+        properties=properties,
+        body=body,
+        pg_conn=pg_conn,
+        minio_client=None,
+        job_type="log_triage",
+    )
+    dlq_method, _, dlq_body = mq_channel.basic_get(names["dlq"])
+    assert dlq_method is not None
+    assert json.loads(dlq_body)["protocol_version"] == 999
+
+
 # -- full pipeline: real RabbitMQ + Postgres + MinIO + Docker --------------
 
 
@@ -386,6 +425,7 @@ def test_end_to_end_log_triage_job(pg_conn, minio_client, mq_channel):
         minio_client.upload_file(str(src), bucket, key)
 
     payload = {
+        "protocol_version": 1,
         "job_id": str(job_id),
         "job_type": "log_triage",
         "incident_id": "INC-TEST",
@@ -484,6 +524,7 @@ def test_end_to_end_unsupported_job_type_goes_to_dlq(pg_conn, minio_client, mq_c
     snapshot_id, skill_hash = _insert_job_row(pg_conn, job_id, "log_triage")
 
     payload = {
+        "protocol_version": 1,
         "job_id": str(job_id),
         "job_type": "log_triage",
         "incident_id": None,
@@ -579,6 +620,7 @@ def test_end_to_end_daily_report_job(pg_conn, minio_client, mq_channel):
         minio_client.upload_file(str(src), bucket, key)
 
     payload = {
+        "protocol_version": 1,
         "job_id": str(job_id),
         "job_type": "daily_report",
         "incident_id": None,

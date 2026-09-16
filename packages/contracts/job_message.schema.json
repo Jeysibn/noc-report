@@ -5,6 +5,7 @@
   "description": "Skill Runtime mission Phase 14: the canonical wire shape of a job message published to RabbitMQ by apps/api (app/core/queue.py::build_job_message, persisted verbatim into an OutboxEvent.payload by app/jobs.py::enqueue_job) and consumed by the bridge (bridge/noc_bridge/service.py::BridgeService._handle_delivery). Both producer and consumer are Python in this monorepo, so this is a JSON Schema rather than a TypeScript type (packages/contracts/src/index.ts stays the placeholder for apps/web-facing contracts) — each side loads and validates against this same file rather than re-deriving the shape by hand. Changing the protocol means editing this file plus both validating call sites; it is the single source of truth for what a job message contains.",
   "type": "object",
   "required": [
+    "protocol_version",
     "job_id",
     "job_type",
     "incident_id",
@@ -19,7 +20,7 @@
   ],
   "additionalProperties": false,
   "properties": {
-    "protocol_version": { "type": "string", "minLength": 1 },
+    "protocol_version": { "type": "integer", "const": 1 },
     "job_id": { "type": "string", "format": "uuid" },
     "job_type": { "type": "string", "minLength": 1 },
     "incident_id": { "type": ["string", "null"] },
@@ -31,7 +32,8 @@
         "properties": {
           "bucket": { "type": "string", "minLength": 1 },
           "key": { "type": "string", "minLength": 1 },
-          "sha256": { "type": ["string", "null"] }
+          "sha256": { "type": ["string", "null"] },
+          "version_id": { "type": ["string", "null"] }
         },
         "additionalProperties": true
       }

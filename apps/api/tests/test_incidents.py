@@ -94,11 +94,11 @@ def test_update_incident(client, db_session):
 
     updated = client.patch(
         f"/api/v1/incidents/{created['id']}",
-        json={"status": "resolved"},
+        json={"status": "recovered"},
         headers=headers,
     )
     assert updated.status_code == 200
-    assert updated.json()["status"] == "resolved"
+    assert updated.json()["status"] == "recovered"
 
 
 def test_delete_incident_requires_delete_permission(client, db_session):

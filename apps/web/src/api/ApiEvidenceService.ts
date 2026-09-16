@@ -12,15 +12,21 @@ interface RawEvidence {
  * multipart POST (see apps/api/app/api/v1/routers/evidence.py):
  *   1. ask the API for a presigned upload URL
  *   2. PUT the file bytes straight to MinIO at that URL
- *   3. tell the API the upload completed, so it can create the Evidence row
+ *   3. tell the API the opaque upload intent completed, so it can create the
+ *      Evidence row from server-owned storage identity
  */
 export class ApiEvidenceService implements EvidenceService {
   async upload(incidentId: string, file: File, evidenceType: EvidenceType): Promise<EvidenceRecord> {
-    const uploadReq = await httpRequest<{ upload_url: string; bucket: string; object_key: string }>(
+    const uploadReq = await httpRequest<{ upload_id: string; upload_url: string; expires_at: string }>(
       `/api/v1/incidents/${incidentId}/evidence/upload-url`,
       {
         method: "POST",
-        body: { evidence_type: evidenceType, filename: file.name, content_type: file.type || undefined },
+        body: {
+          evidence_type: evidenceType,
+          filename: file.name,
+          content_type: file.type || undefined,
+          expected_byte_size: file.size,
+        },
       },
     );
 
@@ -29,11 +35,7 @@ export class ApiEvidenceService implements EvidenceService {
     const complete = await httpRequest<RawEvidence>(`/api/v1/incidents/${incidentId}/evidence/complete`, {
       method: "POST",
       body: {
-        evidence_type: evidenceType,
-        bucket: uploadReq.bucket,
-        object_key: uploadReq.object_key,
-        original_filename: file.name,
-        mime_type: file.type || undefined,
+        upload_id: uploadReq.upload_id,
       },
     });
 

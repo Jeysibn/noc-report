@@ -53,6 +53,22 @@ def test_create_user_duplicate_username_conflicts(client, db_session, seeded):
     assert resp.status_code == 409
 
 
+def test_unknown_role_assignment_is_rejected(client, db_session, seeded):
+    make_user(db_session, "root", "Admin")
+    headers = auth_headers(client, "root")
+    response = client.post(
+        "/api/v1/admin/users",
+        json={
+            "username": "badrole",
+            "display_name": "Bad Role",
+            "password": "pw123456",
+            "role_names": ["DoesNotExist"],
+        },
+        headers=headers,
+    )
+    assert response.status_code == 400
+
+
 def test_update_user_roles(client, db_session, seeded):
     make_user(db_session, "root", "Admin")
     headers = auth_headers(client, "root")
@@ -183,6 +199,22 @@ def test_update_shift_definition(client, db_session, seeded):
 
     audit = client.get("/api/v1/admin/audit", headers=headers).json()
     assert any(e["action"] == "shift_definition.update" for e in audit)
+
+
+def test_shift_definition_rejects_invalid_time_and_timezone(client, db_session, seeded):
+    make_user(db_session, "root", "Admin")
+    headers = auth_headers(client, "root")
+    day = next(d for d in client.get("/api/v1/admin/shift-definitions", headers=headers).json() if d["name"] == "Day")
+    assert client.patch(
+        f"/api/v1/admin/shift-definitions/{day['id']}",
+        json={"start_time": "not-a-time"},
+        headers=headers,
+    ).status_code == 422
+    assert client.patch(
+        f"/api/v1/admin/shift-definitions/{day['id']}",
+        json={"timezone": "Mars/Olympus"},
+        headers=headers,
+    ).status_code == 422
 
 
 def test_storage_status(client, db_session, seeded):

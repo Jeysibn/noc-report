@@ -21,6 +21,7 @@ from noc_bridge.report_document import (
     Paragraph,
     ReportDocument,
     Screenshot,
+    screenshot_from_dict,
 )
 from noc_bridge.analysis_presentation import build_analysis_presentation
 from noc_bridge.time_projection import project_shift_time
@@ -88,7 +89,7 @@ def _incident_block(incident: dict, number: int, *, canonical: bool = False) -> 
     if incident.get("grafana_url"):
         links.append(Link("Grafana", incident["grafana_url"], text="Grafana", prefix="Grafana Link"))
     screenshots = tuple(
-        Screenshot(item["bucket"], item["object_key"], item.get("filename"))
+        screenshot_from_dict(item)
         for item in incident.get("screenshots") or []
         if isinstance(item, dict) and item.get("bucket") and item.get("object_key")
     )
@@ -180,7 +181,7 @@ def _analysis_block(incident: dict, plan_node: dict | None, number: int) -> Anal
         analysis_run_id=str(run_id),
         provenance=provenance,
         screenshots=tuple(
-            Screenshot(item["bucket"], item["object_key"], item.get("filename"))
+            screenshot_from_dict(item)
             for item in (incident.get("screenshots") or [])
             if isinstance(item, dict) and item.get("bucket") and item.get("object_key")
         ),

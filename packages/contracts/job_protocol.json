@@ -1,0 +1,13 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://noc-report.internal/contracts/job_protocol.json",
+  "protocol_version": 1,
+  "job_types": ["log_triage", "daily_report"],
+  "exchanges": {
+    "jobs": "noc.jobs",
+    "events": "noc.events",
+    "dead_letter": "noc.dlx"
+  },
+  "retry_ttl_ms": 30000,
+  "events_queue": "noc.events.log"
+}

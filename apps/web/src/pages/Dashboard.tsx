@@ -9,6 +9,14 @@ import { Table, Thead, Tbody, Tr, Th, Td } from "@/components/ui/Table";
 import { AlertTriangle, FileText, BarChart, Upload, Search } from "@/components/ui/icons";
 import { incidentStatusMap, formatTime } from "@/lib/incidentStatus";
 import { Link } from "react-router-dom";
+import { useOperationalHealth } from "@/lib/operationalHealth";
+
+function healthPill(status: "healthy" | "degraded" | "unavailable" | "unknown") {
+  return {
+    status: status === "healthy" ? "good" : status === "degraded" ? "warning" : status === "unavailable" ? "critical" : "neutral",
+    label: status === "healthy" ? "Dependencies healthy" : status === "degraded" ? "Dependencies degraded" : status === "unavailable" ? "Dependencies unavailable" : "Dependencies unknown",
+  } as const;
+}
 
 /**
  * Dashboard (Milestone 2). Current shift card, operational summary,
@@ -19,6 +27,8 @@ export function Dashboard() {
   const [shift, setShift] = useState<Shift | null>(null);
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [incidents, setIncidents] = useState<Incident[]>([]);
+  const health = useOperationalHealth();
+  const healthStatus = healthPill(health.data?.status ?? "unknown");
 
   useEffect(() => {
     shiftService.getCurrentShift().then(setShift);
@@ -33,7 +43,7 @@ export function Dashboard() {
           <h1 className="text-xl font-semibold">Dashboard</h1>
           <p className="text-sm text-muted">Current shift and NOC operational summary.</p>
         </div>
-        <StatusPill status="good" label="Claude Bridge · RabbitMQ · MinIO all online" />
+        <StatusPill status={healthStatus.status} label={healthStatus.label} />
       </div>
 
       {shift && (

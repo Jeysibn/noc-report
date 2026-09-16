@@ -61,6 +61,15 @@ def _user_out(user: User) -> UserOut:
     )
 
 
+def _resolve_roles(db: Session, role_names: list[str]) -> list[Role]:
+    roles = list(db.scalars(select(Role).where(Role.name.in_(role_names))))
+    found = {role.name for role in roles}
+    unknown = sorted(set(role_names) - found)
+    if unknown:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Unknown roles: {', '.join(unknown)}")
+    return roles
+
+
 @router.get("/users", response_model=list[UserOut])
 def list_users(
     db: Session = Depends(get_db),
@@ -79,7 +88,7 @@ def create_user(
     if db.scalar(select(User).where(User.username == body.username)) is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, "Username already exists")
 
-    roles = list(db.scalars(select(Role).where(Role.name.in_(body.role_names))))
+    roles = _resolve_roles(db, body.role_names)
     user = User(
         username=body.username,
         display_name=body.display_name,
@@ -118,7 +127,7 @@ def update_user(
     for field, value in data.items():
         setattr(user, field, value)
     if role_names is not None:
-        user.roles = list(db.scalars(select(Role).where(Role.name.in_(role_names))))
+        user.roles = _resolve_roles(db, role_names)
 
     record_audit(
         db,

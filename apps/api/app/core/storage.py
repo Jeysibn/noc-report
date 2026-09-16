@@ -15,6 +15,8 @@ key layout is fixed early) but not yet written to — that's Milestones
 """
 
 import hashlib
+import pathlib
+import uuid
 
 import boto3
 from botocore.client import Config as BotoConfig
@@ -58,7 +60,7 @@ def ensure_buckets() -> None:
             )
 
 
-def evidence_object_key(incident_id: str, evidence_type: str, filename: str) -> str:
+def evidence_object_key(incident_id: str, evidence_type: str, filename: str, upload_id: uuid.UUID) -> str:
     """Layout from master plan §25: incidents/{incident_id}/{alert|logs|supporting}/..."""
     subdir = {
         "ALERT_SCREENSHOT": "alert",
@@ -67,7 +69,10 @@ def evidence_object_key(incident_id: str, evidence_type: str, filename: str) -> 
         "SUPPORTING_DOCUMENT": "supporting",
         "OTHER": "supporting",
     }.get(evidence_type, "supporting")
-    return f"incidents/{incident_id}/{subdir}/{filename}"
+    # The upload intent, not the original filename, is the object identity.
+    # The basename is retained only for operator-friendly storage browsing.
+    safe_filename = pathlib.PurePath(filename.replace("\\", "/")).name.replace("/", "_")
+    return f"incidents/{incident_id}/{subdir}/{upload_id}-{safe_filename}"
 
 
 def presigned_upload_url(bucket: str, key: str, content_type: str | None = None) -> str:
@@ -79,26 +84,50 @@ def presigned_upload_url(bucket: str, key: str, content_type: str | None = None)
     )
 
 
-def presigned_download_url(bucket: str, key: str) -> str:
+def presigned_download_url(bucket: str, key: str, *, version_id: str | None = None) -> str:
+    params: dict = {"Bucket": bucket, "Key": key}
+    if version_id:
+        params["VersionId"] = version_id
     return get_client().generate_presigned_url(
         "get_object",
-        Params={"Bucket": bucket, "Key": key},
+        Params=params,
         ExpiresIn=settings.minio_presigned_url_expiry_seconds,
     )
 
 
-def head_object(bucket: str, key: str) -> dict:
+def head_object(bucket: str, key: str, *, version_id: str | None = None) -> dict:
     """Raises botocore.exceptions.ClientError if the object doesn't exist —
     used to verify an upload actually landed before recording metadata."""
-    return get_client().head_object(Bucket=bucket, Key=key)
+    params: dict = {"Bucket": bucket, "Key": key}
+    if version_id:
+        params["VersionId"] = version_id
+    return get_client().head_object(**params)
 
 
-def delete_object(bucket: str, key: str) -> None:
-    get_client().delete_object(Bucket=bucket, Key=key)
+def delete_object(bucket: str, key: str, *, version_id: str | None = None) -> None:
+    params: dict = {"Bucket": bucket, "Key": key}
+    if version_id:
+        params["VersionId"] = version_id
+    get_client().delete_object(**params)
 
 
-def get_object_bytes(bucket: str, key: str) -> bytes:
-    return get_client().get_object(Bucket=bucket, Key=key)["Body"].read()
+def get_object_bytes(bucket: str, key: str, *, version_id: str | None = None) -> bytes:
+    params: dict = {"Bucket": bucket, "Key": key}
+    if version_id:
+        params["VersionId"] = version_id
+    return get_client().get_object(**params)["Body"].read()
+
+
+def sha256_of_object(bucket: str, key: str, *, version_id: str | None = None) -> str:
+    """Hash the exact storage version without trusting client metadata."""
+    params: dict = {"Bucket": bucket, "Key": key}
+    if version_id:
+        params["VersionId"] = version_id
+    body = get_client().get_object(**params)["Body"]
+    digest = hashlib.sha256()
+    for chunk in iter(lambda: body.read(65536), b""):
+        digest.update(chunk)
+    return digest.hexdigest()
 
 
 def sha256_of_bytes(data: bytes) -> str:

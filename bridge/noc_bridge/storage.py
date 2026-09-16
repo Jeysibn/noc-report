@@ -37,13 +37,18 @@ class ChecksumMismatch(RuntimeError):
 
 
 def download_object(
-    client, *, bucket: str, object_key: str, dest_path: pathlib.Path, expected_sha256: str | None
+    client, *, bucket: str, object_key: str, dest_path: pathlib.Path,
+    expected_sha256: str | None, version_id: str | None = None
 ) -> None:
     """§27 step 5-6: download then validate checksum before the sandbox ever
     sees the file — a corrupted/tampered object must never reach the
     container."""
     dest_path.parent.mkdir(parents=True, exist_ok=True)
-    client.download_file(bucket, object_key, str(dest_path))
+    extra_args = {"VersionId": version_id} if version_id else None
+    if extra_args:
+        client.download_file(bucket, object_key, str(dest_path), ExtraArgs=extra_args)
+    else:
+        client.download_file(bucket, object_key, str(dest_path))
 
     if expected_sha256:
         actual = sha256_of_file(dest_path)

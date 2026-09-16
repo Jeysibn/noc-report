@@ -241,6 +241,39 @@ class Evidence(Base):
     )
 
 
+class EvidenceUploadIntent(Base):
+    """Server-owned identity for one direct-to-MinIO upload attempt.
+
+    The browser receives only ``id`` and a presigned URL.  Completion looks
+    up this row and therefore cannot redirect an upload to a client-selected
+    bucket or object key.
+    """
+
+    __tablename__ = "evidence_upload_intents"
+    __table_args__ = (
+        UniqueConstraint("bucket", "object_key", name="uq_evidence_upload_intent_object"),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    incident_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("incidents.id"), nullable=False
+    )
+    created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    bucket: Mapped[str] = mapped_column(String(100), nullable=False)
+    object_key: Mapped[str] = mapped_column(String(1000), nullable=False)
+    evidence_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    original_filename: Mapped[str] = mapped_column(String(500), nullable=False)
+    expected_content_type: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    expected_byte_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    state: Mapped[str] = mapped_column(String(20), nullable=False, default="OPEN")
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    evidence_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("evidence.id", ondelete="SET NULL"), nullable=True, unique=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 # --- OCR Runs (master plan §22.7, §12) --------------------------------------
 
 

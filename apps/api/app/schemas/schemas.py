@@ -1,8 +1,9 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, time
 from typing import Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class LoginRequest(BaseModel):
@@ -34,15 +35,15 @@ class UserOut(BaseModel):
 
 
 class UserCreate(BaseModel):
-    username: str
-    display_name: str
+    username: str = Field(min_length=3, max_length=100)
+    display_name: str = Field(min_length=1, max_length=200)
     email: str | None = None
-    password: str
+    password: str = Field(min_length=8, max_length=200)
     role_names: list[str] = []
 
 
 class UserUpdate(BaseModel):
-    display_name: str | None = None
+    display_name: str | None = Field(default=None, min_length=1, max_length=200)
     email: str | None = None
     enabled: bool | None = None
     role_names: list[str] | None = None
@@ -82,6 +83,26 @@ class ShiftDefinitionUpdate(BaseModel):
     timezone: str | None = None
     enabled: bool | None = None
 
+    @field_validator("start_time", "end_time")
+    @classmethod
+    def validate_clock_time(cls, value: str | None) -> str | None:
+        if value is not None:
+            try:
+                time.fromisoformat(value)
+            except ValueError as exc:
+                raise ValueError("time must use HH:MM[:SS] format") from exc
+        return value
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, value: str | None) -> str | None:
+        if value is not None:
+            try:
+                ZoneInfo(value)
+            except ZoneInfoNotFoundError as exc:
+                raise ValueError("timezone must be a valid IANA timezone") from exc
+        return value
+
 
 class ShiftOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -106,9 +127,9 @@ class ShiftOpen(BaseModel):
 
 
 class IncidentCreate(BaseModel):
-    title: str
-    service: str
-    environment: str
+    title: str = Field(min_length=1, max_length=500)
+    service: str = Field(min_length=1, max_length=200)
+    environment: str = Field(min_length=1, max_length=100)
     status: Literal["open", "investigating", "recovered"] = "open"
     alert_source: str | None = None
     triggered_at: datetime
@@ -120,8 +141,8 @@ class IncidentCreate(BaseModel):
 
 
 class IncidentUpdate(BaseModel):
-    title: str | None = None
-    status: str | None = None
+    title: str | None = Field(default=None, min_length=1, max_length=500)
+    status: Literal["open", "investigating", "recovered"] | None = None
     recovered_at: datetime | None = None
     notes: str | None = None
 
@@ -162,24 +183,24 @@ class IncidentPage(BaseModel):
 
 
 class EvidenceUploadUrlRequest(BaseModel):
-    evidence_type: str  # ALERT_SCREENSHOT | LOG | GRAFANA_SCREENSHOT | SUPPORTING_DOCUMENT | OTHER
-    filename: str
+    model_config = ConfigDict(extra="forbid")
+
+    evidence_type: Literal["ALERT_SCREENSHOT", "LOG", "GRAFANA_SCREENSHOT", "SUPPORTING_DOCUMENT", "OTHER"]
+    filename: str = Field(min_length=1, max_length=500)
     content_type: str | None = None
+    expected_byte_size: int | None = Field(default=None, ge=0)
 
 
 class EvidenceUploadUrlResponse(BaseModel):
+    upload_id: uuid.UUID
     upload_url: str
-    bucket: str
-    object_key: str
+    expires_at: datetime
 
 
 class EvidenceCompleteRequest(BaseModel):
-    evidence_type: str
-    bucket: str
-    object_key: str
-    original_filename: str
-    mime_type: str | None = None
-    sha256: str | None = None
+    model_config = ConfigDict(extra="forbid")
+
+    upload_id: uuid.UUID
 
 
 class EvidenceOut(BaseModel):

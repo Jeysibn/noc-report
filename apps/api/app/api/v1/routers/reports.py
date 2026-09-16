@@ -47,6 +47,22 @@ router = APIRouter(tags=["reports"])
 SKILL_NAME = "daily-alert-report"
 
 
+def _frozen_evidence_identity(evidence: Evidence) -> dict:
+    """Serialize the complete byte identity of evidence into a report
+    snapshot. Rendering may only resolve these frozen coordinates later."""
+    return {
+        "evidence_id": str(evidence.id),
+        "evidence_type": evidence.evidence_type,
+        "bucket": evidence.bucket,
+        "object_key": evidence.object_key,
+        "version_id": evidence.version_id,
+        "sha256": evidence.sha256,
+        "filename": evidence.original_filename,
+        "content_type": evidence.mime_type,
+        "byte_size": evidence.byte_size,
+    }
+
+
 def _get_shift_or_404(db: Session, shift_id: uuid.UUID) -> Shift:
     shift = db.get(Shift, shift_id)
     if shift is None:
@@ -131,8 +147,9 @@ def _build_snapshot(db: Session, shift: Shift, report_skill_snapshot) -> dict:
                 "teams_url": incident.teams_url,
                 "grafana_url": incident.grafana_url,
                 "log_filename": log_evidence.original_filename if log_evidence else None,
+                "log_evidence": _frozen_evidence_identity(log_evidence) if log_evidence else None,
                 "screenshots": [
-                    {"bucket": e.bucket, "object_key": e.object_key, "filename": e.original_filename}
+                    _frozen_evidence_identity(e)
                     for e in screenshot_evidence
                 ],
                 "analysis": run.result_json if (run and run.result_json) else None,
@@ -497,8 +514,13 @@ def get_report_document_screenshot(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No such screenshot")
     entry = screenshots[index]
     try:
-        image_bytes = get_object_bytes(entry["bucket"], entry["object_key"])
+        image_bytes = get_object_bytes(
+            entry["bucket"], entry["object_key"], version_id=entry.get("version_id")
+        )
     except ClientError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Could not fetch screenshot from storage") from exc
+    expected_sha256 = entry.get("sha256")
+    if expected_sha256 and sha256_of_bytes(image_bytes) != expected_sha256:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Screenshot integrity check failed")
     content_type = mimetypes.guess_type(entry.get("filename") or "")[0] or "application/octet-stream"
     return Response(content=image_bytes, media_type=content_type)

@@ -46,7 +46,7 @@ from noc_bridge.report_document import (
 )
 from noc_bridge.failures import EvidenceIntegrityError, EvidenceRetrievalError
 
-ScreenshotFetcher = Callable[[str, str], bytes | None]
+ScreenshotFetcher = Callable[..., bytes | None]
 
 
 def _set_east_asia_font(style, name: str = "Microsoft YaHei") -> None:
@@ -124,7 +124,12 @@ def _add_link_paragraph(doc: Document, link: Link) -> None:
 def _add_screenshot(doc: Document, shot: Screenshot, screenshot_fetcher: ScreenshotFetcher | None) -> None:
     if screenshot_fetcher is None:
         raise EvidenceIntegrityError(f"no screenshot fetcher for frozen evidence: {shot.filename or shot.object_key}")
-    data = screenshot_fetcher(shot.bucket, shot.object_key)
+    try:
+        data = screenshot_fetcher(shot.bucket, shot.object_key, shot.version_id, shot.sha256)
+    except TypeError:
+        # Compatibility for renderer tests and historical adapters that only
+        # understood the pre-versioned two-argument seam.
+        data = screenshot_fetcher(shot.bucket, shot.object_key)
     if not data:
         raise EvidenceRetrievalError(f"frozen screenshot could not be retrieved: {shot.bucket}/{shot.object_key}")
     try:

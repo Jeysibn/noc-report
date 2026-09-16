@@ -2,6 +2,7 @@ import { Search, Bell } from "@/components/ui/icons";
 import { StatusPill } from "@/components/ui/StatusPill";
 import { Button } from "@/components/ui/Button";
 import { useCurrentUser, logout } from "@/lib/session";
+import { useOperationalHealth } from "@/lib/operationalHealth";
 
 /**
  * Top bar: search (Ctrl K), notification bell, theme toggle, user menu.
@@ -12,6 +13,12 @@ import { useCurrentUser, logout } from "@/lib/session";
  */
 export function Topbar() {
   const user = useCurrentUser();
+  const health = useOperationalHealth();
+  const bridgeStatus = health.data?.dependencies.claude_bridge?.status ?? "unknown";
+  const bridgePill = {
+    status: bridgeStatus === "healthy" ? "good" : bridgeStatus === "degraded" ? "warning" : bridgeStatus === "unavailable" ? "critical" : "neutral",
+    label: bridgeStatus === "healthy" ? "Bridge healthy" : bridgeStatus === "degraded" ? "Bridge degraded" : bridgeStatus === "unavailable" ? "Bridge unavailable" : "Bridge unknown",
+  } as const;
   const initials = user
     ? user.displayName
         .split(" ")
@@ -35,7 +42,7 @@ export function Topbar() {
       </div>
 
       <div className="flex items-center gap-4">
-        <StatusPill status="good" label="Bridge online" />
+        <StatusPill status={bridgePill.status} label={bridgePill.label} />
         <button
           type="button"
           aria-label="Notifications"

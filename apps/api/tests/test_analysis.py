@@ -6,7 +6,6 @@ suite verifies the API's own slice: it enqueues a real job and, once a
 result artifact exists in noc-job-artifacts (simulating what the bridge
 would have written), syncs it into the AnalysisRun row on poll.
 """
-import hashlib
 import json
 import time
 from datetime import datetime, timezone
@@ -59,14 +58,7 @@ def _upload_log_evidence(client, headers, incident_id: str) -> dict:
 
     complete_resp = client.post(
         f"/api/v1/incidents/{incident_id}/evidence/complete",
-        json={
-            "evidence_type": "LOG",
-            "bucket": body["bucket"],
-            "object_key": body["object_key"],
-            "original_filename": "app.log",
-            "mime_type": "text/plain",
-            "sha256": hashlib.sha256(log_bytes).hexdigest(),
-        },
+        json={"upload_id": body["upload_id"]},
         headers=headers,
     )
     assert complete_resp.status_code == 201
