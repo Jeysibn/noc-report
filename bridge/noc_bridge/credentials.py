@@ -1,39 +1,62 @@
-"""Prepares a sandbox-mountable copy of the operator's Claude Code OAuth
-credential (master plan §28: "use minimum required credentials/config",
-"never mount general host home directory").
+"""Manage the isolated Claude Code OAuth credential used by sandboxes.
 
-The source `.credentials.json` is normally mode 0600, owned by the host
-user. Rather than loosening the real file's permissions or mounting the
-operator's actual `~/.claude` directory, this copies just the one file into
-a fresh, process-owned temp directory, and only that copy is ever mounted
-read-only into a container.
+The host source is normally mode 0600. The bridge never mounts the
+operator's ``~/.claude`` directory. Instead it maintains a bridge-owned
+credential directory containing only ``.credentials.json``. The directory
+is writable by the sandbox because Claude Code must persist OAuth refresh
+state, but it is isolated from the rest of the host home directory.
 """
 from __future__ import annotations
 
-import atexit
+import os
 import pathlib
 import shutil
 import tempfile
 
 
-def prepare_sandbox_credentials(source: pathlib.Path) -> pathlib.Path:
+def prepare_sandbox_credentials(
+    source: pathlib.Path,
+    persistent_dir: pathlib.Path | None = None,
+) -> pathlib.Path:
+    """Return a sandbox-mountable credential directory.
+
+    The bridge passes a persistent directory so OAuth refreshes survive
+    sandbox and bridge restarts. A newer host login replaces the cache;
+    otherwise a newer cached copy is retained because it may contain a
+    refresh performed by Claude Code inside a previous sandbox.
+
+    Omitting ``persistent_dir`` retains the disposable copy behavior used by
+    isolated callers and tests.
+    """
     if not source.exists():
         raise FileNotFoundError(
             f"Claude Code credentials not found at {source} — log in with "
             f"`claude` on this host first."
         )
 
-    tmp_dir = pathlib.Path(tempfile.mkdtemp(prefix="noc-bridge-claude-creds-"))
-    # mkdtemp defaults to 0700, owned by the host user — that alone blocks
-    # the sandbox's uid 10001 from traversing into the directory at all,
-    # regardless of the file's own mode. The container is neither the
-    # owner nor a group member, so only the "other" bits can grant it
-    # access; this holds a live OAuth credential, so grant exactly
-    # traverse+read for "other" (0o705/0o604) and zero "group" bits —
-    # no other local group has any reason to reach a copied secret.
+    cleanup = persistent_dir is None
+    tmp_dir = (
+        pathlib.Path(tempfile.mkdtemp(prefix="noc-bridge-claude-creds-"))
+        if cleanup
+        else persistent_dir.expanduser()
+    )
+    tmp_dir.mkdir(parents=True, exist_ok=True)
     tmp_dir.chmod(0o700)
     dest = tmp_dir / ".credentials.json"
-    shutil.copy2(source, dest)
+    should_copy = not dest.exists() or source.stat().st_mtime_ns > dest.stat().st_mtime_ns
+    if should_copy:
+        fd, temporary_name = tempfile.mkstemp(prefix=".credentials.", dir=tmp_dir)
+        os.close(fd)
+        temporary = pathlib.Path(temporary_name)
+        try:
+            shutil.copyfile(source, temporary)
+            temporary.chmod(0o600)
+            os.replace(temporary, dest)
+        finally:
+            temporary.unlink(missing_ok=True)
     dest.chmod(0o600)
-    atexit.register(shutil.rmtree, tmp_dir, ignore_errors=True)
+    if cleanup:
+        import atexit
+
+        atexit.register(shutil.rmtree, tmp_dir, ignore_errors=True)
     return tmp_dir

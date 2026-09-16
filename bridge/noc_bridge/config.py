@@ -45,6 +45,10 @@ class BridgeSettings(BaseSettings):
     # ~/.claude (§28: "use minimum required credentials/config").
     claude_binary_path: pathlib.Path = pathlib.Path.home() / ".local/bin/claude"
     claude_credentials_path: pathlib.Path = pathlib.Path.home() / ".claude/.credentials.json"
+    # Claude Code may refresh its OAuth access token during a sandbox run.
+    # Keep that refreshed copy across jobs and bridge restarts without
+    # mounting the operator's full ~/.claude directory.
+    claude_credentials_cache_path: pathlib.Path = pathlib.Path.home() / ".cache/noc-report/claude"
     claude_model_default: str = "claude-sonnet-5"
     claude_max_budget_usd: float = 0.50
     claude_cli_timeout_seconds: int = 280

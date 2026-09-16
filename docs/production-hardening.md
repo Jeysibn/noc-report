@@ -61,6 +61,14 @@ Claude credentials, or a non-serial capacity setting. Its callback is
 intentionally serial, so `max_concurrent_jobs=1`; RabbitMQ prefetch is not
 worker parallelism.
 
+Claude OAuth credentials are copied into the bridge-owned
+`~/.cache/noc-report/claude` directory by default. Claude Code may write token
+refresh state there, so the directory is mode `0700` and the credential file
+is mode `0600`; the full host `~/.claude` directory is never mounted. A newer
+host login replaces the cache, while a refreshed cache survives bridge and
+sandbox restarts. If the refresh token is revoked or expired, an interactive
+`claude auth login` remains necessary.
+
 Set `CORS_ORIGINS` to the explicit comma-separated HTTPS web origin(s) in a
 deployed environment; the local Vite origins are development defaults only.
 

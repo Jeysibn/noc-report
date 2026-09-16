@@ -188,10 +188,8 @@ class BridgeService:
         # .../versions/2.1.265) that must be followed to a real file
         # before bind-mounting, since a bind-mounted symlink would dangle
         # inside the container (its host-absolute target doesn't exist
-        # there). The credential copy is likewise prepared once; it's a
-        # short-lived OAuth token file, and re-copying it per job buys
-        # nothing since the source only changes on the operator's own
-        # `claude` re-login.
+        # there). The credential directory is refreshed before each Claude
+        # job so OAuth refresh state can survive sandbox and bridge restarts.
         self._claude_binary_real_path = self.settings.claude_binary_path.resolve()
         self._claude_creds_dir = None
         # Reliability mission Batch A (idempotent job lifecycle): identifies
@@ -206,10 +204,10 @@ class BridgeService:
         self._last_max_concurrency: int | None = None
 
     def _ensure_claude_creds_dir(self) -> pathlib.Path:
-        if self._claude_creds_dir is None:
-            self._claude_creds_dir = prepare_sandbox_credentials(
-                self.settings.claude_credentials_path
-            )
+        self._claude_creds_dir = prepare_sandbox_credentials(
+            self.settings.claude_credentials_path,
+            self.settings.claude_credentials_cache_path,
+        )
         return self._claude_creds_dir
 
     # -- job processing -----------------------------------------------
@@ -405,10 +403,13 @@ class BridgeService:
                         # by that UID. The image's /home/sandbox directory is
                         # owned by UID 10001 and intentionally 0700, so it is
                         # not traversable after that user override. Put the
-                        # isolated read-only credential directory under the
-                        # sandbox tmpfs instead and point HOME there.
+                        # isolated credential directory under the sandbox
+                        # tmpfs instead and point HOME there. The bind is
+                        # writable only so Claude Code can persist OAuth
+                        # refresh state; no host ~/.claude directory is
+                        # exposed.
                         "bind": "/tmp/claude-home/.claude",
-                        "mode": "ro",
+                        "mode": "rw",
                     },
                 },
                 environment={

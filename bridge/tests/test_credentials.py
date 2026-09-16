@@ -43,3 +43,27 @@ def test_prepare_sandbox_credentials_raises_when_source_missing():
         missing = Path(source_dir) / "does-not-exist.json"
         with pytest.raises(FileNotFoundError):
             prepare_sandbox_credentials(missing)
+
+
+def test_persistent_credentials_retain_refresh_and_host_relogin_wins(tmp_path: Path):
+    source = tmp_path / "source.json"
+    cache = tmp_path / "cache"
+    source.write_text('{"token": "initial"}')
+    source.chmod(0o600)
+
+    prepare_sandbox_credentials(source, cache)
+    assert (cache / ".credentials.json").read_text() == '{"token": "initial"}'
+
+    # A sandbox refresh changes only its persistent copy. A later bridge
+    # process must not overwrite it with the older host source.
+    (cache / ".credentials.json").write_text('{"token": "refreshed"}')
+    prepare_sandbox_credentials(source, cache)
+    assert (cache / ".credentials.json").read_text() == '{"token": "refreshed"}'
+
+    # A later explicit host login has a newer mtime and becomes authoritative.
+    import time
+
+    time.sleep(0.01)
+    source.write_text('{"token": "relogged"}')
+    prepare_sandbox_credentials(source, cache)
+    assert (cache / ".credentials.json").read_text() == '{"token": "relogged"}'
