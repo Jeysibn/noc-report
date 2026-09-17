@@ -108,7 +108,6 @@ def test_two_concurrent_report_allocations_are_four_and_five(db_session, seeded)
                 snapshot_id=snapshot.id,
                 job_id=job.id,
                 version=version,
-                status="QUEUED",
             )
         )
     db_session.commit()
@@ -147,7 +146,6 @@ def test_two_concurrent_report_allocations_are_four_and_five(db_session, seeded)
                     snapshot_id=snapshot.id,
                     job_id=job.id,
                     version=version,
-                    status="QUEUED",
                 )
             )
             session.commit()

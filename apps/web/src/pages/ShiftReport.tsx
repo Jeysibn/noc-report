@@ -66,6 +66,7 @@ export function ShiftReport() {
   const shiftId = shift?.id;
 
   const canGenerateReport = hasPermission("report.generate");
+  const canReadReport = hasPermission("report.read");
   const canDownload = hasPermission("report.download");
   const canManageShift = hasPermission("shift.operate");
   const [openingShift, setOpeningShift] = useState(false);
@@ -412,25 +413,25 @@ export function ShiftReport() {
                     status={jobPill[v.status].status}
                     label={jobPill[v.status].label}
                   />
+                  {v.previewable && canReadReport && (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() =>
+                        setPreviewingId((id) => (id === v.id ? null : v.id))
+                      }
+                    >
+                      {previewingId === v.id ? "Hide preview" : "Preview"}
+                    </Button>
+                  )}
                   {v.downloadable && canDownload && (
-                    <>
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        onClick={() =>
-                          setPreviewingId((id) => (id === v.id ? null : v.id))
-                        }
-                      >
-                        {previewingId === v.id ? "Hide preview" : "Preview"}
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        onClick={() => download(v.id)}
-                      >
-                        Download
-                      </Button>
-                    </>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => download(v.id)}
+                    >
+                      Download
+                    </Button>
                   )}
                 </div>
               </li>

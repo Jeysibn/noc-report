@@ -8,7 +8,11 @@ import pytest
 from botocore.exceptions import ClientError
 
 from noc_bridge.config import BridgeSettings
-from noc_bridge.service import BridgeService, _reconcile_artifacts
+from noc_bridge.service import (
+    BridgeService,
+    _reconcile_artifacts,
+    _renderer_profile_from_snapshot,
+)
 
 
 class _FakeBody(io.BytesIO):
@@ -56,6 +60,69 @@ def test_partial_structured_report_artifact_is_not_marked_complete():
     del client.objects[("noc-reports", f"reports/{job_id}/document.screenshots.json")]
 
     assert _reconcile_artifacts("daily_report", job_id, settings, client) is None
+
+
+def test_renderer_profile_controls_required_artifacts():
+    job_id = uuid.uuid4()
+    settings = BridgeSettings()
+    client = _FakeMinio(job_id)
+    del client.objects[("noc-reports", f"reports/{job_id}/document.json")]
+    del client.objects[("noc-reports", f"reports/{job_id}/document.screenshots.json")]
+
+    assert _reconcile_artifacts(
+        "daily_report", job_id, settings, client,
+        renderer_profile="report-document-v1",
+    ) is None
+    legacy = _reconcile_artifacts(
+        "daily_report", job_id, settings, client,
+        renderer_profile="daily_report_docx",
+    )
+    assert legacy is not None
+    assert set(legacy) == {"report"}
+
+
+class _SnapshotCursor:
+    def __init__(self, row):
+        self.row = row
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def execute(self, *_args):
+        return None
+
+    def fetchone(self):
+        return self.row
+
+
+class _SnapshotConnection:
+    def __init__(self, row):
+        self.row = row
+
+    def cursor(self, **_kwargs):
+        return _SnapshotCursor(self.row)
+
+
+def test_reconciliation_profile_comes_from_frozen_snapshot_not_live_checkout(tmp_path):
+    skill_dir = tmp_path / "daily-alert-report"
+    skill_dir.mkdir()
+    (skill_dir / "skill.yaml").write_text("renderer_profile: daily_report_docx\n")
+    settings = BridgeSettings(skills_dir=tmp_path)
+    payload = {
+        "skill_name": "daily-alert-report",
+        "skill_hash": "snapshot-hash",
+        "skill_snapshot_id": "snapshot-id",
+    }
+    conn = _SnapshotConnection({
+        "manifest_yaml": "renderer_profile: report-document-v1\n",
+    })
+
+    assert _renderer_profile_from_snapshot(
+        conn, payload, settings, "daily-alert-report"
+    ) == "report-document-v1"
 
 
 def test_redelivered_complete_report_returns_before_second_claude_invocation(monkeypatch):

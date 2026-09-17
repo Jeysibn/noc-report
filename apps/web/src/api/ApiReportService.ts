@@ -18,6 +18,7 @@ interface RawReportOut {
   error_message: string | null;
   created_at: string;
   downloadable: boolean;
+  previewable: boolean;
   report_version_id: string | null;
 }
 
@@ -38,6 +39,7 @@ function toRun(raw: RawReportOut): ReportRun {
     errorMessage: raw.error_message,
     createdAt: raw.created_at,
     downloadable: raw.downloadable,
+    previewable: raw.previewable,
     reportVersionId: raw.report_version_id,
   };
 }

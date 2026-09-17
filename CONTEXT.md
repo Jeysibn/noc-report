@@ -34,3 +34,7 @@ This glossary is the shared vocabulary for maintainers and coding agents.
 - **Report Artifact Identity** — the exact MinIO version, checksum, size, and content type for a generated DOCX or structured ReportDocument preview.
 - **Dashboard Analysis Semantics** — an active log is awaiting analysis until its current AnalysisRun is completed with a usable result; queued/running/failed runs remain actionable, while only processing runs count as running.
 - **Generated Report** — a current-Shift Report whose Job is completed and whose DOCX artifact has a durable MinIO version identity; queued, failed, and incomplete requests are not generated reports.
+- **Renderer Profile** — the immutable renderer contract captured in a SkillSnapshot. `report-document-v1` requires DOCX, structured preview JSON, and its screenshot index; legacy `daily_report_docx` requires DOCX only.
+- **Report Capability** — `previewable` and `downloadable` are separate public capabilities. Preview requires structured ReportDocument identity plus `report.read`; download requires pinned DOCX identity plus `report.download`.
+- **Poison Message** — a RabbitMQ delivery that cannot pass JSON, schema, format, protocol, or semantic identity validation. It is quarantined/DLQ'd and acknowledged without stopping the serial bridge.
+- **Report Lifecycle State** — the public report state is `Job.status`; the `reports` table no longer stores a duplicate lifecycle status.

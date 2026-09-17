@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends
 from app.db.session import get_db
 from app.deps import require_permission
 from app.models.models import AnalysisRun, Evidence, Incident, Job, Report, Shift, User
+from app.report_metrics import generated_report_predicate
 from app.schemas.schemas import DashboardSummaryOut
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
@@ -73,8 +74,7 @@ def dashboard_summary(
     reports = db.scalar(
         select(func.count()).select_from(Report).join(Job, Job.id == Report.job_id).where(
             Report.shift_id == shift_id,
-            Job.status == "COMPLETED",
-            Report.report_version_id.is_not(None),
+            generated_report_predicate(),
         )
     ) or 0
 

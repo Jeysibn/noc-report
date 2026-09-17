@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import pathlib
 import uuid
+import base64
 from datetime import datetime, timezone
 
 import pika
@@ -122,3 +123,23 @@ def send_to_dlq(channel, *, job_type: str, body: dict) -> None:
         body=json.dumps(body).encode("utf-8"),
         properties=pika.BasicProperties(delivery_mode=pika.DeliveryMode.Persistent),
     )
+
+
+def send_raw_to_dlq(channel, *, job_type: str, body: bytes, reason: str) -> None:
+    """Quarantine bytes that cannot be represented as a Job envelope.
+
+    Invalid JSON cannot safely be wrapped as a fake Job because doing so
+    would make operational tooling believe it was a valid protocol message.
+    Keep a bounded, base64-encoded diagnostic payload instead; the original
+    delivery is still acknowledged after this publish succeeds.
+    """
+    raw = bytes(body)
+    max_bytes = 4096
+    diagnostic = {
+        "quarantine": "invalid_job_message",
+        "reason": reason,
+        "body_size": len(raw),
+        "body_truncated": len(raw) > max_bytes,
+        "body_base64": base64.b64encode(raw[:max_bytes]).decode("ascii"),
+    }
+    send_to_dlq(channel, job_type=job_type, body=diagnostic)

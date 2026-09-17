@@ -18,6 +18,7 @@ export interface ReportRun {
   errorMessage: string | null;
   createdAt: string;
   downloadable: boolean;
+  previewable: boolean;
   reportVersionId: string | null;
 }
 

@@ -60,7 +60,7 @@ describe("ShiftReport", () => {
       generatedAt: null,
       errorMessage: null,
       createdAt: new Date().toISOString(),
-      downloadable: false, reportVersionId: null,
+      downloadable: false, previewable: false, reportVersionId: null,
     });
 
     render(
@@ -85,7 +85,7 @@ describe("ShiftReport", () => {
       id: "report-2", shiftId: "shift-1", snapshotId: "snap-2", jobId: "job-2",
       version: 1, status: "QUEUED", model: "claude-opus-5", effort: null,
       skillName: "daily-alert-report", skillVersion: "1", generatedBy: null,
-      generatedAt: null, errorMessage: null, createdAt: new Date().toISOString(), downloadable: false, reportVersionId: null,
+      generatedAt: null, errorMessage: null, createdAt: new Date().toISOString(), downloadable: false, previewable: false, reportVersionId: null,
     });
     render(<MemoryRouter><ShiftReport /></MemoryRouter>);
     await act(async () => {});
@@ -112,7 +112,7 @@ describe("ShiftReport", () => {
         generatedAt: new Date().toISOString(),
         errorMessage: null,
         createdAt: new Date().toISOString(),
-      downloadable: true, reportVersionId: "version-1",
+      downloadable: true, previewable: false, reportVersionId: "version-1",
       },
     ]);
 
@@ -126,6 +126,42 @@ describe("ShiftReport", () => {
     expect(
       screen.getByRole("button", { name: /download/i }),
     ).toBeInTheDocument();
+  });
+
+  it("allows read-only preview without requiring download permission", async () => {
+    __setCurrentUserForTests({
+      id: "reader",
+      username: "reader",
+      displayName: "Read Only",
+      email: null,
+      roles: ["NOC"],
+      permissions: ["report.read"],
+    });
+    listReports.mockResolvedValue([
+      {
+        id: "report-preview",
+        shiftId: "shift-1",
+        snapshotId: "snap-1",
+        jobId: "job-1",
+        version: 1,
+        status: "COMPLETED",
+        model: "claude-sonnet-5",
+        effort: "low",
+        skillName: "daily-alert-report",
+        skillVersion: "1",
+        generatedBy: null,
+        generatedAt: new Date().toISOString(),
+        errorMessage: null,
+        createdAt: new Date().toISOString(),
+        downloadable: false,
+        previewable: true,
+        reportVersionId: null,
+      },
+    ]);
+
+    render(<MemoryRouter><ShiftReport /></MemoryRouter>);
+    expect(await screen.findByRole("button", { name: /preview/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /download/i })).not.toBeInTheDocument();
   });
 
   it("distinguishes report history failure from a valid empty history", async () => {

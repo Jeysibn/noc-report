@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.deps import require_permission
 from app.models.models import Incident, Job, Report, Shift, ShiftDefinition, User
+from app.report_metrics import generated_report_predicate, generated_report_time
 from app.schemas.schemas import (
     AnalyticsSummaryOut,
     BarDatumOut,
@@ -43,13 +44,15 @@ def analytics_summary(
     _: User = Depends(require_permission("analytics.read")),
 ) -> AnalyticsSummaryOut:
     now = datetime.now(timezone.utc)
-    window_start = now - timedelta(days=7)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    window_start = today_start - timedelta(days=6)
+    window_end = today_start + timedelta(days=1)
 
-    # --- incidents per day (last 7 days, real calendar days) ---
+    # --- incidents per day (seven calendar dates, including today) ---
     day_bucket = func.date_trunc("day", Incident.triggered_at)
     rows = db.execute(
         select(day_bucket.label("day"), func.count().label("n"))
-        .where(Incident.triggered_at >= window_start)
+        .where(Incident.triggered_at >= window_start, Incident.triggered_at < window_end)
         .group_by(day_bucket)
     ).all()
     counts_by_date = {row.day.date(): row.n for row in rows}
@@ -58,7 +61,7 @@ def analytics_summary(
             label=_DAY_LABELS[(window_start + timedelta(days=i)).weekday()],
             value=counts_by_date.get((window_start + timedelta(days=i)).date(), 0),
         )
-        for i in range(8)
+        for i in range(7)
     ]
 
     # --- incidents per shift definition (all-time, grouped by definition name) ---
@@ -117,10 +120,13 @@ def analytics_summary(
     top_recurring_alert_titles = [TopAlertTitleOut(title=title, count=n) for title, n in top_titles_rows]
 
     # --- report generation counts: this shift / today / this week ---
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     week_start = today_start - timedelta(days=today_start.weekday())
-    today_count = db.scalar(select(func.count()).select_from(Report).where(Report.created_at >= today_start)) or 0
-    week_count = db.scalar(select(func.count()).select_from(Report).where(Report.created_at >= week_start)) or 0
+    generated_join = select(func.count()).select_from(Report).join(Job, Job.id == Report.job_id).where(
+        generated_report_predicate()
+    )
+    generation_time = generated_report_time()
+    today_count = db.scalar(generated_join.where(generation_time >= today_start)) or 0
+    week_count = db.scalar(generated_join.where(generation_time >= week_start)) or 0
     active_shift = db.scalar(select(Shift).where(Shift.state == "active").order_by(Shift.starts_at.desc()))
     shift_count = 0
     if active_shift is not None:
@@ -128,7 +134,8 @@ def analytics_summary(
             db.scalar(
                 select(func.count())
                 .select_from(Report)
-                .where(Report.shift_id == active_shift.id)
+                .join(Job, Job.id == Report.job_id)
+                .where(Report.shift_id == active_shift.id, generated_report_predicate())
             )
             or 0
         )

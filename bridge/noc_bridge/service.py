@@ -46,6 +46,7 @@ from noc_bridge.queue_topology import (
     publish_status_event,
     queue_names,
     send_to_dlq,
+    send_raw_to_dlq,
 )
 from noc_bridge.docx_render import render_daily_report_docx, render_document
 from noc_bridge.report_composition import compose_report
@@ -144,7 +145,46 @@ def _plan_artifact_ref(job_id: uuid.UUID, settings: BridgeSettings) -> tuple[str
     return settings.minio_bucket_job_artifacts, f"jobs/{job_id}/result.json"
 
 
-def _reconcile_artifacts(job_type: str, job_id: uuid.UUID, settings: BridgeSettings, minio_client) -> dict | None:
+def _renderer_profile_from_snapshot(pg_conn, payload: dict, settings: BridgeSettings, skill_name: str | None) -> str | None:
+    """Resolve a report renderer from the Job's frozen SkillSnapshot.
+
+    Snapshot-backed jobs must use the manifest captured with that snapshot;
+    current checkout contents are only a compatibility fallback for legacy
+    messages that predate immutable skill references.
+    """
+    if skill_name != "daily-alert-report":
+        return None
+    snapshot_id = payload.get("skill_snapshot_id")
+    skill_hash = payload.get("skill_hash")
+    if snapshot_id or skill_hash:
+        from noc_bridge.skill_registry import fetch_skill_snapshot
+
+        snapshot = fetch_skill_snapshot(pg_conn, skill_hash, snapshot_id=snapshot_id)
+        if snapshot is None:
+            raise RuntimeError("frozen report SkillSnapshot is missing")
+        manifest_yaml = snapshot["manifest_yaml"]
+    else:
+        manifest_yaml = (settings.skills_dir / skill_name / "skill.yaml").read_text()
+    try:
+        manifest = yaml.safe_load(manifest_yaml) or {}
+    except yaml.YAMLError as exc:
+        raise RuntimeError("frozen report SkillSnapshot has invalid manifest") from exc
+    if not isinstance(manifest, dict):
+        raise RuntimeError("frozen report SkillSnapshot manifest must be an object")
+    profile = manifest.get("renderer_profile")
+    if profile not in {None, "daily_report_docx", "report-document-v1"}:
+        raise RuntimeError(f"unsupported frozen report renderer profile: {profile!r}")
+    return profile
+
+
+def _reconcile_artifacts(
+    job_type: str,
+    job_id: uuid.UUID,
+    settings: BridgeSettings,
+    minio_client,
+    *,
+    renderer_profile: str | None = None,
+) -> dict | None:
     """Recover all already-uploaded artifacts for a redelivered report.
 
     The normal completion path and this path both pass the same metadata
@@ -167,6 +207,14 @@ def _reconcile_artifacts(job_type: str, job_id: uuid.UUID, settings: BridgeSetti
     screenshots_key = f"reports/{job_id}/document.screenshots.json"
     document_exists = object_exists(minio_client, bucket=document_bucket, object_key=document_key)
     screenshots_exists = object_exists(minio_client, bucket=document_bucket, object_key=screenshots_key)
+    requires_structured = renderer_profile == "report-document-v1"
+    if requires_structured and not (document_exists and screenshots_exists):
+        logger.warning(
+            "job %s renderer %s is missing structured report artifacts; continuing recovery",
+            job_id,
+            renderer_profile,
+        )
+        return None
     if document_exists != screenshots_exists:
         logger.warning("job %s has only one structured report artifact; continuing recovery", job_id)
         return None
@@ -315,13 +363,23 @@ class BridgeService:
                 skills_dir=self.settings.skills_dir,
             )
 
+        renderer_profile = _renderer_profile_from_snapshot(
+            pg_conn, payload, self.settings, skill_name
+        )
+
         # Reliability mission Batch A: reconcile before claiming/executing
         # anything. If a prior attempt already produced this job's
         # deterministic artifact (crashed after upload but before
         # mark_completed/ACK), don't re-run Claude at all — just finalize
         # from what's already there.
         artifact_bucket, artifact_key = _artifact_ref(job_type, job_id, self.settings)
-        reconciled_metadata = _reconcile_artifacts(job_type, job_id, self.settings, minio_client)
+        reconciled_metadata = _reconcile_artifacts(
+            job_type,
+            job_id,
+            self.settings,
+            minio_client,
+            renderer_profile=renderer_profile,
+        )
         if reconciled_metadata is not None:
             logger.info("job %s artifacts already present at %s/%s — reconciling without re-executing", job_id, artifact_bucket, artifact_key)
             db.mark_completed(pg_conn, job_id, artifact_metadata=reconciled_metadata)
@@ -705,8 +763,6 @@ class BridgeService:
         )
 
     def _handle_delivery(self, channel, method, properties, body, pg_conn, minio_client, job_type: str) -> None:
-        payload = json.loads(body)
-
         # Skill Runtime mission Phase 14: reject any message that doesn't
         # conform to the canonical job message protocol before touching any
         # of its keys. A poison-pill/drifted message is routed straight to
@@ -715,11 +771,19 @@ class BridgeService:
         # uncaught exception (there's no reliable job_id to update in
         # Postgres for a message this malformed).
         try:
+            payload = json.loads(body)
+            if not isinstance(payload, dict):
+                raise OutputValidationError("job message must be a JSON object")
             if payload.get("protocol_version") != PROTOCOL_VERSION:
                 raise OutputValidationError(
                     f"unsupported job protocol version: {payload.get('protocol_version')!r}"
                 )
             validate_against_schema(payload, _job_message_schema, label="job_message")
+        except (json.JSONDecodeError, UnicodeDecodeError, TypeError) as exc:
+            logger.error("job message is not valid JSON, routing to quarantine: %s", exc)
+            send_raw_to_dlq(channel, job_type=job_type, body=body, reason=str(exc))
+            channel.basic_ack(delivery_tag=method.delivery_tag)
+            return
         except OutputValidationError as exc:
             logger.error("job message failed protocol validation, routing to DLQ: %s", exc)
             send_to_dlq(channel, job_type=job_type, body=payload)

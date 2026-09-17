@@ -1,6 +1,6 @@
 """Milestone 16 (Analytics) — real PostgreSQL aggregates, no mocked
 fixtures. `analytics.read` is DevOps/Admin only per seed.py."""
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from tests.conftest import auth_headers, make_user
 from app.models.models import AnalysisRun, Evidence, Incident, Job, Report, ReportSnapshot, SkillSnapshot
@@ -40,7 +40,7 @@ def test_analytics_summary_shape_and_counts(client, db_session):
     assert resp.status_code == 200
     body = resp.json()
 
-    assert len(body["incidents_by_day"]) == 8
+    assert len(body["incidents_by_day"]) == 7
     assert sum(row["value"] for row in body["incidents_by_day"]) == 3
 
     service_values = {row["label"]: row["value"] for row in body["alerts_by_service"]}
@@ -59,6 +59,56 @@ def test_analytics_summary_shape_and_counts(client, db_session):
         {"label": "Completed", "value": 0},
         {"label": "Failed", "value": 0},
     ]
+
+
+def test_analytics_uses_completed_report_artifacts_and_seven_calendar_days(client, db_session):
+    make_user(db_session, "analytics-semantics", "DevOps")
+    headers = auth_headers(client, "analytics-semantics")
+    shift = _create_active_shift(db_session)
+    now = datetime.now(timezone.utc)
+    _create_incident(client, headers, triggered_at=(now - timedelta(days=6)).isoformat())
+    _create_incident(client, headers, triggered_at=(now - timedelta(days=7)).isoformat())
+
+    skill = SkillSnapshot(
+        skill_name="daily-alert-report", version_label=1, content_hash="a" * 64,
+        skill_md="skill", output_schema_json="{}", manifest_yaml="renderer_profile: report-document-v1",
+        dependency_snapshot_ids={}, is_active=True,
+    )
+    db_session.add(skill)
+    db_session.flush()
+
+    for number, job_status, artifact_version, completed_at in (
+        (1, "QUEUED", "queued-version", None),
+        (2, "PROCESSING", "processing-version", None),
+        (3, "FAILED", "failed-version", None),
+        (4, "COMPLETED", None, now),
+        (5, "COMPLETED", "generated-version", now),
+    ):
+        job = Job(
+            job_type="daily_report", status=job_status, skill_snapshot_id=skill.id,
+            skill_name=skill.skill_name, skill_version="1", correlation_id=str(uuid.uuid4()),
+            completed_at=completed_at,
+        )
+        db_session.add(job)
+        db_session.flush()
+        snapshot = ReportSnapshot(
+            shift_id=shift.id, snapshot_json={},
+            sha256=(str(number) + "f" * 63)[:64], skill_snapshot_id=skill.id,
+        )
+        db_session.add(snapshot)
+        db_session.flush()
+        db_session.add(Report(
+            shift_id=shift.id, snapshot_id=snapshot.id, job_id=job.id, version=number,
+            report_version_id=artifact_version,
+        ))
+    db_session.commit()
+
+    response = client.get("/api/v1/analytics/summary", headers=headers)
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["incidents_by_day"]) == 7
+    assert sum(row["value"] for row in body["incidents_by_day"]) == 1
+    assert body["report_generation_counts"] == {"this_shift": 1, "today": 1, "this_week": 1}
 
 
 def test_dashboard_summary_aggregates_active_shift_without_page_limit(client, db_session):
@@ -141,7 +191,7 @@ def test_dashboard_summary_counts_only_usable_analysis_and_completed_report_arti
         db_session.flush()
         db_session.add(Report(
             shift_id=shift.id, snapshot_id=snapshot.id, job_id=job.id, version=number,
-            status=job_status, report_version_id=artifact_version,
+            report_version_id=artifact_version,
         ))
     db_session.commit()
 

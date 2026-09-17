@@ -249,7 +249,8 @@ def _to_out(report: Report, job: Job) -> ReportOut:
         generated_at=report.generated_at,
         error_message=job.error_message,
         created_at=report.created_at,
-        downloadable=bool(report.report_object_key),
+        downloadable=bool(report.report_object_key and report.report_version_id),
+        previewable=bool(report.document_object_key and report.document_version_id),
         report_version_id=report.report_version_id,
     )
 
@@ -380,7 +381,6 @@ def generate_report(
         snapshot_id=snapshot.id,
         job_id=job.id,
         version=next_version,
-        status="QUEUED",
         model=job.model,
         effort=job.effort,
         skill_name=job.skill_name,

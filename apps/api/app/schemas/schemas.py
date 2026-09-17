@@ -441,6 +441,7 @@ class ReportOut(BaseModel):
     error_message: str | None
     created_at: datetime
     downloadable: bool = False
+    previewable: bool = False
     report_version_id: str | None = None
 
 

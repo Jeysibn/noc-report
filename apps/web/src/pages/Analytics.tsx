@@ -1,10 +1,12 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Card, CardTitle } from "@/components/ui/Card";
+import { Button } from "@/components/ui/Button";
 import { RequireRole } from "@/components/layout/RequireRole";
 import { BarChart } from "@/components/analytics/BarChart";
 import { DonutChart } from "@/components/analytics/DonutChart";
 import { analyticsService } from "@/services";
 import type { AnalyticsSummary } from "@/types/analytics";
+import { ApiError } from "@/lib/http";
 
 const RECOVERED_COLORS: Record<string, string> = {
   Recovered: "var(--color-good)",
@@ -27,13 +29,25 @@ const OUTCOME_COLORS: Record<string, string> = {
 export function Analytics() {
   const [summary, setSummary] = useState<AnalyticsSummary | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const loadSummary = useCallback(() => {
+    setLoading(true);
     analyticsService
       .getSummary()
-      .then(setSummary)
+      .then((next) => {
+        setSummary(next);
+        setError(null);
+      })
+      .catch((err) => {
+        setError(err instanceof ApiError ? err.message : "Could not load analytics.");
+      })
       .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => {
+    loadSummary();
+  }, [loadSummary]);
 
   return (
     <RequireRole roles={["DevOps", "Admin"]}>
@@ -43,12 +57,31 @@ export function Analytics() {
           <p className="text-sm text-muted">DevOps/Admin visibility. V1 metrics only.</p>
         </div>
 
-        {loading || !summary ? (
+        {loading && !summary ? (
           <Card>
             <p className="text-sm text-muted">Loading analytics...</p>
           </Card>
+        ) : error && !summary ? (
+          <Card>
+            <p className="text-sm text-critical">Unable to load analytics: {error}</p>
+            <Button className="mt-3" size="sm" variant="secondary" onClick={loadSummary}>
+              Retry
+            </Button>
+          </Card>
+        ) : !summary ? (
+          <Card>
+            <p className="text-sm text-critical">Unable to load analytics.</p>
+            <Button className="mt-3" size="sm" variant="secondary" onClick={loadSummary}>
+              Retry
+            </Button>
+          </Card>
         ) : (
           <>
+            {error && (
+              <p className="text-xs text-warning" role="status">
+                Analytics may be stale: {error}
+              </p>
+            )}
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
               <Card>
                 <CardTitle>Incidents per day</CardTitle>

@@ -55,13 +55,34 @@ running, and failed runs remain actionable. “Analyses running” counts only
 currently processing runs. A failed request is shown as an error with retry
 instead of fabricated zero values.
 
-Report crash reconciliation checks the complete deterministic artifact set.
-For the current ReportDocument renderer, DOCX, browser document, and private
-screenshot index must all be present. The bridge reads each exact object
-version, recomputes its checksum/size, and passes the same artifact metadata
-contract used by normal completion before marking the Job complete. A partial
-upload is not falsely completed and can continue through the composition
-retry path; a redelivery with all artifacts makes no second Claude call.
+Report crash reconciliation reads the renderer profile from the frozen
+SkillSnapshot attached to the Job. The current `report-document-v1` profile
+requires DOCX, browser document, and private screenshot index; the historical
+`daily_report_docx` profile requires DOCX only. The bridge reads each exact
+object version, recomputes its checksum/size, and passes the same artifact
+metadata contract used by normal completion before marking the Job complete.
+A partial upload is not falsely completed and can continue through the
+composition retry path; a redelivery with all artifacts makes no second
+Claude call. Changing the live skill manifest cannot change an old Job's
+required artifact set.
+
+RabbitMQ deliveries pass one protected boundary for JSON decoding, object and
+schema validation, UUID format checking, protocol version, and queue Job type.
+Malformed JSON is quarantined as a bounded base64 diagnostic; structured
+poison messages are sent to the job-type DLQ. The original delivery is ACKed
+only after quarantine/DLQ publication, and the serial consumer remains alive.
+
+Generated Report is one shared predicate used by Dashboard and Analytics:
+the associated Job must be `COMPLETED` and the Report must have a pinned DOCX
+version. Analytics report windows use Job completion time, falling back to the
+legacy Report generated timestamp only for old rows. The incidents-by-day
+series is seven calendar dates including today.
+
+Report lifecycle state is owned by `Job.status`; the duplicate `reports.status`
+column was removed by migration `6a7b8c9d0e1f`. Public Report responses expose
+separate `previewable` and `downloadable` capabilities. Preview is gated by
+`report.read` and structured artifact identity; download is gated by
+`report.download` and exact DOCX identity.
 
 ## RabbitMQ job lifecycle
 

@@ -302,6 +302,7 @@ def test_poll_syncs_docx_once_job_completes_and_download_url_works(client, db_se
     out = listed.json()[0]
     assert out["status"] == "COMPLETED"
     assert out["downloadable"] is True
+    assert out["previewable"] is False
     assert out["report_version_id"]
 
     # A later write at the same key must not change the immutable artifact
@@ -410,6 +411,10 @@ def test_document_preview_and_screenshot_proxy_serve_bridge_written_artifacts(cl
     report.screenshots_byte_size = len(screenshot_index_bytes)
     report.screenshots_content_type = "application/json"
     db_session.commit()
+
+    listed = client.get(f"/api/v1/shifts/{shift.id}/reports", headers=headers)
+    assert listed.status_code == 200
+    assert listed.json()[0]["previewable"] is True
 
     doc_resp = client.get(f"/api/v1/reports/{report_id}/document", headers=headers)
     assert doc_resp.status_code == 200

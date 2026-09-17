@@ -12,6 +12,7 @@ import os
 import pathlib
 import tempfile
 import uuid
+from unittest.mock import Mock
 
 import pytest
 
@@ -399,6 +400,82 @@ def test_handle_delivery_routes_unsupported_protocol_version_to_dlq(pg_conn, mq_
     dlq_method, _, dlq_body = mq_channel.basic_get(names["dlq"])
     assert dlq_method is not None
     assert json.loads(dlq_body)["protocol_version"] == 999
+
+
+def test_handle_delivery_quarantines_invalid_json_and_continues(pg_conn, mq_channel):
+    names = queue_names("log_triage")
+    mq_channel.confirm_delivery()
+    mq_channel.basic_publish(
+        exchange="noc.jobs", routing_key=names["routing_key"], body=b"{not-json",
+    )
+    method, properties, body = mq_channel.basic_get(names["main"])
+    assert method is not None
+
+    BridgeService(SETTINGS)._handle_delivery(
+        mq_channel, method, properties=properties, body=body,
+        pg_conn=pg_conn, minio_client=None, job_type="log_triage",
+    )
+    dlq_method, _, dlq_body = mq_channel.basic_get(names["dlq"])
+    assert dlq_method is not None
+    quarantined = json.loads(dlq_body)
+    assert quarantined["quarantine"] == "invalid_job_message"
+    assert quarantined["body_size"] == len(b"{not-json")
+
+
+def test_handle_delivery_rejects_invalid_uuid_before_job_processing(pg_conn, mq_channel):
+    payload = {
+        "protocol_version": 1, "job_id": "not-a-uuid", "job_type": "log_triage",
+        "incident_id": None, "object_refs": [], "model": "claude-sonnet-5",
+        "effort": "medium", "skill_name": "log-triage-summary", "skill_version": "1",
+        "skill_hash": None, "correlation_id": str(uuid.uuid4()), "attempt": 1,
+    }
+    names = queue_names("log_triage")
+    mq_channel.confirm_delivery()
+    mq_channel.basic_publish(
+        exchange="noc.jobs", routing_key=names["routing_key"], body=json.dumps(payload).encode(),
+    )
+    method, properties, body = mq_channel.basic_get(names["main"])
+    assert method is not None
+
+    BridgeService(SETTINGS)._handle_delivery(
+        mq_channel, method, properties=properties, body=body,
+        pg_conn=pg_conn, minio_client=None, job_type="log_triage",
+    )
+    dlq_method, _, dlq_body = mq_channel.basic_get(names["dlq"])
+    assert dlq_method is not None
+    assert json.loads(dlq_body)["job_id"] == "not-a-uuid"
+
+
+def test_valid_job_after_poison_message_is_still_claimed(pg_conn, mq_channel, monkeypatch):
+    job_id = uuid.uuid4()
+    snapshot_id, skill_hash = _insert_job_row(pg_conn, job_id, "log_triage")
+    payload = {
+        "protocol_version": 1, "job_id": str(job_id), "job_type": "log_triage",
+        "incident_id": None, "object_refs": [], "model": "claude-sonnet-5",
+        "effort": "medium", "skill_name": "log-triage-summary", "skill_version": "1",
+        "skill_hash": skill_hash, "skill_snapshot_id": snapshot_id,
+        "correlation_id": str(uuid.uuid4()), "attempt": 1,
+    }
+    names = queue_names("log_triage")
+    mq_channel.confirm_delivery()
+    mq_channel.basic_publish(
+        exchange="noc.jobs", routing_key=names["routing_key"], body=b"[]",
+    )
+    mq_channel.basic_publish(
+        exchange="noc.jobs", routing_key=names["routing_key"], body=json.dumps(payload).encode(),
+    )
+    service = BridgeService(SETTINGS)
+    process = Mock()
+    monkeypatch.setattr(service, "_process_job", process)
+    for _ in range(2):
+        method, properties, body = mq_channel.basic_get(names["main"])
+        assert method is not None
+        service._handle_delivery(
+            mq_channel, method, properties=properties, body=body,
+            pg_conn=pg_conn, minio_client=None, job_type="log_triage",
+        )
+    process.assert_called_once()
+    _delete_job_row(pg_conn, job_id)
 
 
 # -- full pipeline: real RabbitMQ + Postgres + MinIO + Docker --------------

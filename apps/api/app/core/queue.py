@@ -130,7 +130,11 @@ def build_job_message(
     # or published — a producer-side bug that drifts from the protocol is
     # caught here, at message-build time, rather than surfacing later as a
     # bridge-side KeyError deep inside job processing.
-    jsonschema.validate(message, _job_message_schema)
+    jsonschema.validate(
+        message,
+        _job_message_schema,
+        format_checker=jsonschema.FormatChecker(),
+    )
     return message
 
 

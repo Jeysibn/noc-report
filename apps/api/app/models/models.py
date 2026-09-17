@@ -684,7 +684,8 @@ class Report(Base):
     # in Milestone 13.
     job_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("jobs.id"), nullable=False, unique=True)
     version: Mapped[int] = mapped_column(nullable=False)
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="QUEUED")
+    # Report lifecycle is owned by the associated Job; keeping a second
+    # mutable status here allowed it to diverge from the public Job state.
     report_bucket: Mapped[str | None] = mapped_column(String(100), nullable=True)
     report_object_key: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     report_version_id: Mapped[str | None] = mapped_column(String(200), nullable=True)

@@ -32,7 +32,16 @@ def validate_against_schema(output: dict, schema: dict, *, label: str = "output"
     classify_failure) keep dealing with one exception type regardless of
     which skill or schema failed."""
     try:
-        jsonschema.validate(instance=output, schema=schema)
+        # jsonschema does not enforce annotations such as ``format: uuid``
+        # unless a checker is supplied.  Job messages use that format for
+        # identity fields, so every consumer-side validation must enforce it
+        # at this seam rather than allowing a malformed ID to fail later in
+        # the RabbitMQ callback.
+        jsonschema.validate(
+            instance=output,
+            schema=schema,
+            format_checker=jsonschema.FormatChecker(),
+        )
     except jsonschema.ValidationError as exc:
         raise OutputValidationError(f"{label} failed schema validation: {exc.message}") from exc
     except jsonschema.SchemaError as exc:
