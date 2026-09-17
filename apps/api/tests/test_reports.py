@@ -438,3 +438,18 @@ def test_document_preview_and_screenshot_proxy_serve_bridge_written_artifacts(cl
     historical = client.get(f"/api/v1/reports/{report_id}/document", headers=headers)
     assert historical.status_code == 200
     assert historical.json()["blocks"][0]["text"] == "Alerts"
+
+    # Replacing the deterministic screenshot-manifest key must not change
+    # which evidence version the historical ReportDocument serves.
+    minio.put_object(
+        Bucket=settings.minio_bucket_reports,
+        Key=f"reports/{job_id}/document.screenshots.json",
+        Body=b"[]",
+        ContentType="application/json",
+    )
+    historical_shot = client.get(
+        f"/api/v1/reports/{report_id}/document/screenshots/0",
+        headers=headers,
+    )
+    assert historical_shot.status_code == 200
+    assert historical_shot.content == b"fake png bytes"
