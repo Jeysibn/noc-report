@@ -256,15 +256,17 @@ def _signature(line: str) -> str:
 
 
 def _family_signature(line: str) -> str:
-    """Return a stable operator-facing error family.
+    """Return a stable operator-facing error template.
 
     ``_signature`` intentionally preserves a lot of detail for evidence
     grounding. That is useful for exact deduplication, but it is too narrow
     for presentation: request envelopes, logger line numbers, tokens, and
     stack-frame coordinates can turn one operational failure into hundreds
-    of one-off patterns. A family removes those transport/runtime details
-    while preserving the actual message, endpoint, exception class, and
-    meaningful HTTP/business error codes.
+    of one-off patterns. A template removes those per-event details and
+    returns a bounded, human-readable operational pattern. This is
+    deliberately semantic rather than a truncated raw log line: a new
+    request ID, order number, URL, token, or stack location must never create
+    a new operator finding.
     """
     family = _signature(line)
     level = re.search(r"\b(?:TRACE|DEBUG|INFO|WARN|ERROR|FATAL)\b", family, re.IGNORECASE)
@@ -295,7 +297,81 @@ def _family_signature(line: str) -> str:
     family = re.sub(r"\b\d{4,}\b", "#", family)
     family = re.sub(r"\b\d{2}:\d{2}:\d{2}(?:[.,]\d+)?\b", "#", family)
     family = re.sub(r"\s+", " ", family).strip()
-    return family
+    # Plain-text fixtures may not have a logger/source prefix. The severity
+    # word is transport metadata, not part of the error template; retaining
+    # it would collapse unrelated INFO/WARN/ERROR messages into one generic
+    # fallback template.
+    family = re.sub(r"^(?:TRACE|DEBUG|INFO|WARN|ERROR|FATAL)\s+", "", family, flags=re.IGNORECASE)
+
+    # These are stable operational templates, not examples copied from one
+    # event. Rules are ordered from the most specific to the broadest so the
+    # same incident cannot appear once per endpoint, account, token, or
+    # exception stack. Keep meaningful distinctions such as HTTP 400 vs 503.
+    template_rules = (
+        ("Failed to parse error response as JSON", "NDRP response parse failure"),
+        ("Invalid search string", "NDRP HTTP 400 invalid search string"),
+        ("returnCode: 421", "NDRP HTTP 400 invalid search string"),
+        ("NDRP API returned HTTP 400", "NDRP HTTP 400 non-retryable response"),
+        ("用户电话号码为空", "Marketing SMS blocked by empty phone number"),
+        ("phone number is empty", "Marketing SMS blocked by empty phone number"),
+        ("Transaction synchronization is not active", "VIP cache invalidation outside transaction"),
+        ("谷歌登录：null", "Google authentication returned empty credential"),
+        ("googleLogin", "Google authentication returned empty credential"),
+        ("bindGoogle", "Google authentication returned empty credential"),
+        ("登录用户检查为空", "Authentication user lookup returned empty"),
+        ("queryOrderStatus", "Maya payment status query failed"),
+        ("Maya QueryPaymentOrder", "Maya payment status query failed"),
+        ("出款orderNo", "Maya payment status query failed"),
+        ("optout-list", "SMS delivery rejected by recipient opt-out"),
+        ("OPTED_OUT", "SMS delivery rejected by recipient opt-out"),
+        ("faceCompare", "Face comparison fast path timed out"),
+        ("RunPod /runsync", "Face comparison fast path timed out"),
+        ("IndexNotFoundException", "Elasticsearch index missing"),
+        ("no such index", "Elasticsearch index missing"),
+        ("ElasticsearchTimeoutException", "Elasticsearch query timed out"),
+        ("Timeout waiting for task", "Elasticsearch query timed out"),
+        ("SmppBindException", "SMPP gateway bind failed"),
+        ("Unable to bind", "SMPP gateway bind failed"),
+        ("文件不存在", "Export task output file missing"),
+        ("file does not exist", "Export task output file missing"),
+        ("input file List is null or empty", "Export archive has no input files"),
+        ("ZipException", "Export archive has no input files"),
+        ("删除文件失败", "Export file cleanup failed"),
+        ("thirdapi", "Third-party game login request failed"),
+        ("verifySmsCode error", "SMS verification code lookup failed"),
+        ("ArrayIndexOutOfBoundsException", "SMS verification code lookup failed"),
+        ("[LOGIN][TELEGRAM]", "Telegram login token exchange failed"),
+        ("invalid_grant", "Telegram login token exchange failed"),
+        ("cannot find key", "Application cache key lookup failed"),
+        ("Deadlock", "Database lock/deadlock during VIP flush"),
+        ("CannotAcquireLockException", "Database lock/deadlock during VIP flush"),
+        ("config.json", "Configuration endpoint failed"),
+    )
+    family_lower = family.casefold()
+    if "ndrp api error" in family_lower and re.search(r"\b503\b", family_lower):
+        return "NDRP HTTP 503 upstream unavailable"
+    for marker, template in template_rules:
+        if marker.casefold() in family_lower:
+            return template
+
+    # Unknown messages still use an operational template. Do not expose a
+    # raw line as a fallback: that would recreate one finding per unique
+    # message and would leak request-specific values into the report.
+    exception_classes = re.findall(
+        r"\b(?:[a-zA-Z_][\w$]*\.)*([A-Z][A-Za-z0-9_$]*(?:Exception|Error))\b",
+        family,
+    )
+    if exception_classes:
+        return f"{exception_classes[-1]} application error template"
+    if re.search(r"\btimeout\b|超时", family, re.IGNORECASE):
+        return "Application timeout error template"
+    if re.search(r"\bretry\b|重试", family, re.IGNORECASE):
+        return "Application retry template"
+    if re.search(r"\b(?:completed|done)\b|完成", family, re.IGNORECASE):
+        return "Completed request template"
+    if re.search(r"\bfailed\b|失败|异常|error", family, re.IGNORECASE):
+        return "Application operation failure template"
+    return "Application error template"
 
 
 # Cost-optimization mission, Phase 5 fix: frequency-only ranking silently
@@ -368,8 +444,9 @@ def _count_manifest(input_text: str) -> tuple[int, dict[str, int], dict[str, str
     Claude may decide which displayed patterns belong in a finding, but it
     must refer to these stable IDs. Counts and percentages are then derived
     from the full physical log by this process, never copied from model text.
-    The reserved ``other`` bucket makes coverage explicit when the model only
-    discusses the most operationally important patterns.
+    The reserved ``other`` bucket is retained only as an input compatibility
+    marker for older model output; all current templates are included in the
+    manifest and the runtime removes that marker before persistence.
     """
     lines = _extract_lines(input_text)
     order, _groups, counts, severe = _pattern_stats(lines, _family_signature)
@@ -389,7 +466,7 @@ def _manifest_signatures(
     counts: dict[str, int],
     severe: dict[str, bool],
 ) -> list[str]:
-    """Return one stable ID order: prominent families first, then the rest."""
+    """Return one stable ID order: prominent templates first, then the rest."""
     ranked = sorted(order, key=lambda sig: counts[sig], reverse=True)
     prominent = ranked[:MAX_PATTERN_GROUPS]
     rare_severe = [sig for sig in ranked[MAX_PATTERN_GROUPS:] if severe[sig]]
@@ -414,18 +491,22 @@ def _count_manifest_text(input_text: str) -> str | None:
     for pattern_id, signature in by_id.items():
         tag = " [SEVERE]" if severe.get(signature) else ""
         parts.append(f"- id={pattern_id} occurs {counts_by_id[pattern_id]:,} time(s){tag}: {signature}")
-    parts.append(f"- id=other occurs {counts_by_id['other']:,} time(s): all remaining patterns")
+    if counts_by_id["other"]:
+        # Compatibility only: current manifests contain every template, so a
+        # healthy current run should not emit a generic remainder.
+        parts.append(f"- id=other occurs {counts_by_id['other']:,} time(s): all remaining patterns")
     return "\n".join(parts)
 
 
 def _reconcile_log_triage_counts(result: dict, input_text: str) -> dict:
-    """Replace model arithmetic with exact, exhaustive family accounting.
+    """Replace model arithmetic with exact, exhaustive template accounting.
 
-    The model may group the prominent manifest families and write their
-    bilingual explanations. Every family it does not mention is added as a
-    deterministic secondary finding with its normalized evidence signature.
-    This keeps the useful model narrative while ensuring the operator never
-    sees thousands of entries hidden behind one generic remainder bucket.
+    The model may group the prominent manifest templates and write their
+    bilingual explanations. Every template it does not mention is added as a
+    deterministic secondary finding with its stable template label. This
+    keeps the useful model narrative while ensuring the operator sees
+    identifiable patterns rather than one generic remainder or one finding
+    per unique request.
     """
     lines = _extract_lines(input_text)
     order, _groups, counts, severe = _pattern_stats(lines, _family_signature)
@@ -505,13 +586,13 @@ def _reconcile_log_triage_counts(result: dict, input_text: str) -> dict:
         count = counts[signature]
         secondary.append(
             {
-                "label_en": f"Deterministic error family: {signature[:180]}",
-                "label_zh": f"确定性错误模式：{signature[:180]}",
+                "label_en": f"Deterministic log template: {signature}",
+                "label_zh": f"确定性日志模板：{signature}",
                 "count": count,
                 "percentage": round((count / total) * 100, 2) if total else 0.0,
                 "pattern_ids": [pattern_id],
-                "detail_en": "Deterministic family derived from the supplied log evidence; the model did not provide a semantic label.",
-                "detail_zh": "该错误模式由提供的日志证据确定性归并；模型未提供语义标签。",
+                "detail_en": "Exact count for this stable log template; variable request values and stack locations are aggregated.",
+                "detail_zh": "该稳定日志模板的确定性计数；请求变量和堆栈位置已聚合。",
             }
         )
         accounted += count

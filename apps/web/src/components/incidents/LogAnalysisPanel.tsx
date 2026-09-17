@@ -281,18 +281,25 @@ function FindingCoverage({ result }: { result: AnalysisRun["result"] }) {
     (sum, find) => sum + (typeof find.count === "number" ? find.count : 0),
     0,
   );
-  const unclassified = findings.reduce(
+  const deterministicTemplates = findings.reduce(
     (sum, find) =>
       sum +
-      ((find.patternIds?.includes("other") ||
-        (find.labelEn.startsWith("Unclassified error family:") ||
-          find.labelEn.startsWith("Deterministic error family:"))) &&
+      (find.labelEn.startsWith("Deterministic log template:") &&
       typeof find.count === "number"
         ? find.count
         : 0),
     0,
   );
-  const named = Math.max(0, accounted - unclassified);
+  const unquantified = findings.reduce(
+    (sum, find) =>
+      sum +
+      ((find.patternIds?.includes("other") || find.patternIds?.includes("unquantified")) &&
+      typeof find.count === "number"
+        ? find.count
+        : 0),
+    0,
+  );
+  const named = Math.max(0, accounted - deterministicTemplates - unquantified);
   const coverage = result.totalEntries
     ? Math.min(100, (accounted / result.totalEntries) * 100)
     : 100;
@@ -302,13 +309,18 @@ function FindingCoverage({ result }: { result: AnalysisRun["result"] }) {
     <div className="mb-3 rounded-md border border-line bg-surface px-3 py-2 text-xs text-muted">
       <p>Exact log entries analyzed: {result.totalEntries.toLocaleString()}</p>
       <p>Finding coverage: {coverageLabel}</p>
-      {unclassified > 0 && (
-        <p className="mt-1 text-warning">
+      {deterministicTemplates > 0 && (
+        <p className="mt-1 text-muted">
           Named findings: {named.toLocaleString()} ({((named / result.totalEntries) * 100).toFixed(2)}%);{" "}
-          other/unclassified: {unclassified.toLocaleString()} ({((unclassified / result.totalEntries) * 100).toFixed(2)}%).
+          deterministic templates: {deterministicTemplates.toLocaleString()} ({((deterministicTemplates / result.totalEntries) * 100).toFixed(2)}%).
         </p>
       )}
-      {unclassified === 0 && accounted !== result.totalEntries && (
+      {unquantified > 0 && (
+        <p className="mt-1 text-warning">
+          Unquantified findings: {unquantified.toLocaleString()} ({((unquantified / result.totalEntries) * 100).toFixed(2)}%).
+        </p>
+      )}
+      {unquantified === 0 && accounted !== result.totalEntries && (
         <p className="mt-1 text-warning">
           {Math.max(0, result.totalEntries - accounted).toLocaleString()} entries have no validated finding count.
         </p>

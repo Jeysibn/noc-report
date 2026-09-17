@@ -111,7 +111,7 @@ describe("LogAnalysisPanel", () => {
     expect(getRun).toHaveBeenCalledWith("incident-1", "job-1");
     expect(screen.getByText(/exact log entries analyzed: 2,965/i)).toBeInTheDocument();
     expect(screen.getByText(/finding coverage: 2,965 \/ 2,965 \(100.00%\)/i)).toBeInTheDocument();
-    expect(screen.getByText(/named findings: 1 \(0\.03%\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/unquantified findings: 2,964 \(99\.97%\)/i)).toBeInTheDocument();
     expect(screen.getByText(/one error found/i)).toBeInTheDocument();
     expect(screen.getAllByText(/completed/i).length).toBeGreaterThan(0);
   });

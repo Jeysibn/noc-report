@@ -14,10 +14,11 @@ Output shape:
 - `summary_en` / `summary_zh` — one paragraph each, plain language, what the
   log shows overall: service name, error volume, time range, and whether the
   errors look like one dominant failure mode or several independent ones.
-- `key_finds` — a list of the distinct error patterns that materially make up
+- `key_finds` — a list of stable error templates that materially make up
   the log, ordered by frequency (highest count first). Each entry:
-  - `label_en` / `label_zh` — short name for the pattern (e.g. the exception
-    class or failing call).
+  - `label_en` / `label_zh` — short name for the template (e.g. the exception
+    class or failing operation). Group variable request IDs, order numbers,
+    URLs, tokens, and stack locations into the same template.
   - `pattern_ids` — one or more IDs from the deterministic count manifest
     appended to the log. Select the IDs whose patterns belong to this finding;
     do not invent IDs. The runtime calculates the count from these IDs. The
@@ -37,7 +38,8 @@ Output shape:
   less-actionable patterns worth noting but not leading with. The runtime
   appends every deterministic family that the model does not label, so this
   list may be longer than the model-authored list. It must not collapse
-  omitted evidence into a generic "other" finding.
+  omitted evidence into a generic "other" finding or split one template into
+  one finding per request.
 - `likely_cause_en` / `likely_cause_zh` — short phrase, the most probable
   root cause overall (drawn from the leading key find).
 - `recommended_action_en` / `recommended_action_zh` — short phrase, what the
@@ -50,8 +52,8 @@ Output shape:
 
 Numerical truth is deterministic. The runtime owns `total_entries`, every
 finding `count` and `percentage`, and expands every omitted deterministic
-error family into its own secondary finding. Claude owns grouping selection,
-labels, explanations, severity, and narrative for the families it discusses.
+error template into its own secondary finding. Claude owns grouping selection,
+labels, explanations, severity, and narrative for the templates it discusses.
 Never estimate a number from the prose or repeat a total that is not present
 in the manifest. `other` is an internal compatibility marker and is removed
 from the persisted result; it must not be used to hide an identifiable

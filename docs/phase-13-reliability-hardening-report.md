@@ -136,10 +136,12 @@ The log-triage preprocessor previously exposed only model-selected prominent
 patterns plus one exact `Other log entries not separately classified` bucket.
 For a 2,965-entry production-style log, that made 1,806 entries look
 unidentified even though the arithmetic was complete. The preprocessor now
-builds stable operator-facing error families after removing only transport and
-request-identity noise, preserves meaningful status/error codes, and appends
-each omitted family as a deterministic secondary finding. The runtime still
+builds stable operator-facing error templates: request IDs, endpoints,
+accounts, order numbers, tokens, URLs, and stack locations are normalized or
+removed, while meaningful statuses and error classes remain. Each omitted
+template is appended as a deterministic secondary finding. The runtime still
 owns every count and percentage; Claude supplies labels and explanations only
-for the families it discusses. The cache contract was bumped so old
-under-classified results are not reused. The verified fixture produces 124
-families totaling 2,965 entries with no generic `other` bucket.
+for the templates it discusses. The cache contract was bumped so old
+under-classified results are not reused. The verified fixture produces 24
+stable templates totaling 2,965 entries with no generic `other` bucket and no
+one-finding-per-request output.

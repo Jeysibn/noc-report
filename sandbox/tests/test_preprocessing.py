@@ -106,6 +106,41 @@ def test_dynamic_user_and_record_id_are_normalized():
     assert entrypoint._signature(line_a) == entrypoint._signature(line_b)
 
 
+def test_operator_templates_aggregate_variable_values_and_endpoints():
+    """Presentation grouping is template-level, not one finding per event."""
+    parse_a = "ERROR -abc123-/api/front/paddleOcr/runpodHook Failed to parse error response as JSON"
+    parse_b = "ERROR -different-request-/api/admin/userKyc/pass Failed to parse error response as JSON"
+    maya_a = "WARN orderNo=R01549062598845145088 GET /pay/queryOrderStatus"
+    maya_b = "WARN orderNo=R01549677011197431808 GET /pay/queryOrderStatus"
+
+    assert entrypoint._family_signature(parse_a) == "NDRP response parse failure"
+    assert entrypoint._family_signature(parse_b) == "NDRP response parse failure"
+    assert entrypoint._family_signature(maya_a) == "Maya payment status query failed"
+    assert entrypoint._family_signature(maya_b) == "Maya payment status query failed"
+
+
+def test_template_accounting_does_not_create_one_pattern_per_event():
+    lines = []
+    for index in range(100):
+        lines.append(
+            f"WARN trace_id={index:032x} -request-{index}/api/front/paddleOcr/runpodHook "
+            "Failed to parse error response as JSON"
+        )
+        lines.append(
+            f"WARN orderNo=R{index:020d} GET https://payment.example/pay/queryOrderStatus"
+        )
+        lines.append(
+            f"ERROR userId={index} [VIP] Transaction synchronization is not active"
+        )
+
+    order, _groups, counts, _severe = entrypoint._pattern_stats(lines, entrypoint._family_signature)
+
+    assert len(order) == 3
+    assert sum(counts.values()) == 300
+    assert sorted(counts.values()) == [100, 100, 100]
+    assert all(str(index) not in signature for index in range(100) for signature in order)
+
+
 def test_thread_suffix_is_normalized():
     line_a = "INFO handled by Thread-42"
     line_b = "INFO handled by Thread-9001"
