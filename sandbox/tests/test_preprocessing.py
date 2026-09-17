@@ -189,6 +189,37 @@ def test_log_triage_counts_are_recomputed_from_pattern_ids():
         for group in ("key_finds", "secondary_finds")
         for finding in normalized[group]
     ) == 10
+    assert all(
+        "other" not in (finding.get("pattern_ids") or [])
+        for group in ("key_finds", "secondary_finds")
+        for finding in normalized[group]
+    )
+
+
+def test_omitted_families_are_identified_individually_not_hidden_in_other():
+    log_text = "\n".join(
+        ["WARN api request failed request_id=req-1"] * 3
+        + ["ERROR database timeout userId=101"] * 2
+        + ["WARN cache miss recordId=abc"]
+    )
+    normalized = entrypoint._reconcile_log_triage_counts(
+        {
+            "key_finds": [{
+                "label_en": "api failures", "label_zh": "API失败",
+                "count": 999, "percentage": 99.0,
+                "pattern_ids": ["p001"],
+                "detail_en": "d", "detail_zh": "细节",
+            }],
+            "secondary_finds": [],
+        },
+        log_text,
+    )
+    findings = normalized["key_finds"] + normalized["secondary_finds"]
+    assert normalized["total_entries"] == 6
+    assert sum(finding["count"] or 0 for finding in findings) == 6
+    assert len(findings) == 3
+    assert all("Other log entries" not in finding["label_en"] for finding in findings)
+    assert all("other" not in (finding.get("pattern_ids") or []) for finding in findings)
 
 
 def test_log_triage_adds_exact_remainder_for_unselected_patterns():
@@ -206,9 +237,10 @@ def test_log_triage_adds_exact_remainder_for_unselected_patterns():
     remainder = normalized["secondary_finds"][-1]
 
     assert normalized["total_entries"] == 12
-    assert remainder["pattern_ids"] == ["other"]
-    assert remainder["count"] == 5
-    assert remainder["percentage"] == round(5 / 12 * 100, 2)
+    assert remainder["pattern_ids"] == ["p003"]
+    assert remainder["count"] == 2
+    assert remainder["percentage"] == round(2 / 12 * 100, 2)
+    assert sum(finding["count"] or 0 for finding in normalized["key_finds"] + normalized["secondary_finds"]) == 12
 
 
 def test_unmatched_narrative_finding_is_not_mislabeled_as_exact_other():
@@ -225,8 +257,8 @@ def test_unmatched_narrative_finding_is_not_mislabeled_as_exact_other():
 
     assert normalized["key_finds"][0]["pattern_ids"] == ["unquantified"]
     assert normalized["key_finds"][0]["count"] is None
-    assert normalized["secondary_finds"][-1]["pattern_ids"] == ["other"]
-    assert normalized["secondary_finds"][-1]["count"] == 2
+    assert normalized["secondary_finds"][-1]["pattern_ids"] == ["p002"]
+    assert normalized["secondary_finds"][-1]["count"] == 1
 
 
 def test_run_skill_appends_deterministic_grounding_for_a_small_log(monkeypatch, tmp_path):

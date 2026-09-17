@@ -34,8 +34,10 @@ Output shape:
   A log dominated by a single request/error still gets exactly one
   `key_finds` entry — don't pad with invented patterns.
 - `secondary_finds` — same shape as `key_finds`, for lower-frequency or
-  less-actionable patterns worth noting but not leading with. Can be an
-  empty list.
+  less-actionable patterns worth noting but not leading with. The runtime
+  appends every deterministic family that the model does not label, so this
+  list may be longer than the model-authored list. It must not collapse
+  omitted evidence into a generic "other" finding.
 - `likely_cause_en` / `likely_cause_zh` — short phrase, the most probable
   root cause overall (drawn from the leading key find).
 - `recommended_action_en` / `recommended_action_zh` — short phrase, what the
@@ -47,10 +49,13 @@ Output shape:
   replaced by the runtime with the exact number of physical log entries.
 
 Numerical truth is deterministic. The runtime owns `total_entries`, every
-finding `count` and `percentage`, and adds an explicit remainder finding when
-the selected findings do not cover every entry. Claude owns only grouping
-selection, labels, explanations, severity, and narrative. Never estimate a
-number from the prose or repeat a total that is not present in the manifest.
+finding `count` and `percentage`, and expands every omitted deterministic
+error family into its own secondary finding. Claude owns grouping selection,
+labels, explanations, severity, and narrative for the families it discusses.
+Never estimate a number from the prose or repeat a total that is not present
+in the manifest. `other` is an internal compatibility marker and is removed
+from the persisted result; it must not be used to hide an identifiable
+family.
 Do not put numeric count/percentage breakdowns in narrative sentences; use the
 structured finding fields instead.
 

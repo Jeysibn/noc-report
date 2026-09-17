@@ -284,7 +284,10 @@ function FindingCoverage({ result }: { result: AnalysisRun["result"] }) {
   const unclassified = findings.reduce(
     (sum, find) =>
       sum +
-      (find.patternIds?.includes("other") && typeof find.count === "number"
+      ((find.patternIds?.includes("other") ||
+        (find.labelEn.startsWith("Unclassified error family:") ||
+          find.labelEn.startsWith("Deterministic error family:"))) &&
+      typeof find.count === "number"
         ? find.count
         : 0),
     0,

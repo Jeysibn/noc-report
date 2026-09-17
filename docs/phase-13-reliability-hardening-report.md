@@ -129,3 +129,17 @@ Updated Obsidian files:
   shared operational-health store is the established centralized pattern.
 - Future: run the documented sanitized OCR benchmark and representative
   16-GB stack memory/swap benchmark before broad local-prefill enablement.
+
+## Log analysis count reconciliation follow-up
+
+The log-triage preprocessor previously exposed only model-selected prominent
+patterns plus one exact `Other log entries not separately classified` bucket.
+For a 2,965-entry production-style log, that made 1,806 entries look
+unidentified even though the arithmetic was complete. The preprocessor now
+builds stable operator-facing error families after removing only transport and
+request-identity noise, preserves meaningful status/error codes, and appends
+each omitted family as a deterministic secondary finding. The runtime still
+owns every count and percentage; Claude supplies labels and explanations only
+for the families it discusses. The cache contract was bumped so old
+under-classified results are not reused. The verified fixture produces 124
+families totaling 2,965 entries with no generic `other` bucket.

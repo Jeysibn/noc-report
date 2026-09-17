@@ -255,6 +255,49 @@ def _signature(line: str) -> str:
     return sig
 
 
+def _family_signature(line: str) -> str:
+    """Return a stable operator-facing error family.
+
+    ``_signature`` intentionally preserves a lot of detail for evidence
+    grounding. That is useful for exact deduplication, but it is too narrow
+    for presentation: request envelopes, logger line numbers, tokens, and
+    stack-frame coordinates can turn one operational failure into hundreds
+    of one-off patterns. A family removes those transport/runtime details
+    while preserving the actual message, endpoint, exception class, and
+    meaningful HTTP/business error codes.
+    """
+    family = _signature(line)
+    level = re.search(r"\b(?:TRACE|DEBUG|INFO|WARN|ERROR|FATAL)\b", family, re.IGNORECASE)
+    if level:
+        family = family[level.start():]
+    if " -- " in family:
+        family = family.split(" -- ", 1)[1]
+    else:
+        # Strip the logger and source line when a log formatter used a single
+        # dash instead of the usual `logger:line -- message` form.
+        family = re.sub(
+            r"^(?:TRACE|DEBUG|INFO|WARN|ERROR|FATAL)\s+[\w.$-]+:\d+\s+",
+            "",
+            family,
+            flags=re.IGNORECASE,
+        )
+        family = re.sub(r"^-[a-z0-9]{8,20}-", "-#-", family, flags=re.IGNORECASE)
+
+    # Values that identify one request/caller/credential rather than the
+    # failure family. Keep HTTP statuses and named business error codes.
+    family = re.sub(
+        r"\b(?:trace|span|request|correlation|session|user|record|compare|account|phone|retry|attempt|switches|totalAttempts|partitions|taskId|orderNo|firmCode|token|rechJson)[_-]?(?:id)?\s*[:=]\s*[^,\s]+",
+        lambda match: match.group(0).split("=", 1)[0].split(":", 1)[0] + "=#",
+        family,
+        flags=re.IGNORECASE,
+    )
+    family = re.sub(r"\b[0-9a-f]{8,40}\b", "#", family, flags=re.IGNORECASE)
+    family = re.sub(r"\b\d{4,}\b", "#", family)
+    family = re.sub(r"\b\d{2}:\d{2}:\d{2}(?:[.,]\d+)?\b", "#", family)
+    family = re.sub(r"\s+", " ", family).strip()
+    return family
+
+
 # Cost-optimization mission, Phase 5 fix: frequency-only ranking silently
 # dropped rare-but-critical patterns (e.g. one OutOfMemoryError buried under
 # 80,000 WARN retries never made it into the top MAX_PATTERN_GROUPS and was
@@ -287,7 +330,10 @@ def _extract_lines(input_text: str) -> list[str]:
     return input_text.splitlines()
 
 
-def _pattern_stats(lines: list[str]) -> tuple[list[str], dict[str, list[str]], dict[str, int], dict[str, bool]]:
+def _pattern_stats(
+    lines: list[str],
+    signature_fn=_signature,
+) -> tuple[list[str], dict[str, list[str]], dict[str, int], dict[str, bool]]:
     """Skill Runtime mission Phase 15: the deterministic core shared by
     both the oversized-log compaction path and the always-on grounding
     stats appended below — one exact pass over every line, grouped by
@@ -298,7 +344,7 @@ def _pattern_stats(lines: list[str]) -> tuple[list[str], dict[str, list[str]], d
     groups: dict[str, list[str]] = {}
     order: list[str] = []
     for line in lines:
-        sig = _signature(line)
+        sig = signature_fn(line)
         if sig not in groups:
             groups[sig] = []
             order.append(sig)
@@ -308,7 +354,7 @@ def _pattern_stats(lines: list[str]) -> tuple[list[str], dict[str, list[str]], d
     counts = {sig: 0 for sig in order}
     severe = {sig: False for sig in order}
     for line in lines:
-        sig = _signature(line)
+        sig = signature_fn(line)
         counts[sig] += 1
         if not severe[sig] and _is_severe(line):
             severe[sig] = True
@@ -326,11 +372,11 @@ def _count_manifest(input_text: str) -> tuple[int, dict[str, int], dict[str, str
     discusses the most operationally important patterns.
     """
     lines = _extract_lines(input_text)
-    order, _groups, counts, severe = _pattern_stats(lines)
-    ranked = sorted(order, key=lambda sig: counts[sig], reverse=True)
-    shown = ranked[:MAX_PATTERN_GROUPS]
-    for sig in ranked:
-        if severe[sig] and sig not in shown:
+    order, _groups, counts, severe = _pattern_stats(lines, _family_signature)
+    all_signatures = _manifest_signatures(order, counts, severe)
+    shown = all_signatures[:MAX_PATTERN_GROUPS]
+    for sig in all_signatures[MAX_PATTERN_GROUPS:]:
+        if severe[sig]:
             shown.append(sig)
     ids_by_signature = {sig: f"p{index:03d}" for index, sig in enumerate(shown, start=1)}
     counts_by_id = {pattern_id: counts[sig] for sig, pattern_id in ids_by_signature.items()}
@@ -338,18 +384,32 @@ def _count_manifest(input_text: str) -> tuple[int, dict[str, int], dict[str, str
     return len(lines), counts_by_id, ids_by_signature
 
 
+def _manifest_signatures(
+    order: list[str],
+    counts: dict[str, int],
+    severe: dict[str, bool],
+) -> list[str]:
+    """Return one stable ID order: prominent families first, then the rest."""
+    ranked = sorted(order, key=lambda sig: counts[sig], reverse=True)
+    prominent = ranked[:MAX_PATTERN_GROUPS]
+    rare_severe = [sig for sig in ranked[MAX_PATTERN_GROUPS:] if severe[sig]]
+    selected = prominent + rare_severe
+    return selected + [sig for sig in order if sig not in selected]
+
+
 def _count_manifest_text(input_text: str) -> str | None:
     lines = _extract_lines(input_text)
     if not lines:
         return None
     total, counts_by_id, ids_by_signature = _count_manifest(input_text)
-    _order, _groups, counts, severe = _pattern_stats(lines)
+    _order, _groups, counts, severe = _pattern_stats(lines, _family_signature)
     parts = [
         f"[DETERMINISTIC COUNT MANIFEST: total_entries={total:,}. "
         "For every finding, return pattern_ids from this manifest only. "
         "The runtime overwrites count and percentage from these IDs. "
-        "The 'other' ID is the exact remainder of entries not listed below; "
-        "do not estimate any number.]"]
+        "The 'other' ID is an internal compatibility remainder only; the "
+        "runtime expands omitted families into separate findings. Do not "
+        "estimate any number.]"]
     by_id = {pattern_id: signature for signature, pattern_id in ids_by_signature.items()}
     for pattern_id, signature in by_id.items():
         tag = " [SEVERE]" if severe.get(signature) else ""
@@ -359,8 +419,20 @@ def _count_manifest_text(input_text: str) -> str | None:
 
 
 def _reconcile_log_triage_counts(result: dict, input_text: str) -> dict:
-    """Replace model-supplied log arithmetic with exact application math."""
-    total, counts_by_id, _ids_by_signature = _count_manifest(input_text)
+    """Replace model arithmetic with exact, exhaustive family accounting.
+
+    The model may group the prominent manifest families and write their
+    bilingual explanations. Every family it does not mention is added as a
+    deterministic secondary finding with its normalized evidence signature.
+    This keeps the useful model narrative while ensuring the operator never
+    sees thousands of entries hidden behind one generic remainder bucket.
+    """
+    lines = _extract_lines(input_text)
+    order, _groups, counts, severe = _pattern_stats(lines, _family_signature)
+    all_signatures = _manifest_signatures(order, counts, severe)
+    all_ids = {signature: f"p{index:03d}" for index, signature in enumerate(all_signatures, start=1)}
+    counts_by_id = {pattern_id: counts[signature] for signature, pattern_id in all_ids.items()}
+    total = len(lines)
     normalized = dict(result)
     normalized["total_entries"] = total
     # Keep the narrative's total aligned with the same deterministic value.
@@ -383,6 +455,7 @@ def _reconcile_log_triage_counts(result: dict, input_text: str) -> dict:
         )
         normalized["summary_zh"] = f"日志条目总数（确定值）：{total:,}。{normalized['summary_zh']}"
     used: set[str] = set()
+    mentioned_other = False
     accounted = 0
 
     for group_name in ("key_finds", "secondary_finds"):
@@ -396,6 +469,9 @@ def _reconcile_log_triage_counts(result: dict, input_text: str) -> dict:
             ids = raw_ids if isinstance(raw_ids, list) else []
             valid_ids = []
             for pattern_id in ids:
+                if pattern_id == "other":
+                    mentioned_other = True
+                    continue
                 if isinstance(pattern_id, str) and pattern_id in counts_by_id and pattern_id not in used:
                     valid_ids.append(pattern_id)
                     used.add(pattern_id)
@@ -415,19 +491,34 @@ def _reconcile_log_triage_counts(result: dict, input_text: str) -> dict:
                 finding["count"] = None
                 finding["percentage"] = None
 
-    remainder = max(0, total - accounted)
-    if remainder:
-        normalized.setdefault("secondary_finds", []).append(
+    secondary = normalized.setdefault("secondary_finds", [])
+    # Replace the old catch-all if a model or cached preprocessor emitted it.
+    secondary[:] = [
+        finding
+        for finding in secondary
+        if not (isinstance(finding, dict) and "other" in (finding.get("pattern_ids") or []))
+    ]
+    for signature in all_signatures:
+        pattern_id = all_ids[signature]
+        if pattern_id in used:
+            continue
+        count = counts[signature]
+        secondary.append(
             {
-                "label_en": "Other log entries not separately classified",
-                "label_zh": "未单独分类的其他日志条目",
-                "count": remainder,
-                "percentage": round((remainder / total) * 100, 2) if total else 0.0,
-                "pattern_ids": ["other"],
-                "detail_en": "Exact remainder after the cited deterministic patterns; no model estimate was used.",
-                "detail_zh": "这是扣除已引用确定性模式后的精确剩余条目数，未使用模型估算。",
+                "label_en": f"Deterministic error family: {signature[:180]}",
+                "label_zh": f"确定性错误模式：{signature[:180]}",
+                "count": count,
+                "percentage": round((count / total) * 100, 2) if total else 0.0,
+                "pattern_ids": [pattern_id],
+                "detail_en": "Deterministic family derived from the supplied log evidence; the model did not provide a semantic label.",
+                "detail_zh": "该错误模式由提供的日志证据确定性归并；模型未提供语义标签。",
             }
         )
+        accounted += count
+    if mentioned_other and not order:
+        # Keep the result schema's non-empty finding invariant meaningful for
+        # an empty/degenerate input without reviving the generic catch-all.
+        accounted = total
     return normalized
 
 
