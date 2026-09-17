@@ -24,6 +24,7 @@ export function Dashboard() {
   const [summaryLoading, setSummaryLoading] = useState(true);
   const [summaryError, setSummaryError] = useState<string | null>(null);
   const [incidents, setIncidents] = useState<Incident[]>([]);
+  const [incidentsError, setIncidentsError] = useState<string | null>(null);
   const health = useOperationalHealth();
   const healthStatus = healthPill(health.data?.status ?? "unknown");
 
@@ -38,7 +39,12 @@ export function Dashboard() {
   useEffect(() => {
     shiftService.getCurrentShift().then(setShift);
     loadSummary();
-    incidentService.list({ limit: 5 }).then((page) => setIncidents(page.items));
+    incidentService.list({ limit: 5 }).then((page) => {
+      setIncidents(page.items);
+      setIncidentsError(null);
+    }).catch((error) => {
+      setIncidentsError(error instanceof Error ? error.message : "Unable to load recent incidents.");
+    });
   }, []);
 
   return (
@@ -83,13 +89,15 @@ export function Dashboard() {
             label="Logs awaiting analysis"
             value={String(summary.logsAwaitingAnalysis)}
             icon={<FileText className="h-5 w-5" />}
-            progress={summary.analysesRunning > 0 ? 55 : 0}
+            delta={{
+              label: `${summary.analysesRunning} running`,
+              direction: "flat",
+            }}
           />
           <StatCard
             label="Reports generated this shift"
             value={String(summary.reportsGeneratedThisShift)}
             icon={<BarChart className="h-5 w-5" />}
-            delta={{ label: "on track", direction: "flat" }}
           />
         </div>
       )}
@@ -104,7 +112,9 @@ export function Dashboard() {
               </Button>
             </Link>
           </CardHeader>
-          <Table>
+          {incidentsError ? (
+            <p className="text-sm text-critical">Unable to load recent incidents: {incidentsError}</p>
+          ) : <Table>
             <Thead>
               <Tr>
                 <Th>ID</Th>
@@ -136,7 +146,7 @@ export function Dashboard() {
                 );
               })}
             </Tbody>
-          </Table>
+          </Table>}
         </Card>
 
         <Card className="flex flex-col gap-3">

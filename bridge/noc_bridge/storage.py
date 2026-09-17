@@ -97,12 +97,27 @@ def upload_artifact_metadata(
     client.upload_file(
         str(src_path), bucket, object_key, ExtraArgs={"ContentType": content_type}
     )
+    return read_artifact_metadata(client, bucket=bucket, object_key=object_key)
+
+
+def read_artifact_metadata(client, *, bucket: str, object_key: str) -> dict[str, str | int | None]:
+    """Read an artifact's exact current version and checksum.
+
+    This is used by crash reconciliation.  A successful ``HEAD`` alone is
+    not enough: the bridge must persist the version that was actually
+    recovered and verify the bytes before declaring the job complete.
+    """
     metadata = client.head_object(Bucket=bucket, Key=object_key)
+    version_id = metadata.get("VersionId")
+    params = {"Bucket": bucket, "Key": object_key}
+    if version_id:
+        params["VersionId"] = version_id
+    body = client.get_object(**params)["Body"].read()
     return {
         "bucket": bucket,
         "object_key": object_key,
-        "version_id": metadata.get("VersionId"),
-        "sha256": sha256_of_file(src_path),
-        "byte_size": src_path.stat().st_size,
-        "content_type": metadata.get("ContentType") or content_type,
+        "version_id": version_id,
+        "sha256": hashlib.sha256(body).hexdigest(),
+        "byte_size": len(body),
+        "content_type": metadata.get("ContentType"),
     }

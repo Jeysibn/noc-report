@@ -17,7 +17,6 @@ from __future__ import annotations
 import io
 import json
 import hashlib
-import hashlib
 import logging
 import pathlib
 import tempfile
@@ -53,7 +52,15 @@ from noc_bridge.report_composition import compose_report
 from noc_bridge.report_document_json import document_to_preview_json
 from noc_bridge.sandbox_runner import SkillJobResult, run_job_sandbox
 from noc_bridge.skill_registry import materialize_snapshot, verify_skill_hash
-from noc_bridge.storage import ChecksumMismatch, download_object, get_client, object_exists, upload_artifact, upload_artifact_metadata
+from noc_bridge.storage import (
+    ChecksumMismatch,
+    download_object,
+    get_client,
+    object_exists,
+    read_artifact_metadata,
+    upload_artifact,
+    upload_artifact_metadata,
+)
 from noc_bridge.validation import (
     OutputValidationError,
     validate_output,
@@ -135,6 +142,42 @@ def _artifact_ref(job_type: str, job_id: uuid.UUID, settings: BridgeSettings) ->
 def _plan_artifact_ref(job_id: uuid.UUID, settings: BridgeSettings) -> tuple[str, str]:
     """Daily Report Plan artifact used to retry composition without Claude."""
     return settings.minio_bucket_job_artifacts, f"jobs/{job_id}/result.json"
+
+
+def _reconcile_artifacts(job_type: str, job_id: uuid.UUID, settings: BridgeSettings, minio_client) -> dict | None:
+    """Recover all already-uploaded artifacts for a redelivered report.
+
+    The normal completion path and this path both pass the same metadata
+    shape to ``db.mark_completed``.  A report-document generation is only
+    reconciled when its DOCX, browser document, and screenshot index all
+    exist; a partial upload is allowed to continue through the normal
+    composition/retry path instead of being falsely marked complete.
+    """
+    artifact_bucket, artifact_key = _artifact_ref(job_type, job_id, settings)
+    if not object_exists(minio_client, bucket=artifact_bucket, object_key=artifact_key):
+        return None
+
+    metadata = {"report": read_artifact_metadata(minio_client, bucket=artifact_bucket, object_key=artifact_key)} \
+        if job_type == "daily_report" else {}
+    if job_type != "daily_report":
+        return metadata
+
+    document_bucket = settings.minio_bucket_reports
+    document_key = f"reports/{job_id}/document.json"
+    screenshots_key = f"reports/{job_id}/document.screenshots.json"
+    document_exists = object_exists(minio_client, bucket=document_bucket, object_key=document_key)
+    screenshots_exists = object_exists(minio_client, bucket=document_bucket, object_key=screenshots_key)
+    if document_exists != screenshots_exists:
+        logger.warning("job %s has only one structured report artifact; continuing recovery", job_id)
+        return None
+    if document_exists:
+        metadata["document"] = read_artifact_metadata(
+            minio_client, bucket=document_bucket, object_key=document_key
+        )
+        metadata["screenshots"] = read_artifact_metadata(
+            minio_client, bucket=document_bucket, object_key=screenshots_key
+        )
+    return metadata
 
 
 def _merge_daily_report(snapshot: dict, ai_output: dict) -> dict:
@@ -278,9 +321,10 @@ class BridgeService:
         # mark_completed/ACK), don't re-run Claude at all — just finalize
         # from what's already there.
         artifact_bucket, artifact_key = _artifact_ref(job_type, job_id, self.settings)
-        if object_exists(minio_client, bucket=artifact_bucket, object_key=artifact_key):
-            logger.info("job %s artifact already present at %s/%s — reconciling without re-executing", job_id, artifact_bucket, artifact_key)
-            db.mark_completed(pg_conn, job_id)
+        reconciled_metadata = _reconcile_artifacts(job_type, job_id, self.settings, minio_client)
+        if reconciled_metadata is not None:
+            logger.info("job %s artifacts already present at %s/%s — reconciling without re-executing", job_id, artifact_bucket, artifact_key)
+            db.mark_completed(pg_conn, job_id, artifact_metadata=reconciled_metadata)
             publish_status_event(channel, job_id=job_id, event="completed", detail={"artifact_key": artifact_key, "reconciled": True})
             return
 
@@ -356,6 +400,9 @@ class BridgeService:
             # paid calls. This is the report equivalent of result-artifact
             # reconciliation for analysis jobs.
             reusable_plan = None
+            report_artifact = None
+            document_artifact = None
+            screenshots_artifact = None
             if job_type == "daily_report":
                 plan_bucket, plan_key = _plan_artifact_ref(job_id, self.settings)
                 if object_exists(minio_client, bucket=plan_bucket, object_key=plan_key):
@@ -607,11 +654,12 @@ class BridgeService:
                     raise RuntimeError(f"unsupported renderer profile: {renderer_profile!r}")
 
                 object_key = f"reports/{job_id}/report.docx"
-                upload_artifact(
+                report_artifact = upload_artifact_metadata(
                     minio_client,
                     bucket=self.settings.minio_bucket_reports,
                     object_key=object_key,
                     src_path=docx_path,
+                    content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 )
             else:
                 result_path = output_dir / "result.json"
@@ -642,8 +690,9 @@ class BridgeService:
                     logger.warning("failed to upload telemetry.json for job %s", job_id, exc_info=True)
 
             artifact_metadata = None
-            if job_type == "daily_report" and renderer_profile == "report-document-v1":
+            if job_type == "daily_report":
                 artifact_metadata = {
+                    "report": report_artifact,
                     "document": document_artifact,
                     "screenshots": screenshots_artifact,
                 }

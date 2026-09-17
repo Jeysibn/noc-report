@@ -29,14 +29,12 @@ def sweep_pending_purges(db, *, limit: int = 50) -> int:
     deletion is idempotent for an already-missing exact version.
     """
     completed = 0
+    skipped_ids = set()
     for _ in range(limit):
-        record = db.scalar(
-            select(Evidence)
-            .where(Evidence.lifecycle_state == "PURGE_PENDING")
-            .order_by(Evidence.deleted_at, Evidence.created_at)
-            .with_for_update(skip_locked=True)
-            .limit(1)
-        )
+        query = select(Evidence).where(Evidence.lifecycle_state == "PURGE_PENDING")
+        if skipped_ids:
+            query = query.where(~Evidence.id.in_(skipped_ids))
+        record = db.scalar(query.order_by(Evidence.deleted_at, Evidence.created_at).with_for_update(skip_locked=True).limit(1))
         if record is None:
             db.rollback()
             break
@@ -48,6 +46,11 @@ def sweep_pending_purges(db, *, limit: int = 50) -> int:
                 record.id,
                 ", ".join(references),
             )
+            # Rollback restores the pending state, so exclude this record
+            # for the remainder of this sweep. Otherwise one newly
+            # protected oldest row can consume the whole bounded sweep and
+            # starve later eligible evidence.
+            skipped_ids.add(record.id)
             db.rollback()
             continue
 

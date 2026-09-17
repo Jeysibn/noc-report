@@ -49,20 +49,32 @@ def mark_completed(conn, job_id: uuid.UUID, *, artifact_metadata: dict | None = 
                     str(job_id),
                 ),
             )
-            document = artifact_metadata.get("document") or {}
-            screenshots = artifact_metadata.get("screenshots") or {}
-            cur.execute(
-                "UPDATE reports SET document_object_key = %s, document_version_id = %s, document_sha256 = %s, "
-                "document_byte_size = %s, document_content_type = %s, "
-                "screenshots_object_key = %s, screenshots_version_id = %s, screenshots_sha256 = %s, "
-                "screenshots_byte_size = %s, screenshots_content_type = %s WHERE job_id = %s",
-                (
-                    document.get("object_key"), document.get("version_id"), document.get("sha256"),
-                    document.get("byte_size"), document.get("content_type"), screenshots.get("object_key"),
-                    screenshots.get("version_id"), screenshots.get("sha256"), screenshots.get("byte_size"),
-                    screenshots.get("content_type"), str(job_id),
-                ),
-            )
+            report = artifact_metadata.get("report")
+            if report:
+                cur.execute(
+                    "UPDATE reports SET report_bucket = %s, report_object_key = %s, report_version_id = %s, "
+                    "report_sha256 = %s, report_byte_size = %s, report_content_type = %s WHERE job_id = %s",
+                    (
+                        report.get("bucket"), report.get("object_key"), report.get("version_id"),
+                        report.get("sha256"), report.get("byte_size"), report.get("content_type"),
+                        str(job_id),
+                    ),
+                )
+            document = artifact_metadata.get("document")
+            screenshots = artifact_metadata.get("screenshots")
+            if document and screenshots:
+                cur.execute(
+                    "UPDATE reports SET document_object_key = %s, document_version_id = %s, document_sha256 = %s, "
+                    "document_byte_size = %s, document_content_type = %s, "
+                    "screenshots_object_key = %s, screenshots_version_id = %s, screenshots_sha256 = %s, "
+                    "screenshots_byte_size = %s, screenshots_content_type = %s WHERE job_id = %s",
+                    (
+                        document.get("object_key"), document.get("version_id"), document.get("sha256"),
+                        document.get("byte_size"), document.get("content_type"), screenshots.get("object_key"),
+                        screenshots.get("version_id"), screenshots.get("sha256"), screenshots.get("byte_size"),
+                        screenshots.get("content_type"), str(job_id),
+                    ),
+                )
     conn.commit()
 
 

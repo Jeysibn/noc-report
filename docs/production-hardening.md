@@ -36,6 +36,9 @@ Evidence that has reached `PURGE_PENDING` is retried by the embedded
 `evidence-purge-worker` (or `python -m app.evidence_purge_worker`). It uses
 row locking with `SKIP LOCKED`, exact evidence versions, idempotent missing
 object handling, and leaves the tombstone pending after a temporary failure.
+If a pending row becomes protected again, it is skipped for the current
+bounded sweep so later eligible rows are still processed; the row remains
+protected and pending for a future sweep.
 The pending count and failures are visible in worker logs. A report snapshot
 reference prevents purge from proceeding.
 
@@ -43,9 +46,22 @@ reference prevents purge from proceeding.
 
 `GET /api/v1/dashboard/summary` is the authoritative current-Shift aggregate
 used by the Dashboard cards. It counts directly in PostgreSQL, including
-reports and active log evidence, and does not derive values from the first
-page of incidents. A failed request is shown as an error with retry instead
-of fabricated zero values.
+active log evidence, and does not derive values from the first page of
+incidents. “Reports generated” means a completed Job whose Report row has a
+pinned report artifact version; queued, processing, failed, and unpinned rows
+are excluded. “Logs awaiting analysis” means active log evidence without a
+current completed AnalysisRun containing a usable result; no run, queued,
+running, and failed runs remain actionable. “Analyses running” counts only
+currently processing runs. A failed request is shown as an error with retry
+instead of fabricated zero values.
+
+Report crash reconciliation checks the complete deterministic artifact set.
+For the current ReportDocument renderer, DOCX, browser document, and private
+screenshot index must all be present. The bridge reads each exact object
+version, recomputes its checksum/size, and passes the same artifact metadata
+contract used by normal completion before marking the Job complete. A partial
+upload is not falsely completed and can continue through the composition
+retry path; a redelivery with all artifacts makes no second Claude call.
 
 ## RabbitMQ job lifecycle
 

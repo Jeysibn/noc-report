@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { incidentService, reportService, shiftService } from "@/services";
 import type { Incident, Shift } from "@/types/domain";
 import type { ReportJobStatus, ReportRun } from "@/types/report";
@@ -57,14 +57,44 @@ export function ShiftReport() {
   const [model, setModel] = useState("auto");
   const [effort, setEffort] = useState<"auto" | "low" | "medium">("auto");
   const [versions, setVersions] = useState<ReportRun[]>([]);
+  const [versionsLoading, setVersionsLoading] = useState(false);
+  const [versionsError, setVersionsError] = useState<string | null>(null);
+  const [versionsStale, setVersionsStale] = useState(false);
   const [requestError, setRequestError] = useState<string | null>(null);
   const [previewingId, setPreviewingId] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const shiftId = shift?.id;
 
   const canGenerateReport = hasPermission("report.generate");
   const canDownload = hasPermission("report.download");
   const canManageShift = hasPermission("shift.operate");
   const [openingShift, setOpeningShift] = useState(false);
+
+  const refreshReportHistory = useCallback(
+    (showLoading = false) => {
+      if (!shiftId) return;
+      if (showLoading) setVersionsLoading(true);
+      reportService
+        .list(shiftId)
+        .then((items) => {
+          setVersions(items);
+          setVersionsError(null);
+          setVersionsStale(false);
+        })
+        .catch((err) => {
+          setVersionsError(
+            err instanceof ApiError
+              ? err.message
+              : "Could not load report history.",
+          );
+          setVersionsStale(true);
+        })
+        .finally(() => {
+          if (showLoading) setVersionsLoading(false);
+        });
+    },
+    [shiftId],
+  );
 
   useEffect(() => {
     shiftService
@@ -81,12 +111,12 @@ export function ShiftReport() {
       );
   }, []);
 
-  const shiftId = shift?.id;
-
   useEffect(() => {
     if (!shiftId) {
       setIncidents([]);
       setVersions([]);
+      setVersionsError(null);
+      setVersionsStale(false);
       return;
     }
     let cancelled = false;
@@ -101,15 +131,13 @@ export function ShiftReport() {
         });
     };
     refreshReadiness();
-    reportService.list(shiftId).then((items) => {
-      if (!cancelled) setVersions(items);
-    });
+    refreshReportHistory(true);
     const readinessRefresh = setInterval(refreshReadiness, POLL_INTERVAL_MS);
     return () => {
       cancelled = true;
       clearInterval(readinessRefresh);
     };
-  }, [shiftId]);
+  }, [shiftId, refreshReportHistory]);
 
   const readinessRows = useMemo(
     () =>
@@ -135,14 +163,14 @@ export function ShiftReport() {
     if (!shift || !current || !IN_FLIGHT.includes(current.status)) return;
 
     pollRef.current = setInterval(() => {
-      reportService.list(shift.id).then(setVersions);
+      refreshReportHistory(false);
     }, POLL_INTERVAL_MS);
 
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shift?.id, current?.id, current?.status]);
+  }, [shift?.id, current?.id, current?.status, refreshReportHistory]);
 
   async function openShift() {
     setRequestError(null);
@@ -338,7 +366,30 @@ export function ShiftReport() {
 
         <Card>
           <CardTitle>Version history</CardTitle>
-          {versions.length === 0 && (
+          {versionsLoading && (
+            <p className="mt-3 text-sm text-muted">Loading report history…</p>
+          )}
+          {versionsError && (
+            <div className="mt-3 rounded-md border border-border p-3">
+              <p className="text-sm text-critical">
+                Unable to load report history: {versionsError}
+              </p>
+              <Button
+                className="mt-3"
+                size="sm"
+                variant="secondary"
+                onClick={() => refreshReportHistory(true)}
+              >
+                Retry
+              </Button>
+            </div>
+          )}
+          {versionsStale && !versionsError && (
+            <p className="mt-3 text-xs text-warning">
+              Report history may be stale; retrying…
+            </p>
+          )}
+          {!versionsLoading && !versionsError && versions.length === 0 && (
             <p className="mt-3 text-sm text-muted">No reports generated yet.</p>
           )}
           <ul className="mt-3 flex flex-col gap-3">

@@ -35,6 +35,16 @@ contract limits effective capacity to one and both API and bridge use
 `prefetch_count=1`. A future parallel worker requires a separate decision
 covering sandbox, credentials, resource limits, leases, and shutdown.
 
+Report crash reconciliation uses one completion contract for normal and
+redelivered success. It requires the complete deterministic artifact set for
+the active ReportDocument renderer, reads each object's exact MinIO version,
+recomputes checksum and size, and persists all identities before completing
+the Job. Partial artifact sets are not marked complete.
+
+Evidence purge sweeps exclude records that became protected during the
+current sweep after rollback, preventing one old pending tombstone from
+starving newer eligible records.
+
 ## Consequences
 
 Storage cleanup may be pending after a dependency outage, but database state

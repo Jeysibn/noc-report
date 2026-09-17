@@ -32,3 +32,5 @@ This glossary is the shared vocabulary for maintainers and coding agents.
 - **Resource Scope** — this installation is a shared NOC workspace: RBAC controls actions, while incidents, evidence, analyses, and reports are team-visible resources. It is not strict per-user tenancy.
 - **Dashboard Summary** — the authoritative current-Shift PostgreSQL aggregate consumed by the operator Dashboard; it is not derived from a paginated Incident response.
 - **Report Artifact Identity** — the exact MinIO version, checksum, size, and content type for a generated DOCX or structured ReportDocument preview.
+- **Dashboard Analysis Semantics** — an active log is awaiting analysis until its current AnalysisRun is completed with a usable result; queued/running/failed runs remain actionable, while only processing runs count as running.
+- **Generated Report** — a current-Shift Report whose Job is completed and whose DOCX artifact has a durable MinIO version identity; queued, failed, and incomplete requests are not generated reports.

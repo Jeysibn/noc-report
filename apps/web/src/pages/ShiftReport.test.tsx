@@ -128,6 +128,14 @@ describe("ShiftReport", () => {
     ).toBeInTheDocument();
   });
 
+  it("distinguishes report history failure from a valid empty history", async () => {
+    listReports.mockRejectedValueOnce(new Error("report API unavailable"));
+
+    render(<MemoryRouter><ShiftReport /></MemoryRouter>);
+    expect(await screen.findByText(/unable to load report history/i)).toBeInTheDocument();
+    expect(screen.queryByText(/no reports generated yet/i)).not.toBeInTheDocument();
+  });
+
   it("lets a NOC operator open a shift when none is active", async () => {
     __setCurrentUserForTests({
       id: "noc-user",
