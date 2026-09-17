@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 
 from app.core.config import settings
 from app.core.queue import JOB_TYPES, _queue_names, declare_topology, get_connection
-from app.core.storage import get_client
+from app.core.storage import get_client, sha256_of_bytes
 
 from tests.conftest import auth_headers, make_user
 from tests.test_shifts import _create_active_shift
@@ -371,24 +371,45 @@ def test_document_preview_and_screenshot_proxy_serve_bridge_written_artifacts(cl
             },
         ],
     }
-    minio.put_object(
+    document_bytes = json.dumps(preview_payload).encode("utf-8")
+    document_put = minio.put_object(
         Bucket=settings.minio_bucket_reports,
         Key=f"reports/{job_id}/document.json",
-        Body=json.dumps(preview_payload).encode("utf-8"),
+        Body=document_bytes,
         ContentType="application/json",
     )
-    minio.put_object(
-        Bucket=settings.minio_bucket_reports,
-        Key=f"reports/{job_id}/document.screenshots.json",
-        Body=json.dumps([{"bucket": "noc-evidence", "object_key": "inc-001.png", "filename": "alert.png"}]).encode("utf-8"),
-        ContentType="application/json",
-    )
-    minio.put_object(
+    screenshot_put = minio.put_object(
         Bucket="noc-evidence",
         Key="inc-001.png",
         Body=b"fake png bytes",
         ContentType="image/png",
     )
+    screenshot_index_bytes = json.dumps([{
+        "bucket": "noc-evidence", "object_key": "inc-001.png", "filename": "alert.png",
+        "version_id": screenshot_put["VersionId"],
+    }]).encode("utf-8")
+    screenshot_index_put = minio.put_object(
+        Bucket=settings.minio_bucket_reports,
+        Key=f"reports/{job_id}/document.screenshots.json",
+        Body=screenshot_index_bytes,
+        ContentType="application/json",
+    )
+
+    # Simulate the bridge's durable artifact metadata handoff. The API must
+    # use these exact versions, not a later HEAD at the deterministic key.
+    from app.models.models import Report
+    report = db_session.get(Report, __import__("uuid").UUID(report_id))
+    report.document_object_key = f"reports/{job_id}/document.json"
+    report.document_version_id = document_put["VersionId"]
+    report.document_sha256 = sha256_of_bytes(document_bytes)
+    report.document_byte_size = len(document_bytes)
+    report.document_content_type = "application/json"
+    report.screenshots_object_key = f"reports/{job_id}/document.screenshots.json"
+    report.screenshots_version_id = screenshot_index_put["VersionId"]
+    report.screenshots_sha256 = sha256_of_bytes(screenshot_index_bytes)
+    report.screenshots_byte_size = len(screenshot_index_bytes)
+    report.screenshots_content_type = "application/json"
+    db_session.commit()
 
     doc_resp = client.get(f"/api/v1/reports/{report_id}/document", headers=headers)
     assert doc_resp.status_code == 200
@@ -405,3 +426,15 @@ def test_document_preview_and_screenshot_proxy_serve_bridge_written_artifacts(cl
 
     missing_shot = client.get(f"/api/v1/reports/{report_id}/document/screenshots/9", headers=headers)
     assert missing_shot.status_code == 404
+
+    # A later version at the same preview key cannot alter this historical
+    # report's structured document.
+    minio.put_object(
+        Bucket=settings.minio_bucket_reports,
+        Key=f"reports/{job_id}/document.json",
+        Body=b'{"title":"replacement"}',
+        ContentType="application/json",
+    )
+    historical = client.get(f"/api/v1/reports/{report_id}/document", headers=headers)
+    assert historical.status_code == 200
+    assert historical.json()["blocks"][0]["text"] == "Alerts"

@@ -8,15 +8,7 @@ import { ApiAnalyticsService } from "@/api/ApiAnalyticsService";
 import { ApiAdminService } from "@/api/ApiAdminService";
 import { ApiOcrService } from "@/api/ApiOcrService";
 
-/**
- * Single wiring point: swap the Mock* implementations for Api* ones here
- * when the real backend lands — nothing else in the app changes, per
- * coding-agent rule 18 (mock/real behind the same interface).
- *
- * Milestone 13 (frontend wiring): flipped from Mock* to Api* for real.
- * The Mock* classes stay in src/mock/ for tests and as a reference for the
- * interface contract, they're just no longer what the running app uses.
- */
+/** Production service wiring. Test setup replaces these services with fakes. */
 export const incidentService = new ApiIncidentService();
 export const shiftService = new ApiShiftService();
 export const analysisService = new ApiAnalysisService();

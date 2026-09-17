@@ -7,9 +7,8 @@ import { login } from "@/lib/session";
 import { ApiError } from "@/lib/http";
 
 /**
- * Real login (Milestone 13 frontend wiring) — POST /api/v1/auth/login.
- * There was no login page before this; every route sat behind AppShell
- * unconditionally with a mock role switcher standing in for a session.
+ * Login uses the real server-side refresh-session flow; the access token is
+ * kept in memory and the refresh credential remains an HttpOnly cookie.
  */
 export function Login() {
   const navigate = useNavigate();

@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from app.models.models import Incident, Job, OutboxEvent, Shift, ShiftDefinition
+from app.models.models import Evidence, Incident, Job, OutboxEvent, Shift, ShiftDefinition
 from tests.conftest import auth_headers, make_user
 
 
@@ -185,3 +185,32 @@ def test_get_nonexistent_incident_404(client, db_session):
         "/api/v1/incidents/00000000-0000-0000-0000-000000000000", headers=headers
     )
     assert resp.status_code == 404
+
+
+def test_list_incidents_has_log_filters_active_log_evidence(client, db_session):
+    make_user(db_session, "filter-operator", "NOC")
+    headers = auth_headers(client, "filter-operator")
+    with_log = client.post("/api/v1/incidents", json=_incident_payload(title="With log"), headers=headers).json()
+    screenshot_only = client.post("/api/v1/incidents", json=_incident_payload(title="Screenshot only"), headers=headers).json()
+    removed_log = client.post("/api/v1/incidents", json=_incident_payload(title="Removed log"), headers=headers).json()
+    db_session.add_all([
+        Evidence(
+            incident_id=uuid.UUID(with_log["id"]), evidence_type="LOG", bucket="noc-evidence",
+            object_key="with.log", original_filename="with.log", lifecycle_state="ACTIVE",
+        ),
+        Evidence(
+            incident_id=uuid.UUID(screenshot_only["id"]), evidence_type="ALERT_SCREENSHOT", bucket="noc-evidence",
+            object_key="shot.png", original_filename="shot.png", lifecycle_state="ACTIVE",
+        ),
+        Evidence(
+            incident_id=uuid.UUID(removed_log["id"]), evidence_type="LOG", bucket="noc-evidence",
+            object_key="removed.log", original_filename="removed.log", lifecycle_state="PURGED",
+        ),
+    ])
+    db_session.commit()
+
+    yes = client.get("/api/v1/incidents?has_log=true", headers=headers)
+    no = client.get("/api/v1/incidents?has_log=false", headers=headers)
+    assert yes.status_code == no.status_code == 200
+    assert {item["title"] for item in yes.json()["items"]} == {"With log"}
+    assert {item["title"] for item in no.json()["items"]} == {"Screenshot only", "Removed log"}

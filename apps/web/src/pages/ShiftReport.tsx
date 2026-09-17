@@ -44,8 +44,7 @@ function readinessFor(incident: Incident): IncidentReadiness {
 }
 
 /**
- * Shift Report (Milestone 14: Real Daily Report). Readiness table stays
- * informational only — unlike the old mock, the real generate_report
+ * Shift Report. Readiness table stays informational; the real generate_report
  * endpoint doesn't orchestrate missing analyses first; it just freezes a
  * snapshot of whatever incident/analysis state exists right now. Skill is
  * fixed (Daily Alert Report). Generation is a real job: POST

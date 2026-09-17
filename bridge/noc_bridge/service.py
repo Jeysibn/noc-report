@@ -53,7 +53,7 @@ from noc_bridge.report_composition import compose_report
 from noc_bridge.report_document_json import document_to_preview_json
 from noc_bridge.sandbox_runner import SkillJobResult, run_job_sandbox
 from noc_bridge.skill_registry import materialize_snapshot, verify_skill_hash
-from noc_bridge.storage import ChecksumMismatch, download_object, get_client, object_exists, upload_artifact
+from noc_bridge.storage import ChecksumMismatch, download_object, get_client, object_exists, upload_artifact, upload_artifact_metadata
 from noc_bridge.validation import (
     OutputValidationError,
     validate_output,
@@ -555,13 +555,13 @@ class BridgeService:
                     preview_path.write_text(json.dumps(preview_payload))
                     screenshot_index_path = output_dir / "document.screenshots.json"
                     screenshot_index_path.write_text(json.dumps(screenshot_index))
-                    upload_artifact(
+                    document_artifact = upload_artifact_metadata(
                         minio_client,
                         bucket=self.settings.minio_bucket_reports,
                         object_key=f"reports/{job_id}/document.json",
                         src_path=preview_path,
                     )
-                    upload_artifact(
+                    screenshots_artifact = upload_artifact_metadata(
                         minio_client,
                         bucket=self.settings.minio_bucket_reports,
                         object_key=f"reports/{job_id}/document.screenshots.json",
@@ -641,7 +641,13 @@ class BridgeService:
                 except Exception:  # pragma: no cover - defensive
                     logger.warning("failed to upload telemetry.json for job %s", job_id, exc_info=True)
 
-        db.mark_completed(pg_conn, job_id)
+            artifact_metadata = None
+            if job_type == "daily_report" and renderer_profile == "report-document-v1":
+                artifact_metadata = {
+                    "document": document_artifact,
+                    "screenshots": screenshots_artifact,
+                }
+            db.mark_completed(pg_conn, job_id, artifact_metadata=artifact_metadata)
         publish_status_event(
             channel,
             job_id=job_id,

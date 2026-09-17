@@ -25,6 +25,28 @@ Report downloads use the pinned MinIO version and verify the checksum. Rows
 created before artifact version pinning are legacy and are not downloadable
 until a poll reconciles and pins their artifact.
 
+The structured `ReportDocument` preview and its private screenshot index are
+also version-pinned on the `reports` row. The bridge captures both versions,
+hashes, sizes, and content types before marking the Job complete. Preview
+requests use those exact versions and verify their hashes; a later write to a
+deterministic report key cannot alter an historical preview. The DOCX and
+preview are produced from the same composed document in one bridge execution.
+
+Evidence that has reached `PURGE_PENDING` is retried by the embedded
+`evidence-purge-worker` (or `python -m app.evidence_purge_worker`). It uses
+row locking with `SKIP LOCKED`, exact evidence versions, idempotent missing
+object handling, and leaves the tombstone pending after a temporary failure.
+The pending count and failures are visible in worker logs. A report snapshot
+reference prevents purge from proceeding.
+
+## Dashboard ownership
+
+`GET /api/v1/dashboard/summary` is the authoritative current-Shift aggregate
+used by the Dashboard cards. It counts directly in PostgreSQL, including
+reports and active log evidence, and does not derive values from the first
+page of incidents. A failed request is shown as an error with retry instead
+of fabricated zero values.
+
 ## RabbitMQ job lifecycle
 
 `packages/contracts/job_protocol.json` owns job types, exchanges, retry TTL,

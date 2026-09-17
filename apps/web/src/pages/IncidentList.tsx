@@ -11,12 +11,7 @@ import { incidentStatusMap, formatTime } from "@/lib/incidentStatus";
 
 const PAGE_SIZE = 20;
 
-/**
- * Incident List (Milestone 3). Filters live in URL query state so a filtered
- * view is shareable/bookmarkable, per the UI Phase Plan. Smooth at 100+ mock
- * incidents (120 in the fixture) via server-shaped pagination on the mock
- * service, not client-side slicing of an already-fetched full list.
- */
+/** Filters live in URL query state so filtered views remain shareable. */
 export function IncidentList() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [incidents, setIncidents] = useState<Incident[]>([]);

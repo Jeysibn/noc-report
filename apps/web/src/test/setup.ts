@@ -42,8 +42,11 @@ vi.mock("@/services", async () => {
         id: "mock-evidence-id",
         evidenceType: "LOG",
         originalFilename: file.name,
+        lifecycleState: "ACTIVE",
       }),
       list: async () => [],
+      getDownloadUrl: async () => "https://example.test/evidence",
+      delete: async () => undefined,
     },
     reportService: {
       list: async () => [],

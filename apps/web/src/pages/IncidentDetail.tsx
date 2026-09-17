@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
-import { incidentService } from "@/services";
+import { evidenceService, incidentService } from "@/services";
 import type { Incident } from "@/types/domain";
 import type { IncidentTimelineEvent } from "@/services/incident.service";
+import type { EvidenceRecord } from "@/services/evidence.service";
 import { Card, CardTitle } from "@/components/ui/Card";
 import { StatusPill } from "@/components/ui/StatusPill";
 import { Button } from "@/components/ui/Button";
@@ -10,14 +11,10 @@ import { Input } from "@/components/ui/Form";
 import { incidentStatusMap, formatTime } from "@/lib/incidentStatus";
 import { hasPermission } from "@/lib/session";
 import { LogAnalysisPanel } from "@/components/incidents/LogAnalysisPanel";
+import { ApiError } from "@/lib/http";
 
 /**
- * Incident Detail (Milestone 3, Timeline re-wired later to real data).
- * Overview + evidence placeholder. Log Analysis/Reports/Audit sections
- * land with their own milestones (5, 6, 7) — this page's job is the shell
- * + Overview + Timeline + Evidence per the UI Phase Plan.
- *
- * Timeline is fetched from GET /incidents/{id}/timeline — a real,
+ * Incident Detail. Timeline is fetched from GET /incidents/{id}/timeline — a real,
  * timestamped sequence derived from Incident/Evidence/Job rows (see
  * app/api/v1/routers/incidents.py's get_incident_timeline), not a static
  * guess based on incident.status/hasLog. It's polled lightly so it
@@ -29,7 +26,14 @@ export function IncidentDetail() {
   const navigate = useNavigate();
   const [incident, setIncident] = useState<Incident | null>(null);
   const [notFound, setNotFound] = useState(false);
+  const [permissionDenied, setPermissionDenied] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [timeline, setTimeline] = useState<IncidentTimelineEvent[]>([]);
+  const [timelineError, setTimelineError] = useState(false);
+  const [evidence, setEvidence] = useState<EvidenceRecord[]>([]);
+  const [evidenceLoading, setEvidenceLoading] = useState(true);
+  const [evidenceError, setEvidenceError] = useState<string | null>(null);
+  const [evidenceBusyId, setEvidenceBusyId] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const [isEditing, setIsEditing] = useState(false);
@@ -38,13 +42,23 @@ export function IncidentDetail() {
   const [busy, setBusy] = useState(false);
 
   const canUpdate = hasPermission("incident.update");
+  const canManageEvidence = hasPermission("incident.evidence.upload");
   const canDelete = hasPermission("incident.delete");
 
   const refresh = () => {
     if (!id) return;
+    setLoadError(null);
+    setNotFound(false);
+    setPermissionDenied(false);
     incidentService.get(id).then((result) => {
       if (result) setIncident(result);
       else setNotFound(true);
+    }).catch((error) => {
+      if (error instanceof ApiError && error.status === 403) {
+        setPermissionDenied(true);
+      } else {
+        setLoadError(error instanceof Error ? error.message : "Unable to load incident.");
+      }
     });
   };
 
@@ -60,7 +74,7 @@ export function IncidentDetail() {
         recoveredAt: new Date().toISOString(),
       });
       setIncident(updated);
-      incidentService.getTimeline(id).then(setTimeline).catch(() => {});
+      incidentService.getTimeline(id).then(setTimeline).catch(() => setTimelineError(true));
     } catch (err) {
       setActionError(err instanceof Error ? err.message : "Failed to mark recovered");
     } finally {
@@ -105,8 +119,20 @@ export function IncidentDetail() {
 
   useEffect(() => {
     if (!id) return;
+    setEvidenceLoading(true);
+    setEvidenceError(null);
+    evidenceService.list(id).then(setEvidence).catch((error) => {
+      setEvidenceError(error instanceof Error ? error.message : "Unable to load evidence.");
+    }).finally(() => setEvidenceLoading(false));
+  }, [id]);
+
+  useEffect(() => {
+    if (!id) return;
     const fetchTimeline = () => {
-      incidentService.getTimeline(id).then(setTimeline).catch(() => {});
+      incidentService.getTimeline(id).then((events) => {
+        setTimeline(events);
+        setTimelineError(false);
+      }).catch(() => setTimelineError(true));
     };
     fetchTimeline();
     pollRef.current = setInterval(fetchTimeline, 5000);
@@ -115,6 +141,45 @@ export function IncidentDetail() {
     };
   }, [id]);
 
+  async function downloadEvidence(item: EvidenceRecord) {
+    setEvidenceBusyId(item.id);
+    setEvidenceError(null);
+    try {
+      const url = await evidenceService.getDownloadUrl(item.id);
+      window.open(url, "_blank", "noopener,noreferrer");
+    } catch (error) {
+      setEvidenceError(error instanceof Error ? error.message : "Unable to download evidence.");
+    } finally {
+      setEvidenceBusyId(null);
+    }
+  }
+
+  async function removeEvidence(item: EvidenceRecord) {
+    if (!window.confirm(`Remove ${item.originalFilename}?`)) return;
+    setEvidenceBusyId(item.id);
+    setEvidenceError(null);
+    try {
+      await evidenceService.delete(item.id);
+      const refreshed = await evidenceService.list(id!);
+      setEvidence(refreshed);
+    } catch (error) {
+      setEvidenceError(error instanceof Error ? error.message : "Unable to remove evidence.");
+      try {
+        setEvidence(await evidenceService.list(id!));
+      } catch {
+        // Preserve the original actionable error if a refresh also fails.
+      }
+    } finally {
+      setEvidenceBusyId(null);
+    }
+  }
+
+  if (loadError) {
+    return <Card><p className="text-sm text-critical">Unable to load incident: {loadError}</p><Button className="mt-3" size="sm" onClick={refresh}>Retry</Button></Card>;
+  }
+  if (permissionDenied) {
+    return <Card><p className="text-sm text-critical">You do not have permission to view this incident.</p></Card>;
+  }
   if (notFound) {
     return (
       <Card>
@@ -126,7 +191,7 @@ export function IncidentDetail() {
     );
   }
 
-  if (!incident) return null;
+  if (!incident) return <Card><p className="text-sm text-muted">Loading incident…</p></Card>;
 
   const { status, label } = incidentStatusMap[incident.status];
 
@@ -201,10 +266,31 @@ export function IncidentDetail() {
 
         <Card>
           <CardTitle>Evidence</CardTitle>
-          {incident.hasLog ? (
-            <p className="mt-4 text-sm text-muted">1 log attachment, 0 screenshots (mock).</p>
-          ) : (
+          {evidenceLoading && <p className="mt-4 text-sm text-muted">Loading evidence…</p>}
+          {evidenceError && <p className="mt-4 text-sm text-critical">Unable to load evidence: {evidenceError}</p>}
+          {!evidenceLoading && !evidenceError && evidence.length === 0 && (
             <p className="mt-4 text-sm text-muted">No evidence attached yet.</p>
+          )}
+          {!evidenceLoading && !evidenceError && evidence.length > 0 && (
+            <ul className="mt-4 flex flex-col gap-3">
+              {evidence.map((item) => (
+                <li key={item.id} className="rounded border border-line p-3 text-sm">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate font-medium">{item.originalFilename}</p>
+                      <p className="mt-1 text-xs text-muted">
+                        {item.evidenceType.replace(/_/g, " ")} · {item.byteSize == null ? "size unknown" : `${item.byteSize.toLocaleString()} bytes`}
+                      </p>
+                    </div>
+                    <span className="shrink-0 text-xs text-muted">{item.lifecycleState === "PURGE_PENDING" ? "Removal pending" : "Available"}</span>
+                  </div>
+                  <div className="mt-2 flex gap-2">
+                    {item.lifecycleState === "ACTIVE" && <Button size="sm" variant="secondary" onClick={() => downloadEvidence(item)} disabled={evidenceBusyId === item.id}>Download</Button>}
+                    {item.lifecycleState === "ACTIVE" && canManageEvidence && <Button size="sm" variant="danger" onClick={() => removeEvidence(item)} disabled={evidenceBusyId === item.id}>Remove</Button>}
+                  </div>
+                </li>
+              ))}
+            </ul>
           )}
         </Card>
       </div>
@@ -213,6 +299,7 @@ export function IncidentDetail() {
 
       <Card>
         <CardTitle>Timeline</CardTitle>
+        {timelineError && <p className="mt-4 text-sm text-muted">Timeline temporarily unavailable; retrying.</p>}
         {timeline.length === 0 ? (
           <p className="mt-4 text-sm text-muted">No timeline events yet.</p>
         ) : (

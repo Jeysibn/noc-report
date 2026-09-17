@@ -193,6 +193,15 @@ class IncidentPage(BaseModel):
     total: int
 
 
+class DashboardSummaryOut(BaseModel):
+    open_incidents: int
+    active_alerts: int
+    recovered_alerts: int
+    logs_awaiting_analysis: int
+    analyses_running: int
+    reports_generated_this_shift: int
+
+
 class EvidenceUploadUrlRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -220,16 +229,10 @@ class EvidenceOut(BaseModel):
     id: uuid.UUID
     incident_id: uuid.UUID | None
     evidence_type: str
-    bucket: str
-    object_key: str
     original_filename: str
     mime_type: str | None
     byte_size: int | None
-    sha256: str | None
-    version_id: str | None
-    uploaded_by: uuid.UUID | None
     created_at: datetime
-    superseded_by: uuid.UUID | None
     lifecycle_state: str
     deleted_at: datetime | None
 

@@ -5,11 +5,7 @@ export interface SearchResponse {
   total: number;
 }
 
-/**
- * Real-only from the start (Milestone 15) — replaces the old client-side
- * substring filter KnowledgeBase.tsx used to run over mock incident
- * fixtures with the real PostgreSQL FTS/trigram search endpoint.
- */
+/** Search contract backed by the PostgreSQL search endpoint in production. */
 export interface SearchService {
   search(filters: SearchFilters): Promise<SearchResponse>;
 }

@@ -691,6 +691,19 @@ class Report(Base):
     report_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     report_byte_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
     report_content_type: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # Structured web preview artifacts are pinned separately from the DOCX.
+    # Both are generated from the same ReportDocument and must retain exact
+    # MinIO byte identity across later writes to deterministic keys.
+    document_object_key: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    document_version_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    document_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    document_byte_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    document_content_type: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    screenshots_object_key: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    screenshots_version_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    screenshots_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    screenshots_byte_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    screenshots_content_type: Mapped[str | None] = mapped_column(String(200), nullable=True)
     model: Mapped[str | None] = mapped_column(String(100), nullable=True)
     effort: Mapped[str | None] = mapped_column(String(20), nullable=True)
     skill_name: Mapped[str | None] = mapped_column(String(100), nullable=True)

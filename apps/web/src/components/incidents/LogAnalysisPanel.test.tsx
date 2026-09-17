@@ -102,10 +102,7 @@ describe("LogAnalysisPanel", () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    expect(requestAnalysis).toHaveBeenCalledWith("incident-1", {
-      model: "claude-sonnet-5",
-      effort: "medium",
-    });
+    expect(requestAnalysis).toHaveBeenCalledWith("incident-1", {});
 
     await act(() => vi.advanceTimersByTimeAsync(3000));
     expect(getRun).toHaveBeenCalledWith("incident-1", "job-1");

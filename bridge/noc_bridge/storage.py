@@ -82,3 +82,27 @@ def upload_artifact(
         str(src_path), bucket, object_key, ExtraArgs={"ContentType": content_type}
     )
     return sha256_of_file(src_path)
+
+
+def upload_artifact_metadata(
+    client, *, bucket: str, object_key: str, src_path: pathlib.Path,
+    content_type: str = "application/json",
+) -> dict[str, str | int | None]:
+    """Upload an artifact and return the immutable storage identity.
+
+    ``upload_artifact`` remains a checksum-only compatibility helper. Report
+    preview artifacts additionally need the exact version returned by the
+    versioned reports bucket so the API can pin historical previews.
+    """
+    client.upload_file(
+        str(src_path), bucket, object_key, ExtraArgs={"ContentType": content_type}
+    )
+    metadata = client.head_object(Bucket=bucket, Key=object_key)
+    return {
+        "bucket": bucket,
+        "object_key": object_key,
+        "version_id": metadata.get("VersionId"),
+        "sha256": sha256_of_file(src_path),
+        "byte_size": src_path.stat().st_size,
+        "content_type": metadata.get("ContentType") or content_type,
+    }

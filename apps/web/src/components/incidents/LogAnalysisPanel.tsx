@@ -40,8 +40,8 @@ export function LogAnalysisPanel({
   incidentId?: string;
   hasLog: boolean;
 }) {
-  const [model, setModel] = useState("claude-sonnet-5");
-  const [effort, setEffort] = useState<"low" | "medium" | "high">("medium");
+  const [model, setModel] = useState<string | undefined>(undefined);
+  const [effort, setEffort] = useState<"low" | "medium" | "high" | undefined>(undefined);
   const [runs, setRuns] = useState<AnalysisRun[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [requestError, setRequestError] = useState<string | null>(null);
@@ -132,10 +132,11 @@ export function LogAnalysisPanel({
             <div>
               <label className="mb-1.5 block text-sm font-medium">Model</label>
               <Select
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
+                value={model ?? ""}
+                onChange={(e) => setModel(e.target.value || undefined)}
                 disabled={isBusy}
               >
+                <option value="">System default / Auto</option>
                 <option value="claude-sonnet-5">Claude Sonnet 5</option>
                 <option value="claude-opus-5">Claude Opus 5</option>
               </Select>
@@ -143,10 +144,11 @@ export function LogAnalysisPanel({
             <div>
               <label className="mb-1.5 block text-sm font-medium">Effort</label>
               <Select
-                value={effort}
-                onChange={(e) => setEffort(e.target.value as typeof effort)}
+                value={effort ?? ""}
+                onChange={(e) => setEffort((e.target.value || undefined) as typeof effort)}
                 disabled={isBusy}
               >
+                <option value="">System default / Auto</option>
                 <option value="low">Low</option>
                 <option value="medium">Medium</option>
                 <option value="high">High</option>

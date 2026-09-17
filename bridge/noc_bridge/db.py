@@ -26,17 +26,43 @@ def mark_started(conn, job_id: uuid.UUID) -> None:
     conn.commit()
 
 
-def mark_completed(conn, job_id: uuid.UUID) -> None:
+def mark_completed(conn, job_id: uuid.UUID, *, artifact_metadata: dict | None = None) -> None:
     """Also releases the claim/lease (Reliability mission Batch A) — a
     COMPLETED job is a terminal state, so there's nothing left to protect
     a lease against, and clearing it keeps `fetch_job_row` output tidy."""
     with conn.cursor() as cur:
-        cur.execute(
-            "UPDATE jobs SET status = %s, completed_at = %s, error_code = NULL, "
-            "error_message = NULL, claimed_at = NULL, "
-            "claim_token = NULL, lease_expires_at = NULL WHERE id = %s",
-            ("COMPLETED", datetime.now(timezone.utc), str(job_id)),
-        )
+        if artifact_metadata is None:
+            cur.execute(
+                "UPDATE jobs SET status = %s, completed_at = %s, error_code = NULL, "
+                "error_message = NULL, claimed_at = NULL, "
+                "claim_token = NULL, lease_expires_at = NULL WHERE id = %s",
+                ("COMPLETED", datetime.now(timezone.utc), str(job_id)),
+            )
+        else:
+            cur.execute(
+                "UPDATE jobs SET status = %s, completed_at = %s, error_code = NULL, "
+                "error_message = NULL, claimed_at = NULL, "
+                "claim_token = NULL, lease_expires_at = NULL WHERE id = %s",
+                (
+                    "COMPLETED",
+                    datetime.now(timezone.utc),
+                    str(job_id),
+                ),
+            )
+            document = artifact_metadata.get("document") or {}
+            screenshots = artifact_metadata.get("screenshots") or {}
+            cur.execute(
+                "UPDATE reports SET document_object_key = %s, document_version_id = %s, document_sha256 = %s, "
+                "document_byte_size = %s, document_content_type = %s, "
+                "screenshots_object_key = %s, screenshots_version_id = %s, screenshots_sha256 = %s, "
+                "screenshots_byte_size = %s, screenshots_content_type = %s WHERE job_id = %s",
+                (
+                    document.get("object_key"), document.get("version_id"), document.get("sha256"),
+                    document.get("byte_size"), document.get("content_type"), screenshots.get("object_key"),
+                    screenshots.get("version_id"), screenshots.get("sha256"), screenshots.get("byte_size"),
+                    screenshots.get("content_type"), str(job_id),
+                ),
+            )
     conn.commit()
 
 

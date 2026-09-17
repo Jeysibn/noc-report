@@ -18,21 +18,26 @@ function healthPill(status: "healthy" | "degraded" | "unavailable" | "unknown" |
   } as const;
 }
 
-/**
- * Dashboard (Milestone 2). Current shift card, operational summary,
- * recent incidents table, quick actions, compact bridge/queue status bar —
- * all mock data via the service layer, no page-specific fetch logic.
- */
 export function Dashboard() {
   const [shift, setShift] = useState<Shift | null>(null);
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
+  const [summaryLoading, setSummaryLoading] = useState(true);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const health = useOperationalHealth();
   const healthStatus = healthPill(health.data?.status ?? "unknown");
 
+  function loadSummary() {
+    setSummaryLoading(true);
+    setSummaryError(null);
+    incidentService.getDashboardSummary().then(setSummary).catch((error) => {
+      setSummaryError(error instanceof Error ? error.message : "Unable to load dashboard metrics.");
+    }).finally(() => setSummaryLoading(false));
+  }
+
   useEffect(() => {
     shiftService.getCurrentShift().then(setShift);
-    incidentService.getDashboardSummary().then(setSummary);
+    loadSummary();
     incidentService.list({ limit: 5 }).then((page) => setIncidents(page.items));
   }, []);
 
@@ -59,7 +64,14 @@ export function Dashboard() {
         </Card>
       )}
 
-      {summary && (
+      {summaryLoading && <p className="text-sm text-muted">Loading operational metrics…</p>}
+      {summaryError && (
+        <Card>
+          <p className="text-sm text-critical">Unable to load operational metrics: {summaryError}</p>
+          <Button className="mt-3" size="sm" variant="secondary" onClick={loadSummary}>Retry</Button>
+        </Card>
+      )}
+      {summary && !summaryError && (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <StatCard
             label="Open incidents"

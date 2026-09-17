@@ -7,7 +7,7 @@ import type {
   IncidentTimelineEvent,
   IncidentUpdateInput,
 } from "@/services/incident.service";
-import { httpRequest } from "@/lib/http";
+import { ApiError, httpRequest } from "@/lib/http";
 
 interface RawIncident {
   id: string;
@@ -67,6 +67,7 @@ export class ApiIncidentService implements IncidentService {
         status: params.status,
         service: params.service,
         environment: params.environment,
+        has_log: params.hasLog,
       },
     });
     return {
@@ -79,8 +80,9 @@ export class ApiIncidentService implements IncidentService {
     try {
       const raw = await httpRequest<RawIncident>(`/api/v1/incidents/${id}`);
       return toIncident(raw);
-    } catch {
-      return null;
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) return null;
+      throw error;
     }
   }
 
@@ -121,20 +123,22 @@ export class ApiIncidentService implements IncidentService {
     await httpRequest<void>(`/api/v1/incidents/${id}`, { method: "DELETE" });
   }
 
-  /**
-   * No GET /dashboard/summary exists on the real backend (Milestone 16
-   * scope) — computed client-side from a real incident page instead of
-   * fabricating a number.
-   */
   async getDashboardSummary(): Promise<DashboardSummary> {
-    const page = await httpRequest<RawIncidentPage>("/api/v1/incidents", { query: { limit: 200 } });
+    const raw = await httpRequest<{
+      open_incidents: number;
+      active_alerts: number;
+      recovered_alerts: number;
+      logs_awaiting_analysis: number;
+      analyses_running: number;
+      reports_generated_this_shift: number;
+    }>("/api/v1/dashboard/summary");
     return {
-      openIncidents: page.items.filter((i) => i.status !== "recovered").length,
-      activeAlerts: page.items.filter((i) => i.status === "open").length,
-      recoveredAlerts: page.items.filter((i) => i.status === "recovered").length,
-      logsAwaitingAnalysis: page.items.filter((i) => i.has_log && i.analysis_status === "not_analyzed").length,
-      analysesRunning: page.items.filter((i) => i.analysis_status === "running" || i.analysis_status === "queued").length,
-      reportsGeneratedThisShift: 0,
+      openIncidents: raw.open_incidents,
+      activeAlerts: raw.active_alerts,
+      recoveredAlerts: raw.recovered_alerts,
+      logsAwaitingAnalysis: raw.logs_awaiting_analysis,
+      analysesRunning: raw.analyses_running,
+      reportsGeneratedThisShift: raw.reports_generated_this_shift,
     };
   }
 

@@ -83,9 +83,12 @@ function toRun(raw: RawAnalysisRunOut): AnalysisRun {
 
 export class ApiAnalysisService implements AnalysisService {
   async requestAnalysis(incidentId: string, input: AnalysisRequestInput): Promise<AnalysisRun> {
+    const body: AnalysisRequestInput = {};
+    if (input.model) body.model = input.model;
+    if (input.effort) body.effort = input.effort;
     const raw = await httpRequest<RawAnalysisRunOut>(`/api/v1/incidents/${incidentId}/analysis-runs`, {
       method: "POST",
-      body: { model: input.model, effort: input.effort },
+      body,
     });
     return toRun(raw);
   }

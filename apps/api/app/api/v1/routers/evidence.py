@@ -174,7 +174,10 @@ def list_evidence(
     return list(
         db.scalars(
             select(Evidence)
-            .where(Evidence.incident_id == incident_id, Evidence.lifecycle_state == "ACTIVE")
+            .where(
+                Evidence.incident_id == incident_id,
+                Evidence.lifecycle_state.in_(("ACTIVE", "PURGE_PENDING")),
+            )
             .order_by(Evidence.created_at)
         )
     )

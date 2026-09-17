@@ -5,14 +5,16 @@ export interface EvidenceRecord {
   id: string;
   evidenceType: EvidenceType;
   originalFilename: string;
+  mimeType?: string;
+  byteSize?: number;
+  createdAt?: string;
+  lifecycleState: "ACTIVE" | "PURGE_PENDING" | "PURGED" | string;
 }
 
-/**
- * Real-only from the start (Milestone 13 frontend wiring) — there was no
- * mock evidence flow to swap out; the presigned-upload choreography (see
- * ApiEvidenceService) only makes sense against a real object store.
- */
+/** The browser-facing evidence contract; storage coordinates stay server-side. */
 export interface EvidenceService {
   upload(incidentId: string, file: File, evidenceType: EvidenceType): Promise<EvidenceRecord>;
   list(incidentId: string): Promise<EvidenceRecord[]>;
+  getDownloadUrl(evidenceId: string): Promise<string>;
+  delete(evidenceId: string): Promise<void>;
 }

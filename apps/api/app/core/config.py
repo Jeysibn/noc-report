@@ -60,6 +60,7 @@ class Settings(BaseSettings):
     # by the operator (50 MB) — no master-plan-specified limit exists.
     max_evidence_upload_bytes: int = 50 * 1024 * 1024
     evidence_upload_intent_ttl_seconds: int = 15 * 60
+    evidence_purge_interval_seconds: float = 30.0
 
     # Phase 12 local Incident Prefill AI. Disabled by default so OCR/manual
     # workflows remain the safe rollout path. The intended production

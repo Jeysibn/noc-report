@@ -255,13 +255,17 @@ def _to_out(report: Report, job: Job) -> ReportOut:
 
 
 def _sync_completed_report(db: Session, report: Report, job: Job) -> None:
-    """Same sync-once-on-poll shape as Milestone 13's analysis run sync,
+    """Sync a completed report's immutable DOCX artifact once,
     but the artifact here is a DOCX in noc-reports (not a JSON result in
     noc-job-artifacts) — the bridge writes it to a deterministic key this
     function re-derives rather than being told."""
-    if job.status != "COMPLETED" or (
-        report.report_object_key is not None and report.report_version_id is not None
-    ):
+    if job.status != "COMPLETED":
+        return
+    # All artifact identities are write-once. The bridge records preview
+    # versions before marking the Job complete; once the DOCX has been
+    # pinned, never HEAD the deterministic key again or a later overwrite
+    # could silently change this historical Report row.
+    if report.report_version_id:
         return
 
     key = report.report_object_key or _report_object_key(job.id)
@@ -515,13 +519,21 @@ def get_report_document(
     profile (older frozen snapshots may have used the legacy assembler),
     so a missing document.json is a normal 404, not an error."""
     report, _job = _report_or_404(db, report_id)
+    if not report.document_version_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No structured preview is available for this report")
     try:
-        body = get_object_bytes(report.report_bucket, _document_object_key(report.job_id))
+        body = get_object_bytes(
+            report.report_bucket,
+            report.document_object_key or _document_object_key(report.job_id),
+            version_id=report.document_version_id,
+        )
     except ClientError:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND, "No structured preview is available for this report"
         )
-    return Response(content=body, media_type="application/json")
+    if report.document_sha256 and sha256_of_bytes(body) != report.document_sha256:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Report preview checksum mismatch")
+    return Response(content=body, media_type=report.document_content_type or "application/json")
 
 
 @router.get("/reports/{report_id}/document/screenshots/{index}")
@@ -536,13 +548,21 @@ def get_report_document_screenshot(
     for each index lives only in the private document.screenshots.json
     artifact this reads server-side — it is never sent to the browser."""
     report, _job = _report_or_404(db, report_id)
+    if not report.screenshots_version_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No structured preview is available for this report")
     try:
-        raw_index = get_object_bytes(report.report_bucket, _document_screenshots_object_key(report.job_id))
+        raw_index = get_object_bytes(
+            report.report_bucket,
+            report.screenshots_object_key or _document_screenshots_object_key(report.job_id),
+            version_id=report.screenshots_version_id,
+        )
     except ClientError:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND, "No structured preview is available for this report"
         )
     screenshots = json.loads(raw_index)
+    if report.screenshots_sha256 and sha256_of_bytes(raw_index) != report.screenshots_sha256:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Report screenshot index checksum mismatch")
     if index < 0 or index >= len(screenshots):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No such screenshot")
     entry = screenshots[index]

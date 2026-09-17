@@ -10,9 +10,8 @@ import { formatTime } from "@/lib/incidentStatus";
 const DEBOUNCE_MS = 300;
 
 /**
- * Knowledge Base (Milestone 15: Search / Knowledge). Real PostgreSQL
- * FTS/trigram search (GET /api/v1/search, master plan §32) replaces the
- * old client-side substring filter over mock fixtures. Search is
+ * Knowledge Base search uses real PostgreSQL FTS/trigram search
+ * (GET /api/v1/search, master plan §32). Search is
  * debounced since every keystroke now hits a real endpoint.
  */
 export function KnowledgeBase() {

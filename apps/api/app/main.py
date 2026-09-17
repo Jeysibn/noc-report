@@ -4,10 +4,11 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.v1.routers import admin, analysis, analytics, auth, evidence, incidents, ocr, reports, search, shifts
+from app.api.v1.routers import admin, analysis, analytics, auth, dashboard, evidence, incidents, ocr, reports, search, shifts
 from app.core.config import assert_production_secrets_are_safe, settings
 from app.core.storage import ensure_buckets
 from app.outbox_worker import start_background_thread
+from app.evidence_purge_worker import start_background_thread as start_purge_background_thread
 from app.operational_health import dependency_health
 
 
@@ -29,11 +30,15 @@ async def lifespan(_app: FastAPI):
     # in a background thread and reconnects on its own; a RabbitMQ outage
     # at startup never blocks the API from serving requests.
     stop_event = None
+    purge_stop_event = None
     if settings.outbox_mode == "embedded":
         _thread, stop_event = start_background_thread()
+    _purge_thread, purge_stop_event = start_purge_background_thread()
     yield
     if stop_event is not None:
         stop_event.set()
+    if purge_stop_event is not None:
+        purge_stop_event.set()
 
 
 app = FastAPI(title="NOC Report Builder API", version="0.1.0", lifespan=lifespan)
@@ -60,6 +65,7 @@ app.include_router(analysis.router, prefix="/api/v1")
 app.include_router(reports.router, prefix="/api/v1")
 app.include_router(search.router, prefix="/api/v1")
 app.include_router(analytics.router, prefix="/api/v1")
+app.include_router(dashboard.router, prefix="/api/v1")
 app.include_router(admin.router, prefix="/api/v1")
 
 

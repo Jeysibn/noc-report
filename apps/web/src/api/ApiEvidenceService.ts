@@ -3,8 +3,24 @@ import { httpRequest, putFile } from "@/lib/http";
 
 interface RawEvidence {
   id: string;
+  mime_type?: string;
+  byte_size?: number;
+  created_at?: string;
+  lifecycle_state: string;
   evidence_type: string;
   original_filename: string;
+}
+
+function toEvidence(raw: RawEvidence): EvidenceRecord {
+  return {
+    id: raw.id,
+    evidenceType: raw.evidence_type as EvidenceType,
+    originalFilename: raw.original_filename,
+    mimeType: raw.mime_type,
+    byteSize: raw.byte_size,
+    createdAt: raw.created_at,
+    lifecycleState: raw.lifecycle_state,
+  };
 }
 
 /**
@@ -39,11 +55,20 @@ export class ApiEvidenceService implements EvidenceService {
       },
     });
 
-    return { id: complete.id, evidenceType: complete.evidence_type as EvidenceType, originalFilename: complete.original_filename };
+    return toEvidence(complete);
   }
 
   async list(incidentId: string): Promise<EvidenceRecord[]> {
     const raws = await httpRequest<RawEvidence[]>(`/api/v1/incidents/${incidentId}/evidence`);
-    return raws.map((r) => ({ id: r.id, evidenceType: r.evidence_type as EvidenceType, originalFilename: r.original_filename }));
+    return raws.map(toEvidence);
+  }
+
+  async getDownloadUrl(evidenceId: string): Promise<string> {
+    const result = await httpRequest<{ download_url: string }>(`/api/v1/evidence/${evidenceId}/download-url`);
+    return result.download_url;
+  }
+
+  async delete(evidenceId: string): Promise<void> {
+    await httpRequest<void>(`/api/v1/evidence/${evidenceId}`, { method: "DELETE" });
   }
 }

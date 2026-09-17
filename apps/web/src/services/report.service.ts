@@ -5,13 +5,7 @@ export interface ReportGenerateInput {
   effort?: "low" | "medium";
 }
 
-/**
- * Real-only from the start (Milestone 14) — mirrors analysis.service.ts's
- * shape. generate() freezes whatever incident/analysis state currently
- * exists for the shift; it does not orchestrate missing analyses first
- * (that was the old mock's fiction — the real generate_report endpoint
- * just freezes a snapshot of what's there).
- */
+/** Report generation and immutable artifact retrieval contract. */
 export interface ReportService {
   generate(shiftId: string, input: ReportGenerateInput): Promise<ReportRun>;
   list(shiftId: string): Promise<ReportRun[]>;

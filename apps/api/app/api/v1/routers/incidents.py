@@ -1,7 +1,7 @@
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, exists, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -102,6 +102,7 @@ def list_incidents(
     status_filter: str | None = Query(default=None, alias="status"),
     service: str | None = None,
     environment: str | None = None,
+    has_log: bool | None = Query(default=None, alias="has_log"),
 ) -> IncidentPage:
     stmt = shift_incident_statement(shift_id) if shift_id else select(Incident)
     if status_filter:
@@ -110,6 +111,15 @@ def list_incidents(
         stmt = stmt.where(Incident.service == service)
     if environment:
         stmt = stmt.where(Incident.environment == environment)
+    if has_log is not None:
+        log_exists = exists(
+            select(Evidence.id).where(
+                Evidence.incident_id == Incident.id,
+                Evidence.evidence_type == "LOG",
+                Evidence.lifecycle_state == "ACTIVE",
+            )
+        )
+        stmt = stmt.where(log_exists if has_log else ~log_exists)
 
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
     stmt = stmt.order_by(None).order_by(Incident.created_at if shift_id else Incident.triggered_at.desc())

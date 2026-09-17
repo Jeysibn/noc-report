@@ -30,3 +30,5 @@ This glossary is the shared vocabulary for maintainers and coding agents.
 - **Execution Policy** — the shared model, effort, timeout, budget, and bridge-capacity contract validated by both API and bridge.
 - **Bridge Capacity** — the effective number of Claude jobs the host bridge can execute concurrently. The current synchronous callback is deliberately serial (`1`).
 - **Resource Scope** — this installation is a shared NOC workspace: RBAC controls actions, while incidents, evidence, analyses, and reports are team-visible resources. It is not strict per-user tenancy.
+- **Dashboard Summary** — the authoritative current-Shift PostgreSQL aggregate consumed by the operator Dashboard; it is not derived from a paginated Incident response.
+- **Report Artifact Identity** — the exact MinIO version, checksum, size, and content type for a generated DOCX or structured ReportDocument preview.

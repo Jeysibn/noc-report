@@ -18,11 +18,17 @@ Evidence deletion is database-first. Referenced evidence remains protected;
 unreferenced evidence is marked `PURGE_PENDING` in a committed transaction,
 then the exact bucket/key/version is deleted and the tombstone is marked
 `PURGED`. Incident deletion detaches the tombstones before removing the
-incident and follows the same cleanup behavior.
+incident and follows the same cleanup behavior. The API's purge sweeper retries
+pending tombstones with row locking and treats an already-missing exact
+version as success, so a MinIO outage does not create a permanent orphan.
 
 Report rows pin bucket, key, version, checksum, byte size, and content type.
 Downloads use the pinned version and verify the checksum. Existing unpinned
-rows are legacy and must be reconciled before download.
+rows are legacy and must be reconciled before download. The structured
+`ReportDocument` preview and private screenshot index use the same identity
+discipline: the bridge records each artifact's exact version and checksum on
+the Report row before completion, and preview retrieval never reads latest at
+a deterministic key.
 
 The bridge remains intentionally serial. The shared AI execution policy
 contract limits effective capacity to one and both API and bridge use

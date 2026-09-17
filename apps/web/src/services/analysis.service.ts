@@ -1,8 +1,9 @@
 import type { AnalysisRun } from "@/types/analysis";
 
 export interface AnalysisRequestInput {
-  model: string;
-  effort: "low" | "medium" | "high";
+  /** Omitted means inherit the administrator's System AI Configuration. */
+  model?: string;
+  effort?: "low" | "medium" | "high";
 }
 
 /**

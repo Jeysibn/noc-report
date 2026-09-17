@@ -3,6 +3,8 @@ fixtures. `analytics.read` is DevOps/Admin only per seed.py."""
 from datetime import datetime, timezone
 
 from tests.conftest import auth_headers, make_user
+from app.models.models import Incident
+from tests.test_shifts import _create_active_shift
 
 
 def _create_incident(client, headers, **overrides) -> dict:
@@ -56,3 +58,24 @@ def test_analytics_summary_shape_and_counts(client, db_session):
         {"label": "Completed", "value": 0},
         {"label": "Failed", "value": 0},
     ]
+
+
+def test_dashboard_summary_aggregates_active_shift_without_page_limit(client, db_session):
+    make_user(db_session, "dashboard-noc", "NOC")
+    headers = auth_headers(client, "dashboard-noc")
+    shift = _create_active_shift(db_session)
+    now = datetime.now(timezone.utc)
+    db_session.add_all([
+        Incident(
+            display_id=f"INC-DASH-{i}", shift_id=shift.id, title="Alert", service="api",
+            environment="production", status="open", triggered_at=now,
+        )
+        for i in range(201)
+    ])
+    db_session.commit()
+
+    response = client.get("/api/v1/dashboard/summary", headers=headers)
+    assert response.status_code == 200
+    assert response.json()["open_incidents"] == 201
+    assert response.json()["active_alerts"] == 201
+    assert response.json()["reports_generated_this_shift"] == 0
