@@ -21,6 +21,7 @@ import pathlib
 from typing import Callable
 
 from docx import Document
+from docx.image.image import Image
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
@@ -29,6 +30,7 @@ from docx.shared import Inches, Pt, RGBColor
 
 from noc_bridge.report_document import (
     AnalysisReference,
+    AlertNavigation,
     BilingualFindList,
     BilingualText,
     Divider,
@@ -47,6 +49,11 @@ from noc_bridge.report_document import (
 from noc_bridge.failures import EvidenceIntegrityError, EvidenceRetrievalError
 
 ScreenshotFetcher = Callable[..., bytes | None]
+_EMU_PER_INCH = 914400
+_SINGLE_MAX_WIDTH_IN = 4.9
+_SINGLE_MAX_HEIGHT_IN = 3.4
+_PAIR_MAX_WIDTH_IN = 3.0
+_PAIR_MAX_HEIGHT_IN = 3.2
 
 
 def _set_east_asia_font(style, name: str = "Microsoft YaHei") -> None:
@@ -114,6 +121,39 @@ def _add_hyperlink(paragraph, url: str, text: str) -> None:
     paragraph._p.append(hyperlink)
 
 
+def _add_internal_hyperlink(paragraph, target: str, text: str) -> None:
+    hyperlink = OxmlElement("w:hyperlink")
+    hyperlink.set(qn("w:anchor"), target)
+    hyperlink.set(qn("w:history"), "1")
+    run = OxmlElement("w:r")
+    properties = OxmlElement("w:rPr")
+    color = OxmlElement("w:color")
+    color.set(qn("w:val"), "2563EB")
+    underline = OxmlElement("w:u")
+    underline.set(qn("w:val"), "single")
+    properties.extend((color, underline))
+    run.append(properties)
+    text_node = OxmlElement("w:t")
+    text_node.text = text
+    run.append(text_node)
+    hyperlink.append(run)
+    paragraph._p.append(hyperlink)
+
+
+def _add_bookmark(paragraph, name: str) -> None:
+    # Bookmark IDs need only match within a pair. The name is already a
+    # deterministic SHA-based identifier, so its digest also provides a stable
+    # document-local numeric ID.
+    bookmark_id = "0" if name == "alerts_start" else str(int(name.rsplit("_", 1)[-1], 16))
+    start = OxmlElement("w:bookmarkStart")
+    start.set(qn("w:id"), bookmark_id)
+    start.set(qn("w:name"), name)
+    end = OxmlElement("w:bookmarkEnd")
+    end.set(qn("w:id"), bookmark_id)
+    paragraph._p.insert(0, start)
+    paragraph._p.append(end)
+
+
 def _add_link_paragraph(doc: Document, link: Link) -> None:
     paragraph = doc.add_paragraph()
     paragraph.paragraph_format.keep_with_next = True
@@ -121,7 +161,7 @@ def _add_link_paragraph(doc: Document, link: Link) -> None:
     _add_hyperlink(paragraph, link.url, link.text or link.url)
 
 
-def _add_screenshot(doc: Document, shot: Screenshot, screenshot_fetcher: ScreenshotFetcher | None) -> None:
+def _fetch_screenshot(shot: Screenshot, screenshot_fetcher: ScreenshotFetcher | None) -> bytes:
     if screenshot_fetcher is None:
         raise EvidenceIntegrityError(f"no screenshot fetcher for frozen evidence: {shot.filename or shot.object_key}")
     try:
@@ -132,13 +172,84 @@ def _add_screenshot(doc: Document, shot: Screenshot, screenshot_fetcher: Screens
         data = screenshot_fetcher(shot.bucket, shot.object_key)
     if not data:
         raise EvidenceRetrievalError(f"frozen screenshot could not be retrieved: {shot.bucket}/{shot.object_key}")
+    return data
+
+
+def _scaled_dimensions(data: bytes, max_width_in: float, max_height_in: float) -> tuple[int, int]:
+    image = Image.from_blob(data)
+    width_in = image.px_width / float(image.horz_dpi or 96)
+    height_in = image.px_height / float(image.vert_dpi or 96)
+    scale = min(max_width_in / width_in, max_height_in / height_in, 1.0)
+    return round(width_in * scale * _EMU_PER_INCH), round(height_in * scale * _EMU_PER_INCH)
+
+
+def _add_picture(paragraph, data: bytes, max_width_in: float, max_height_in: float) -> tuple[int, int]:
+    width, height = _scaled_dimensions(data, max_width_in, max_height_in)
+    paragraph.add_run().add_picture(io.BytesIO(data), width=width, height=height)
+    paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    return width, height
+
+
+def _add_picture_dimensions(paragraph, data: bytes, width: int, height: int) -> None:
+    paragraph.add_run().add_picture(io.BytesIO(data), width=width, height=height)
+    paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+
+def _add_screenshot(doc: Document, shot: Screenshot, screenshot_fetcher: ScreenshotFetcher | None) -> None:
+    data = _fetch_screenshot(shot, screenshot_fetcher)
     try:
-        doc.add_picture(io.BytesIO(data), width=Inches(5.9))
-        paragraph = doc.paragraphs[-1]
-        paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        paragraph.paragraph_format.keep_with_next = True
+        _add_picture(doc.add_paragraph(), data, _SINGLE_MAX_WIDTH_IN, _SINGLE_MAX_HEIGHT_IN)
     except Exception as exc:
         raise EvidenceIntegrityError(f"frozen screenshot is not a valid image: {shot.filename or shot.object_key}") from exc
+
+
+def _screenshot_label(shot: Screenshot, index: int) -> str:
+    name = (shot.filename or shot.object_key).casefold()
+    if "recover" in name:
+        return "Recovered"
+    if "trigger" in name:
+        return "Triggered"
+    return f"Screenshot {index}"
+
+
+def _add_screenshots(doc: Document, shots: tuple[Screenshot, ...], screenshot_fetcher: ScreenshotFetcher | None) -> None:
+    if len(shots) != 2:
+        for shot in shots:
+            _add_screenshot(doc, shot, screenshot_fetcher)
+        return
+    data = [_fetch_screenshot(shot, screenshot_fetcher) for shot in shots]
+    try:
+        dimensions = [_scaled_dimensions(item, _PAIR_MAX_WIDTH_IN, _PAIR_MAX_HEIGHT_IN) for item in data]
+        # Very narrow portrait images become illegible in two columns. Stack
+        # those at the compact single-image bounds instead.
+        if any(width / _EMU_PER_INCH < 2.15 for width, _ in dimensions):
+            for index, (shot, item) in enumerate(zip(shots, data), start=1):
+                label = doc.add_paragraph(_screenshot_label(shot, index))
+                label.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                label.paragraph_format.keep_with_next = True
+                _add_picture(doc.add_paragraph(), item, _SINGLE_MAX_WIDTH_IN, _SINGLE_MAX_HEIGHT_IN)
+            return
+        table = doc.add_table(rows=2, cols=2)
+        table.autofit = False
+        common_height = min(height for _, height in dimensions)
+        for index, (shot, item) in enumerate(zip(shots, data)):
+            label = table.cell(0, index).paragraphs[0]
+            label.add_run(_screenshot_label(shot, index + 1)).bold = True
+            label.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            width, height = dimensions[index]
+            width = round(width * common_height / height)
+            _add_picture_dimensions(table.cell(1, index).paragraphs[0], item, width, common_height)
+    except Exception as exc:
+        raise EvidenceIntegrityError("frozen screenshot pair contains an invalid image") from exc
+
+
+def _add_alert_navigation(doc: Document, block: AlertNavigation) -> None:
+    heading = doc.add_heading("Alert Navigation", level=2)
+    heading.paragraph_format.keep_with_next = True
+    _add_bookmark(heading, "alerts_start")
+    for entry in block.entries:
+        paragraph = doc.add_paragraph(style="List Bullet")
+        _add_internal_hyperlink(paragraph, entry.target, entry.text)
 
 
 def _add_log_file(doc: Document, log_file: LogFileReference) -> None:
@@ -181,12 +292,13 @@ def _add_incident_evidence(doc: Document, block: IncidentEvidence, screenshot_fe
     # Keep the alert heading glued to whatever paragraph follows it so Word's
     # automatic pagination does not strand "Alert #n - <title>" alone at the
     # bottom of a page with its evidence pushed to the next one.
-    heading = doc.add_heading(block.heading, level=2)
+    heading = doc.add_heading("", level=2)
     heading.paragraph_format.keep_with_next = True
-    if heading.runs:
-        heading.runs[0].font.color.rgb = RGBColor(37, 99, 235)
-    for shot in block.screenshots:
-        _add_screenshot(doc, shot, screenshot_fetcher)
+    if block.navigation_target:
+        _add_internal_hyperlink(heading, block.navigation_target, block.heading)
+    else:
+        heading.add_run(block.heading)
+    _add_screenshots(doc, block.screenshots, screenshot_fetcher)
     links = list(block.links)
     if block.link:
         links.insert(0, block.link)
@@ -211,6 +323,8 @@ def _add_analysis_reference(
     heading.paragraph_format.keep_with_next = True
     if heading.runs:
         heading.runs[0].font.color.rgb = RGBColor(37, 99, 235)
+    if block.bookmark:
+        _add_bookmark(heading, block.bookmark)
     for shot in block.screenshots:
         _add_screenshot(doc, shot, screenshot_fetcher)
     if block.log_file:
@@ -243,6 +357,9 @@ def _add_analysis_reference(
             doc.add_paragraph(block.recommended_action.text_zh)
         if block.recommended_action.text_en:
             doc.add_paragraph(block.recommended_action.text_en)
+    if block.bookmark:
+        back = doc.add_paragraph()
+        _add_internal_hyperlink(back, "alerts_start", "↑ Back to Alerts")
 
 
 def _render_block(doc: Document, block, screenshot_fetcher: ScreenshotFetcher | None, *, include_provenance: bool = False) -> None:
@@ -258,6 +375,8 @@ def _render_block(doc: Document, block, screenshot_fetcher: ScreenshotFetcher | 
         _add_log_file(doc, block)
     elif isinstance(block, Screenshot):
         _add_screenshot(doc, block, screenshot_fetcher)
+    elif isinstance(block, AlertNavigation):
+        _add_alert_navigation(doc, block)
     elif isinstance(block, Divider):
         doc.add_paragraph("―" * 20)
     elif isinstance(block, PageBreak):

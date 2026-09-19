@@ -13,18 +13,16 @@ Return JSON with:
 
 ```json
 {
-  "general_summary": {"zh": "...", "en": "..."},
-  "cross_incident_findings": {"zh": "...", "en": "..."}
+  "general_summary": {"zh": "...", "en": "..."}
 }
 ```
 
 `general_summary` is required. Both language values must be substantive,
-non-empty strings. `cross_incident_findings` is optional, but when provided it
-must also contain both languages.
+non-empty strings. It may concisely mention supported recurring themes, but
+must not create a separate cross-incident findings section.
 
-Claude owns only semantic reasoning: the Chinese and English shift summary,
-cross-incident relationships, operational assessment, and supported
-correlation conclusions. Do not emit incident IDs, AnalysisRun IDs,
+Claude owns only semantic reasoning: the Chinese and English shift summary
+and operational assessment. Do not emit incident IDs, AnalysisRun IDs,
 screenshots, bucket/object keys, URLs, log filenames, timestamps, or copied
 incident metadata.
 

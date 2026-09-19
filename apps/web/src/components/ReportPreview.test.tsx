@@ -19,6 +19,7 @@ describe("ReportPreview", () => {
       metadata: [{ type: "metadata", label: "Shift", value: "MS" }],
       blocks: [
         { type: "heading", text: "Alerts", level: 1 },
+        { type: "alert_navigation", entries: [{ text: "Alert #1 - Payment timeout", target: "log_analysis_abc" }] },
         {
           type: "incident_evidence",
           heading: "Alert #1 - Payment timeout",
@@ -27,6 +28,7 @@ describe("ReportPreview", () => {
           links: [{ type: "link", label: "Grafana", url: "https://grafana.example/inc-001" }],
           log_file: { type: "log_file_reference", filename: "1-payments-logs.json" },
           screenshots: [],
+          navigation_target: "log_analysis_abc",
         },
         { type: "page_break" },
         { type: "heading", text: "General Summary", level: 1 },
@@ -45,6 +47,7 @@ describe("ReportPreview", () => {
           available: true,
           analysis_run_id: "run-001",
           unavailable_text: null,
+          bookmark: "log_analysis_abc",
           metadata: [],
           children: [],
           summary: {
@@ -75,11 +78,14 @@ describe("ReportPreview", () => {
     expect(headings.indexOf("Alerts")).toBeLessThan(headings.indexOf("General Summary"));
     expect(headings.indexOf("General Summary")).toBeLessThan(headings.indexOf("Log Analysis"));
 
-    expect(screen.getByText("Alert #1 - Payment timeout")).toBeInTheDocument();
+    expect(screen.getAllByText("Alert #1 - Payment timeout")).toHaveLength(2);
     expect(screen.getByText("1-payments-logs.json")).toBeInTheDocument();
     expect(screen.getByText("The shift was stable.")).toBeInTheDocument();
     expect(screen.getByText("Full summary")).toBeInTheDocument();
     expect(screen.getByText("Finding 1")).toBeInTheDocument();
+    const navigation = screen.getByRole("navigation", { name: "Alert Navigation" });
+    expect(navigation.querySelector('a[href="#log_analysis_abc"]')).toBeInTheDocument();
+    expect(document.getElementById("log_analysis_abc")).toBeInTheDocument();
   });
 
   it("shows a friendly message when no structured preview exists", async () => {

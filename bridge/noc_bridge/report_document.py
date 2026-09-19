@@ -85,6 +85,17 @@ class Screenshot:
     byte_size: int | None = None
 
 
+@dataclass(frozen=True)
+class NavigationEntry:
+    text: str
+    target: str
+
+
+@dataclass(frozen=True)
+class AlertNavigation:
+    entries: tuple[NavigationEntry, ...] = ()
+
+
 def screenshot_from_dict(raw: dict) -> Screenshot:
     """Build a frozen screenshot reference, retaining byte identity metadata.
 
@@ -157,6 +168,7 @@ class IncidentEvidence:
     links: tuple[Link, ...] = ()
     log_file: LogFileReference | None = None
     screenshots: tuple[Screenshot, ...] = ()
+    navigation_target: str | None = None
 
 
 @dataclass(frozen=True)
@@ -179,17 +191,18 @@ class AnalysisReference:
     secondary_finds: BilingualFindList | None = None
     likely_cause: BilingualText | None = None
     recommended_action: BilingualText | None = None
+    bookmark: str | None = None
 
 
 Block = (
     Heading | Paragraph | Divider | PageBreak | Metadata | Link | LogFileReference |
-    Screenshot | BilingualText | BilingualFindList | FindList | IncidentEvidence | AnalysisReference
+    Screenshot | AlertNavigation | BilingualText | BilingualFindList | FindList | IncidentEvidence | AnalysisReference
 )
 
 DOCUMENT_BLOCK_TYPES = (
     "heading", "paragraph", "divider", "page_break", "metadata", "link",
     "log_file_reference", "screenshot", "bilingual_text", "bilingual_find_list",
-    "find_list", "incident_evidence", "analysis_reference",
+    "find_list", "alert_navigation", "incident_evidence", "analysis_reference",
 )
 
 
@@ -246,6 +259,11 @@ def _parse_blocks(raw_blocks: list[dict]) -> list[Block]:
             parsed.append(LogFileReference(raw["filename"], raw.get("url")))
         elif kind == "screenshot":
             parsed.append(screenshot_from_dict(raw))
+        elif kind == "alert_navigation":
+            parsed.append(AlertNavigation(tuple(
+                NavigationEntry(str(item["text"]), str(item["target"]))
+                for item in raw.get("entries", [])
+            )))
         elif kind == "bilingual_find_list":
             parsed.append(BilingualFindList(
                 heading_zh=str(raw["heading_zh"]),
@@ -281,6 +299,7 @@ def _parse_blocks(raw_blocks: list[dict]) -> list[Block]:
                     else None
                 ),
                 screenshots=tuple(screenshot_from_dict(s) for s in raw.get("screenshots", [])),
+                navigation_target=raw.get("navigation_target"),
             ))
         elif kind == "divider":
             parsed.append(Divider())
@@ -312,6 +331,7 @@ def _parse_blocks(raw_blocks: list[dict]) -> list[Block]:
                     secondary_finds=_parse_optional_block(raw.get("secondary_finds"), BilingualFindList),
                     likely_cause=_parse_optional_block(raw.get("likely_cause"), BilingualText),
                     recommended_action=_parse_optional_block(raw.get("recommended_action"), BilingualText),
+                    bookmark=raw.get("bookmark"),
                 )
             )
         else:

@@ -4,7 +4,8 @@ This glossary is the shared vocabulary for maintainers and coding agents.
 
 - **Shift** — a time-bounded operational window. Its immutable identity scopes incident readiness and report snapshots.
 - **Incident** — a reportable operational alert assigned to a Shift. Its trusted evidence and current AnalysisRun feed reports.
-- **Alert Evidence** — frozen screenshots and Grafana metadata shown in Alerts; storage references are allow-listed from the snapshot.
+- **Alert Evidence** — frozen screenshots and Grafana metadata shown in Alerts; storage references are allow-listed from the snapshot. The renderer presents screenshots compactly without upscaling or changing their aspect ratio.
+- **Alert Navigation** — renderer-owned internal DOCX links near the beginning of Alerts, targeting deterministic, collision-safe bookmarks on corresponding Log Analysis blocks. Alerts without a destination do not receive a dead link.
 - **UploadIntent** — a short-lived, server-owned upload capability. The client submits only its opaque ID at completion; bucket and object key are never client authority.
 - **Log Evidence** — the immutable log object analyzed for an Incident; its checksum and filename are preserved.
 - **Evidence Byte Identity** — bucket, object key, MinIO version ID, SHA-256, content type, filename, and byte size captured when evidence is completed.
@@ -14,9 +15,9 @@ This glossary is the shared vocabulary for maintainers and coding agents.
 - **SkillSnapshot** — immutable Skill content identified by hash. Jobs execute the snapshot stamped on their Job row.
 - **ReportFragment** — compact bilingual analysis data sent to Daily Report reasoning to control AI usage; it is not the complete human export.
 - **AnalysisPresentation** — deterministic full-fidelity rendering data derived from stored AnalysisRun output, including every required finding.
-- **ReportPlan** — Claude’s narrative-only bilingual shift summary and optional cross-incident reasoning. It does not repeat mandatory incident or AnalysisRun references.
+- **ReportPlan** — Claude’s narrative-only bilingual shift summary. It does not repeat mandatory incident or AnalysisRun references and does not define report layout or navigation.
 - **ReportSnapshot** — frozen Shift, Incident, evidence, AnalysisRun, provenance, report policy, and IANA operational timezone for one report generation.
-- **ReportDocument** — renderer-neutral semantic blocks consumed by both Web Preview and DOCX. It separates visible metadata from audit provenance.
+- **ReportDocument** — renderer-neutral semantic blocks consumed by both Web Preview and DOCX. Its active Daily Alert Report structure is Alerts, General Summary, then Log Analysis; it separates visible metadata from audit provenance.
 - **Job** — the durable unit processed through the outbox/RabbitMQ pipeline. Its AI usage budget is cumulative across deliveries and retries.
 - **Job Protocol** — the versioned RabbitMQ wire contract and topology in `packages/contracts/job_message.schema.json` and `job_protocol.json`, consumed by both API and bridge.
 - **AI Usage Budget** — the atomic per-Job paid-call reservation/consumption fence. `used` never decreases and `used + active reservation` never exceeds the configured budget.
@@ -36,5 +37,6 @@ This glossary is the shared vocabulary for maintainers and coding agents.
 - **Generated Report** — a current-Shift Report whose Job is completed and whose DOCX artifact has a durable MinIO version identity; queued, failed, and incomplete requests are not generated reports.
 - **Renderer Profile** — the immutable renderer contract captured in a SkillSnapshot. `report-document-v1` requires DOCX, structured preview JSON, and its screenshot index; legacy `daily_report_docx` requires DOCX only.
 - **Report Capability** — `previewable` and `downloadable` are separate public capabilities. Preview requires structured ReportDocument identity plus `report.read`; download requires pinned DOCX identity plus `report.download`.
+- **Historical Report Compatibility** — generated report artifacts, snapshots, and their frozen renderer profiles are immutable. Legacy documents may retain their original structure, while newly generated Daily Alert Reports omit Cross-incident Findings.
 - **Poison Message** — a RabbitMQ delivery that cannot pass JSON, schema, format, protocol, or semantic identity validation. It is quarantined/DLQ'd and acknowledged without stopping the serial bridge.
 - **Report Lifecycle State** — the public report state is `Job.status`; the `reports` table no longer stores a duplicate lifecycle status.

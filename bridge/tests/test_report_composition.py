@@ -250,6 +250,19 @@ def test_schema_rejects_a_plan_without_the_canonical_summary():
         validate_output("daily_report", {}, skill_name="daily-alert-report", skills_dir=SKILLS_DIR)
 
 
+def test_schema_rejects_removed_cross_incident_findings_field():
+    with pytest.raises(OutputValidationError, match="Additional propert"):
+        validate_output(
+            "daily_report",
+            {
+                "general_summary": {"zh": "摘要", "en": "Summary"},
+                "cross_incident_findings": {"zh": "旧字段", "en": "Removed field"},
+            },
+            skill_name="daily-alert-report",
+            skills_dir=SKILLS_DIR,
+        )
+
+
 def test_materially_different_analysis_schema_uses_generic_presentation_export(tmp_path):
     snapshot = _snapshot()
     snapshot["incidents"][0]["analysis"] = {

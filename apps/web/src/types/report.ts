@@ -54,6 +54,11 @@ export interface ReportScreenshotRef {
   filename: string | null;
 }
 
+export interface ReportAlertNavigation {
+  type: "alert_navigation";
+  entries: Array<{ text: string; target: string }>;
+}
+
 export interface ReportHeading {
   type: "heading";
   text: string;
@@ -111,6 +116,7 @@ export interface ReportIncidentEvidence {
   links: ReportLink[];
   log_file: ReportLogFileReference | null;
   screenshots: ReportScreenshotRef[];
+  navigation_target?: string | null;
 }
 
 export interface ReportAnalysisReference {
@@ -130,6 +136,7 @@ export interface ReportAnalysisReference {
   likely_cause: ReportBilingualText | null;
   recommended_action: ReportBilingualText | null;
   provenance?: ReportMetadataItem[];
+  bookmark?: string | null;
 }
 
 export type ReportBlock =
@@ -141,6 +148,7 @@ export type ReportBlock =
   | ReportLink
   | ReportLogFileReference
   | ReportScreenshotRef
+  | ReportAlertNavigation
   | ReportBilingualText
   | ReportBilingualFindList
   | ReportFindList

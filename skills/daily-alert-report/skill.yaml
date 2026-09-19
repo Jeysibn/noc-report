@@ -39,6 +39,6 @@ execution_policy:
 dependencies:
   - log-triage-summary
 description: >
-  Produce a compact narrative-only ReportPlan. The application resolves
+  Produce a compact bilingual General Summary ReportPlan. The application resolves
   incident facts, mandatory coverage, evidence, storage paths, and analysis
   provenance after the response.

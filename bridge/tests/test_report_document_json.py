@@ -111,6 +111,7 @@ def test_preview_json_serializes_every_documented_block_type():
         {"type": "link", "label": "Grafana", "url": "https://example.test", "text": "Grafana"},
         {"type": "log_file_reference", "filename": "log.json"},
         {"type": "screenshot", "bucket": "b", "object_key": "k", "filename": "s.png"},
+        {"type": "alert_navigation", "entries": [{"text": "Alert", "target": "log_analysis_deadbeef"}]},
         {"type": "bilingual_text", "zh": "中", "en": "En"},
         {"type": "bilingual_find_list", "heading_zh": "重点", "heading_en": "Findings", "finds_zh": [], "finds_en": []},
         {"type": "find_list", "heading": "Key Finds", "language": "Chinese", "finds": []},

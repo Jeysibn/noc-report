@@ -62,6 +62,31 @@ The API exposes `/health` for liveness and `/health/dependencies` plus
 `/health/readiness` for real dependency state. The dashboard treats degraded,
 unavailable, and unknown dependencies distinctly.
 
+## Daily Alert Report contract
+
+New Daily Alert Reports are composed deterministically from the frozen report
+snapshot and use this canonical main-section order:
+
+```text
+Alerts
+  - Alert Navigation
+  - compact alert evidence screenshots
+General Summary
+Log Analysis
+  - one deterministic bookmark target per eligible alert
+```
+
+The Alerts navigation entries and eligible evidence headings link to their
+corresponding Log Analysis bookmark in the generated DOCX. Screenshot sizing,
+pair layout, section order, bookmarks, and hyperlinks are renderer-owned; they
+are not delegated to Claude. The DOCX and Web Preview continue to consume the
+same `ReportDocument` semantic structure.
+
+Cross-incident Findings is not part of the contract for newly generated
+reports. Historical report artifacts and legacy renderer profiles remain
+frozen: they are displayed and downloaded exactly as originally generated and
+are not rewritten to match the current contract.
+
 ## Milestones
 
 Implementation proceeds per the master plan's Development Milestones (§37).

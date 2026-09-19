@@ -23,6 +23,7 @@ from typing import Any
 
 from noc_bridge.report_document import (
     AnalysisReference,
+    AlertNavigation,
     BilingualFindList,
     BilingualText,
     Divider,
@@ -82,6 +83,11 @@ def _block_to_json(block: Any, screenshots: list[dict], *, include_provenance: b
             if value is not None
         })
         return {"type": "screenshot", "index": index, "filename": block.filename}
+    if isinstance(block, AlertNavigation):
+        return {
+            "type": "alert_navigation",
+            "entries": [{"text": entry.text, "target": entry.target} for entry in block.entries],
+        }
     if isinstance(block, BilingualText):
         return {
             "type": "bilingual_text",
@@ -117,6 +123,7 @@ def _block_to_json(block: Any, screenshots: list[dict], *, include_provenance: b
             "links": [_block_to_json(item, screenshots, include_provenance=include_provenance) for item in links],
             "log_file": _block_to_json(block.log_file, screenshots, include_provenance=include_provenance) if block.log_file else None,
             "screenshots": [_block_to_json(s, screenshots, include_provenance=include_provenance) for s in block.screenshots],
+            "navigation_target": block.navigation_target,
         }
     if isinstance(block, AnalysisReference):
         payload = {
@@ -135,6 +142,7 @@ def _block_to_json(block: Any, screenshots: list[dict], *, include_provenance: b
             "recommended_action": (
                 _block_to_json(block.recommended_action, screenshots, include_provenance=include_provenance) if block.recommended_action else None
             ),
+            "bookmark": block.bookmark,
         }
         if include_provenance:
             payload["analysis_run_id"] = block.analysis_run_id

@@ -5,8 +5,7 @@
   "required": ["general_summary"],
   "additionalProperties": false,
   "properties": {
-    "general_summary": {"$ref": "#/$defs/bilingual_summary"},
-    "cross_incident_findings": {"$ref": "#/$defs/bilingual_summary"}
+    "general_summary": {"$ref": "#/$defs/bilingual_summary"}
   },
   "$defs": {
     "bilingual_summary": {

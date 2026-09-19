@@ -8,8 +8,11 @@ incident, or invent an AnalysisRun.
 """
 from __future__ import annotations
 
+import hashlib
+
 from noc_bridge.report_document import (
     AnalysisReference,
+    AlertNavigation,
     BilingualText,
     Divider,
     Heading,
@@ -17,6 +20,7 @@ from noc_bridge.report_document import (
     Link,
     LogFileReference,
     Metadata,
+    NavigationEntry,
     PageBreak,
     Paragraph,
     ReportDocument,
@@ -82,7 +86,19 @@ def _metadata(incident: dict) -> tuple[Metadata, ...]:
     return tuple(Metadata(label, str(value)) for label, value in values if value not in (None, ""))
 
 
-def _incident_block(incident: dict, number: int, *, canonical: bool = False) -> IncidentEvidence:
+def _bookmark_name(incident_id: str) -> str:
+    """Return a deterministic, Word-safe, title-independent bookmark name."""
+    digest = hashlib.sha256(incident_id.encode("utf-8")).hexdigest()[:24]
+    return f"log_analysis_{digest}"
+
+
+def _incident_block(
+    incident: dict,
+    number: int,
+    *,
+    canonical: bool = False,
+    navigation_target: str | None = None,
+) -> IncidentEvidence:
     links = []
     if not canonical and incident.get("teams_url"):
         links.append(Link("Teams", incident["teams_url"], text="Teams", prefix="Teams Link"))
@@ -106,6 +122,7 @@ def _incident_block(incident: dict, number: int, *, canonical: bool = False) -> 
             else None
         ),
         screenshots=screenshots,
+        navigation_target=navigation_target,
     )
 
 
@@ -191,6 +208,7 @@ def _analysis_block(incident: dict, plan_node: dict | None, number: int) -> Anal
             else None
         ),
         children=tuple(children),
+        bookmark=_bookmark_name(str(incident["id"])),
     )
 
 
@@ -311,10 +329,6 @@ def compose_report(plan: dict, snapshot: dict) -> ReportDocument:
         raise OutputValidationError("canonical Daily Report requires general_summary")
     if narrative_mode:
         summary_blocks = [narrative_summary(plan.get("general_summary"), "general_summary")]
-        if plan.get("cross_incident_findings") is not None:
-            summary_blocks.extend((Heading("Cross-Incident Findings", level=2), narrative_summary(
-                plan.get("cross_incident_findings"), "cross_incident_findings"
-            )))
     else:
         if not isinstance(plan.get("blocks"), list):
             raise OutputValidationError("ReportPlan must contain a blocks array")
@@ -362,22 +376,47 @@ def compose_report(plan: dict, snapshot: dict) -> ReportDocument:
     else:
         analysis_incidents = [incidents[incident_id] for incident_id in analysis_plan_nodes]
 
-    parsed_blocks: list = []
-    parsed_blocks.append(Heading("Alerts", level=1))
-    parsed_blocks.extend(_incident_block(incident, i, canonical=canonical) for i, incident in enumerate(alert_incidents, start=1))
-    parsed_blocks.append(PageBreak())
-    parsed_blocks.append(Heading("General Summary", level=1))
-    parsed_blocks.extend(summary_blocks)
-    parsed_blocks.append(PageBreak())
-    parsed_blocks.append(Heading("Log Analysis", level=1))
-    parsed_blocks.extend(
+    analysis_blocks = [
         _analysis_block(
             incident,
             analysis_plan_nodes.get(str(incident["id"])) if narrative_mode else analysis_plan_nodes.get(str(incident["id"]), {"incident_id": str(incident["id"])}),
             alert_number_by_id.get(str(incident["id"]), i),
         )
         for i, incident in enumerate(analysis_incidents, start=1)
+    ]
+    target_by_incident = {
+        block.incident_id: block.bookmark
+        for block in analysis_blocks
+        if block.available and block.incident_id and block.bookmark
+    }
+
+    parsed_blocks: list = []
+    parsed_blocks.append(Heading("Alerts", level=1))
+    navigation_entries = tuple(
+        NavigationEntry(
+            f"Alert #{i} - {incident.get('title') or incident.get('display_id') or 'Incident'}",
+            target_by_incident[str(incident["id"])],
+        )
+        for i, incident in enumerate(alert_incidents, start=1)
+        if str(incident["id"]) in target_by_incident
     )
+    if canonical or navigation_entries:
+        parsed_blocks.append(AlertNavigation(navigation_entries))
+    parsed_blocks.extend(
+        _incident_block(
+            incident,
+            i,
+            canonical=canonical,
+            navigation_target=target_by_incident.get(str(incident["id"])),
+        )
+        for i, incident in enumerate(alert_incidents, start=1)
+    )
+    parsed_blocks.append(PageBreak())
+    parsed_blocks.append(Heading("General Summary", level=1))
+    parsed_blocks.extend(summary_blocks)
+    parsed_blocks.append(PageBreak())
+    parsed_blocks.append(Heading("Log Analysis", level=1))
+    parsed_blocks.extend(analysis_blocks)
 
     try:
         display_date = project_shift_time(snapshot).report_date

@@ -95,6 +95,17 @@ function ReportBlockView({ block, reportId }: { block: ReportBlock; reportId: st
       return <LogFileView block={block} />;
     case "screenshot":
       return <PreviewScreenshot reportId={reportId} index={block.index} filename={block.filename} />;
+    case "alert_navigation":
+      return (
+        <nav aria-label="Alert Navigation" className="rounded-md border border-border p-4">
+          <h3 className="text-base font-semibold text-accent">Alert Navigation</h3>
+          <ul className="mt-2 list-disc space-y-1 pl-5">
+            {block.entries.map((entry) => (
+              <li key={entry.target}><a className="text-accent underline" href={`#${entry.target}`}>{entry.text}</a></li>
+            ))}
+          </ul>
+        </nav>
+      );
     case "divider":
       return <hr className="border-border" />;
     case "page_break":
@@ -192,7 +203,9 @@ function PreviewScreenshot({ reportId, index, filename }: { reportId: string; in
 function IncidentEvidenceView({ block, reportId }: { block: ReportIncidentEvidence; reportId: string }) {
   return (
     <div className="flex flex-col gap-2 rounded-md border border-border p-4">
-      <h3 className="text-base font-semibold text-accent">{block.heading}</h3>
+      <h3 className="text-base font-semibold text-accent">
+        {block.navigation_target ? <a className="underline" href={`#${block.navigation_target}`}>{block.heading}</a> : block.heading}
+      </h3>
       {block.screenshots.map((shot, i) => (
         <PreviewScreenshot key={i} reportId={reportId} index={shot.index} filename={shot.filename} />
       ))}
@@ -237,7 +250,7 @@ function LogFileView({ block }: { block: ReportLogFileReference }) {
 
 function AnalysisReferenceView({ block, reportId }: { block: ReportAnalysisReference; reportId: string }) {
   return (
-    <div className="flex flex-col gap-3 rounded-md border border-border bg-ground p-4">
+    <div id={block.bookmark ?? undefined} className="flex flex-col gap-3 rounded-md border border-border bg-ground p-4">
       <h3 className="text-base font-semibold text-accent">{block.heading}</h3>
       {!block.available ? (
         <p className="text-sm text-muted">{block.unavailable_text ?? "No analysis available."}</p>

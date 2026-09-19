@@ -32,6 +32,15 @@ requests use those exact versions and verify their hashes; a later write to a
 deterministic report key cannot alter an historical preview. The DOCX and
 preview are produced from the same composed document in one bridge execution.
 
+For newly generated Daily Alert Reports, that shared semantic document has
+exactly three main sections in order: Alerts, General Summary, and Log
+Analysis. Alerts includes a navigation list and compact evidence screenshots;
+eligible navigation entries and evidence headings target deterministic DOCX
+bookmarks on their corresponding Log Analysis blocks. Cross-incident Findings
+is not emitted. Screenshot dimensions, paired trigger/recovery layout,
+bookmarks, hyperlinks, and section order are deterministic renderer concerns,
+not AI formatting decisions.
+
 Evidence that has reached `PURGE_PENDING` is retried by the embedded
 `evidence-purge-worker` (or `python -m app.evidence_purge_worker`). It uses
 row locking with `SKIP LOCKED`, exact evidence versions, idempotent missing
@@ -65,6 +74,12 @@ A partial upload is not falsely completed and can continue through the
 composition retry path; a redelivery with all artifacts makes no second
 Claude call. Changing the live skill manifest cannot change an old Job's
 required artifact set.
+
+The same immutability rule applies to report presentation changes. Existing
+DOCX and structured preview artifact versions are never regenerated in place;
+legacy reports may retain Cross-incident Findings and their original image or
+navigation layout, while current reports use the active three-section
+contract.
 
 RabbitMQ deliveries pass one protected boundary for JSON decoding, object and
 schema validation, UUID format checking, protocol version, and queue Job type.

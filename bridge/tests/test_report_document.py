@@ -139,6 +139,7 @@ def test_every_documented_block_type_is_parsed_and_rendered(tmp_path):
         {"type": "link", "label": "Grafana", "url": "https://example.test", "text": "Grafana"},
         {"type": "log_file_reference", "filename": "log.json"},
         {"type": "screenshot", "bucket": "b", "object_key": "k", "filename": "s.png"},
+        {"type": "alert_navigation", "entries": [{"text": "Alert", "target": "log_analysis_deadbeef"}]},
         {"type": "bilingual_text", "zh": "中", "en": "En"},
         {"type": "bilingual_find_list", "heading_zh": "重点", "heading_en": "Findings", "finds_zh": [], "finds_en": []},
         {"type": "find_list", "heading": "Key Finds", "language": "Chinese", "finds": [{"label": "x", "detail": "d", "stat": "1 / 2%"}]},
@@ -148,8 +149,8 @@ def test_every_documented_block_type_is_parsed_and_rendered(tmp_path):
     assert {block["type"] for block in raw_blocks} == set(DOCUMENT_BLOCK_TYPES)
     document = build_report_document({"metadata": {"title": "Contract"}, "blocks": raw_blocks})
     assert len(document.blocks) == len(raw_blocks)
-    assert isinstance(document.blocks[9], BilingualFindList)
-    assert isinstance(document.blocks[10], FindList)
+    assert isinstance(document.blocks[10], BilingualFindList)
+    assert isinstance(document.blocks[11], FindList)
     destination = tmp_path / "contract.docx"
     render_document(document, destination, screenshot_fetcher=lambda *_: _PNG)
     assert destination.exists()
