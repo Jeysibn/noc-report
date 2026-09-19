@@ -10,9 +10,11 @@ different report structure, could only be supported by editing the
 renderer itself.
 
 `ReportDocument` breaks that coupling in two pieces:
-  - `build_daily_report_document` (this module) is the "Report Assembly"
-    step (Phase 10): it knows daily-alert-report's exact result shape,
-    and translates it into a flat list of typed, generic blocks (heading,
+  - `build_daily_report_document` (this module) is the historical
+    ``daily_report_docx`` compatibility assembly step. The active
+    ``report-document-v1`` Daily Alert Report is composed by
+    ``report_composition`` from the narrative-only ReportPlan. Both paths
+    translate their inputs into a flat list of typed, generic blocks (heading,
     paragraph, bilingual_text, incident_evidence, screenshot, ...).
   - `noc_bridge.docx_render.render_document` (Phase 9) knows only the
     block types, never a skill's field names — it can render any
@@ -445,11 +447,14 @@ def _analysis_reference(section: dict) -> AnalysisReference:
 
 
 def build_daily_report_document(result: dict) -> ReportDocument:
-    """Report Assembly (Phase 10) for daily-alert-report: the one place
-    that knows this skill's exact result shape (title/overview_en+zh/
-    cross_incident_findings_en+zh/sections[...]). Everything downstream
-    of this function — noc_bridge.docx_render.render_document — only
-    ever sees generic blocks."""
+    """Render the historical ``daily_report_docx`` result shape.
+
+    New Daily Alert Reports do not use this compatibility adapter: their
+    narrative-only ReportPlan is composed by ``report_composition``. Keeping
+    the adapter isolated lets immutable legacy artifacts retain their original
+    Cross-Incident Findings content without reintroducing that section into
+    the active ReportDocument contract.
+    """
     sections = result.get("sections", [])
     blocks: list[Block] = [Heading("Alerts", level=1)]
 

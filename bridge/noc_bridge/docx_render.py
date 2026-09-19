@@ -325,8 +325,7 @@ def _add_analysis_reference(
         heading.runs[0].font.color.rgb = RGBColor(37, 99, 235)
     if block.bookmark:
         _add_bookmark(heading, block.bookmark)
-    for shot in block.screenshots:
-        _add_screenshot(doc, shot, screenshot_fetcher)
+    _add_screenshots(doc, block.screenshots, screenshot_fetcher)
     if block.log_file:
         _add_log_file(doc, block.log_file)
     if include_provenance:

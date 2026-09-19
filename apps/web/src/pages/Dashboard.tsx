@@ -11,6 +11,8 @@ import { incidentStatusMap, formatTime } from "@/lib/incidentStatus";
 import { Link } from "react-router-dom";
 import { useOperationalHealth } from "@/lib/operationalHealth";
 
+type CurrentShiftState = "loading" | "active" | "none" | "failed";
+
 function healthPill(status: "healthy" | "degraded" | "unavailable" | "unknown" | "disabled" | "not_applicable") {
   return {
     status: status === "healthy" ? "good" : status === "degraded" ? "warning" : status === "unavailable" ? "critical" : "neutral",
@@ -20,6 +22,8 @@ function healthPill(status: "healthy" | "degraded" | "unavailable" | "unknown" |
 
 export function Dashboard() {
   const [shift, setShift] = useState<Shift | null>(null);
+  const [shiftState, setShiftState] = useState<CurrentShiftState>("loading");
+  const [shiftError, setShiftError] = useState<string | null>(null);
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(true);
   const [summaryError, setSummaryError] = useState<string | null>(null);
@@ -36,8 +40,28 @@ export function Dashboard() {
     }).finally(() => setSummaryLoading(false));
   }
 
+  function loadCurrentShift() {
+    setShiftState("loading");
+    setShiftError(null);
+    shiftService
+      .getCurrentShift()
+      .then((currentShift) => {
+        setShift(currentShift);
+        setShiftState(currentShift ? "active" : "none");
+      })
+      .catch((error) => {
+        setShift(null);
+        setShiftState("failed");
+        setShiftError(
+          error instanceof Error
+            ? error.message
+            : "Unable to load the current shift.",
+        );
+      });
+  }
+
   useEffect(() => {
-    shiftService.getCurrentShift().then(setShift);
+    loadCurrentShift();
     loadSummary();
     incidentService.list({ limit: 5 }).then((page) => {
       setIncidents(page.items);
@@ -57,7 +81,29 @@ export function Dashboard() {
         <StatusPill status={healthStatus.status} label={healthStatus.label} />
       </div>
 
-      {shift && (
+      {shiftState === "loading" && (
+        <p className="text-sm text-muted">Loading current shift…</p>
+      )}
+
+      {shiftState === "none" && (
+        <Card>
+          <p className="text-xs uppercase tracking-wide text-muted">Current shift</p>
+          <p className="mt-1 text-sm text-muted">No active shift.</p>
+        </Card>
+      )}
+
+      {shiftState === "failed" && (
+        <Card>
+          <p className="text-sm text-critical">
+            Unable to load current shift{shiftError ? `: ${shiftError}` : "."}
+          </p>
+          <Button className="mt-3" size="sm" variant="secondary" onClick={loadCurrentShift}>
+            Retry
+          </Button>
+        </Card>
+      )}
+
+      {shiftState === "active" && shift && (
         <Card className="flex items-center justify-between">
           <div>
             <p className="text-xs uppercase tracking-wide text-muted">Current shift</p>

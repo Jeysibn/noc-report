@@ -418,10 +418,11 @@ class ReportGenerateRequest(BaseModel):
 
 
 class ReportOut(BaseModel):
-    """Merges the Report row with its in-flight Job status, same pattern
-    as AnalysisRunOut — built by hand in the router since `status` on the
-    Report row itself is only updated once the poller observes the Job
-    completing (see app/api/v1/routers/reports.py's `_sync_completed_job`)."""
+    """Merges the immutable Report row with the authoritative Job status.
+
+    Report lifecycle state belongs to ``Job.status``; the Report row stores
+    identity and pinned artifact metadata rather than a second mutable status.
+    """
 
     id: uuid.UUID
     shift_id: uuid.UUID

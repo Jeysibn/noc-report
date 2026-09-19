@@ -6,9 +6,15 @@ import zipfile
 from docx import Document
 from PIL import Image
 
-from noc_bridge.docx_render import render_document
+from noc_bridge.docx_render import (
+    _PAIR_MAX_HEIGHT_IN,
+    _PAIR_MAX_WIDTH_IN,
+    _SINGLE_MAX_HEIGHT_IN,
+    _SINGLE_MAX_WIDTH_IN,
+    render_document,
+)
 from noc_bridge.report_composition import compose_report
-from noc_bridge.report_document import IncidentEvidence, ReportDocument, Screenshot
+from noc_bridge.report_document import AnalysisReference, Heading, IncidentEvidence, ReportDocument, Screenshot
 
 
 EMU_PER_INCH = 914400
@@ -37,8 +43,8 @@ def test_single_screenshot_is_bounded_aspect_correct_centered_and_not_upscaled(t
     path = tmp_path / "large.docx"
     render_document(_evidence(Screenshot("b", "large", "large.png")), path, lambda *_: large)
     width, height = _extents(path)[0]
-    assert width <= 4.9 * EMU_PER_INCH
-    assert height <= 3.4 * EMU_PER_INCH
+    assert width <= _SINGLE_MAX_WIDTH_IN * EMU_PER_INCH
+    assert height <= _SINGLE_MAX_HEIGHT_IN * EMU_PER_INCH
     assert abs((width / height) - (1000 / 800)) < 0.01
     drawing_paragraph = next(p for p in Document(str(path)).paragraphs if p._p.xpath(".//w:drawing"))
     assert drawing_paragraph.alignment == 1
@@ -62,13 +68,32 @@ def test_trigger_recovery_pair_uses_compact_columns_and_portraits_stack(tmp_path
     doc = Document(str(path))
     assert len(doc.tables) == 1
     assert [cell.text for cell in doc.tables[0].rows[0].cells] == ["Triggered", "Recovered"]
-    assert all(width <= 3.0 * EMU_PER_INCH for width, _ in _extents(path))
+    assert all(
+        width <= _PAIR_MAX_WIDTH_IN * EMU_PER_INCH and height <= _PAIR_MAX_HEIGHT_IN * EMU_PER_INCH
+        for width, height in _extents(path)
+    )
 
     portrait_data = {"trigger": _png(500, 1200), "recover": _png(500, 1200)}
     path = tmp_path / "portrait.docx"
     render_document(pair, path, lambda _b, key, *_: portrait_data[key])
     assert len(Document(str(path)).tables) == 0
     assert len(_extents(path)) == 2
+
+    analysis_path = tmp_path / "pair-analysis.docx"
+    analysis_doc = ReportDocument(
+        "Layout",
+        (
+            Heading("Log Analysis", level=1),
+            AnalysisReference(
+                "Alert #1 - Example",
+                available=True,
+                screenshots=pair.blocks[0].screenshots,
+                children=(),
+            ),
+        ),
+    )
+    render_document(analysis_doc, analysis_path, lambda _b, key, *_: landscape[key])
+    assert len(Document(str(analysis_path)).tables) == 1
 
 
 def _snapshot(count: int = 3) -> dict:
@@ -123,6 +148,8 @@ def test_navigation_targets_match_unique_bookmarks_for_duplicate_titles(tmp_path
     assert all(name in anchors for name in analysis_names)
     assert anchors.count(analysis_names[0]) == 2  # navigation + evidence heading
     assert anchors.count(analysis_names[1]) == 2
+    assert "alerts_start" in names
+    assert anchors.count("alerts_start") == 3  # one Back to Alerts link per analysis
     assert "Cross-Incident Findings" not in xml
 
 
@@ -138,14 +165,14 @@ def test_alert_without_usable_analysis_has_no_dead_navigation_link(tmp_path):
     assert xml.count('w:anchor="log_analysis_') == 2
 
 
-def test_canonical_report_keeps_navigation_heading_when_no_analysis_exists(tmp_path):
+def test_canonical_report_omits_empty_navigation_when_no_analysis_exists(tmp_path):
     snapshot = _snapshot(1)
     snapshot["incidents"][0]["analysis_run_id"] = None
     document = compose_report({"general_summary": {"zh": "摘要", "en": "Summary"}}, snapshot)
     path = tmp_path / "no-analysis.docx"
     render_document(document, path)
     text = "\n".join(paragraph.text for paragraph in Document(str(path)).paragraphs)
-    assert "Alert Navigation" in text
+    assert "Alert Navigation" not in text
     with zipfile.ZipFile(path) as archive:
         xml = archive.read("word/document.xml").decode()
     assert 'w:anchor="log_analysis_' not in xml

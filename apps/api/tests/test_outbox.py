@@ -14,12 +14,11 @@ from __future__ import annotations
 
 import threading
 import uuid
-from datetime import datetime, timezone
-
-import pytest
+from datetime import datetime, timedelta, timezone
 
 from app.models.models import Job, OutboxEvent, SkillSnapshot
-from app.outbox import dispatch_pending_events
+from app.outbox import dispatch_pending_events, purge_published_events
+
 from tests.conftest import TestSessionLocal
 
 
@@ -187,5 +186,58 @@ def test_dispatch_pending_events_does_not_starve_other_rows_on_repeated_failure(
         assert failing.published_at is None
         assert failing.attempt_count == 1
         assert ok.published_at is not None
+    finally:
+        db.close()
+
+
+def test_purge_published_events_respects_cutoff_and_never_deletes_pending_rows():
+    """Retention is strictly for old, confirmed publications.
+
+    The cutoff itself is retained (the policy says *older than* the cutoff),
+    as are recent publications and any event that still needs dispatch.
+    """
+    db = TestSessionLocal()
+    try:
+        now = datetime(2026, 1, 31, 12, 0, tzinfo=timezone.utc)
+        old = _make_pending_event(db)
+        boundary = _make_pending_event(db)
+        recent = _make_pending_event(db)
+        pending = _make_pending_event(db)
+        old.published_at = now - timedelta(days=31)
+        boundary.published_at = now - timedelta(days=30)
+        recent.published_at = now - timedelta(days=1)
+        old_id, boundary_id, recent_id, pending_id = (
+            old.id,
+            boundary.id,
+            recent.id,
+            pending.id,
+        )
+        db.commit()
+
+        assert purge_published_events(db, retention_days=30, batch_size=50, now=now) == 1
+        assert db.get(OutboxEvent, old_id) is None
+        assert db.get(OutboxEvent, boundary_id) is not None
+        assert db.get(OutboxEvent, recent_id) is not None
+        assert db.get(OutboxEvent, pending_id) is not None
+        assert db.get(OutboxEvent, pending_id).published_at is None
+    finally:
+        db.close()
+
+
+def test_purge_published_events_is_bounded_and_idempotent():
+    db = TestSessionLocal()
+    try:
+        now = datetime(2026, 1, 31, 12, 0, tzinfo=timezone.utc)
+        events = [_make_pending_event(db) for _ in range(3)]
+        for event in events:
+            event.published_at = now - timedelta(days=31)
+        db.commit()
+
+        assert purge_published_events(db, retention_days=30, batch_size=2, now=now) == 2
+        assert db.query(OutboxEvent).count() == 1
+        assert purge_published_events(db, retention_days=30, batch_size=2, now=now) == 1
+        assert db.query(OutboxEvent).count() == 0
+        # A repeated cleanup pass is a safe no-op.
+        assert purge_published_events(db, retention_days=30, batch_size=2, now=now) == 0
     finally:
         db.close()

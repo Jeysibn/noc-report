@@ -101,6 +101,21 @@ def test_preview_json_mirrors_canonical_section_order():
     assert last_incident_idx < first_analysis_idx
 
 
+def test_new_canonical_preview_contains_no_cross_incident_findings():
+    document = compose_report(
+        {
+            "general_summary": {"zh": "摘要", "en": "Summary"},
+            # A stale caller must not be able to reintroduce the removed
+            # section into the deterministic active composition.
+            "cross_incident_findings": {"zh": "旧", "en": "Removed"},
+        },
+        {**_snapshot(), "composition_profile": "noc-daily-report-v1", "coverage": {"incidents": "all", "analyses": "all_available"}},
+    )
+    payload, _ = document_to_preview_json(document)
+    assert "Cross-Incident Findings" not in str(payload)
+    assert "cross_incident_findings" not in str(payload)
+
+
 def test_preview_json_serializes_every_documented_block_type():
     raw_blocks = [
         {"type": "heading", "text": "H", "level": 1},

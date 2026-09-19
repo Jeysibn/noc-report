@@ -27,7 +27,7 @@ _LIVE_CLAUDE_TESTS = bool(os.environ.get("NOC_BRIDGE_LIVE_CLAUDE_TESTS"))
 
 from noc_bridge import db
 from noc_bridge.config import BridgeSettings
-from noc_bridge.queue_topology import JOB_TYPES, declare_topology, get_connection, queue_names
+from noc_bridge.queue_topology import DLX_EXCHANGE, JOB_TYPES, declare_topology, get_connection, queue_names
 from noc_bridge.sandbox_runner import ensure_image_built
 from noc_bridge.service import BridgeService
 from noc_bridge.storage import ChecksumMismatch, download_object, get_client, sha256_of_file, upload_artifact
@@ -161,6 +161,101 @@ def test_claim_lease_covers_configured_job_timeout_plus_safety_margin(pg_conn):
         # this closes is a lease shorter than that.
         assert lease_span >= job_timeout_seconds
         assert lease_span == pytest.approx(lease_seconds, abs=2)
+    finally:
+        _delete_job_row(pg_conn, job_id)
+
+
+def test_live_lease_redelivery_enters_real_retry_queue_without_running_job(pg_conn, mq_channel, monkeypatch):
+    """A real RabbitMQ delivery is delayed while a PostgreSQL lease is live.
+
+    This is the crash-after-claim fence: the message is not ACKed away while
+    the dead worker's lease can still expire and require recovery.
+    """
+    job_id = uuid.uuid4()
+    snapshot_id, skill_hash = _insert_job_row(pg_conn, job_id, "log_triage")
+    try:
+        with pg_conn.cursor() as cur:
+            cur.execute(
+                "UPDATE jobs SET status = 'PROCESSING', lease_expires_at = now() + interval '5 minutes' WHERE id = %s",
+                (str(job_id),),
+            )
+        pg_conn.commit()
+
+        payload = {
+            "protocol_version": 1,
+            "job_id": str(job_id),
+            "job_type": "log_triage",
+            "incident_id": None,
+            "object_refs": [],
+            "model": "claude-sonnet-5",
+            "effort": "medium",
+            "skill_name": "log-triage-summary",
+            "skill_version": "1",
+            "skill_hash": skill_hash,
+            "skill_snapshot_id": snapshot_id,
+            "correlation_id": str(uuid.uuid4()),
+            "expected_output_type": "log_triage.result",
+            "attempt": 1,
+        }
+        names = queue_names("log_triage")
+        # Use an isolated main queue so a developer's already-running bridge
+        # cannot steal the delivery before this test exercises the settlement
+        # path. Its dead-letter arguments intentionally match the production
+        # main queue, so NACK still lands in the real retry queue.
+        isolated_queue = f"noc.test.lease.{job_id}"
+        mq_channel.queue_declare(
+            isolated_queue,
+            durable=False,
+            exclusive=True,
+            auto_delete=True,
+            arguments={
+                "x-dead-letter-exchange": DLX_EXCHANGE,
+                "x-dead-letter-routing-key": names["routing_key"],
+            },
+        )
+        mq_channel.queue_bind(isolated_queue, "noc.jobs", routing_key=names["routing_key"])
+        mq_channel.confirm_delivery()
+        mq_channel.basic_publish(
+            exchange="noc.jobs", routing_key=names["routing_key"], body=json.dumps(payload).encode()
+        )
+        method, properties, body = mq_channel.basic_get(isolated_queue)
+        assert method is not None
+
+        process = Mock(side_effect=AssertionError("live lease must not execute Claude"))
+        service = BridgeService(SETTINGS)
+        monkeypatch.setattr(service, "_process_job", process)
+        service._handle_delivery(
+            mq_channel,
+            method,
+            properties=properties,
+            body=body,
+            pg_conn=pg_conn,
+            minio_client=None,
+            job_type="log_triage",
+        )
+
+        retry_method, _, retry_body = mq_channel.basic_get(names["retry"], auto_ack=True)
+        assert retry_method is not None
+        assert json.loads(retry_body)["job_id"] == str(job_id)
+        process.assert_not_called()
+        assert db.fetch_job_row(pg_conn, job_id)["attempt"] == 1
+    finally:
+        _delete_job_row(pg_conn, job_id)
+
+
+def test_expired_lease_is_reclaimable_against_real_postgres(pg_conn):
+    job_id = uuid.uuid4()
+    _insert_job_row(pg_conn, job_id, "log_triage")
+    try:
+        with pg_conn.cursor() as cur:
+            cur.execute(
+                "UPDATE jobs SET status = 'PROCESSING', lease_expires_at = now() - interval '1 second' WHERE id = %s",
+                (str(job_id),),
+            )
+        pg_conn.commit()
+        result = db.claim_job(pg_conn, job_id, worker_id="recovery-worker", lease_seconds=60)
+        assert result.disposition is db.JobClaimDisposition.CLAIMED
+        assert result.job["worker_id"] == "recovery-worker"
     finally:
         _delete_job_row(pg_conn, job_id)
 

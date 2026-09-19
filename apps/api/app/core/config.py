@@ -1,5 +1,6 @@
 from typing import Literal
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -51,6 +52,14 @@ class Settings(BaseSettings):
     # its own dispatcher process should set this to "external" so it isn't
     # also racing an embedded copy inside every API replica.
     outbox_mode: Literal["embedded", "external"] = "embedded"
+
+    # Published transactional-outbox history is retained for a conservative
+    # period for operational/audit visibility, then removed in bounded batches
+    # by the dispatcher.  Unpublished rows are never eligible for retention
+    # cleanup: they still represent work that must reach RabbitMQ.
+    outbox_retention_days: int = Field(default=30, ge=1)
+    outbox_cleanup_batch_size: int = Field(default=500, ge=1)
+    outbox_cleanup_interval_seconds: float = Field(default=60 * 60, gt=0)
 
     # Milestone 17 gap follow-up ("limits"): evidence uploads go straight
     # from the browser to MinIO via a presigned PUT URL (§25), so there's

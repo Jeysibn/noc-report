@@ -22,9 +22,10 @@ import logging
 import threading
 import time
 
+from app.core.config import settings
 from app.core.queue import declare_topology, get_connection
 from app.db.session import SessionLocal
-from app.outbox import dispatch_pending_events
+from app.outbox import dispatch_pending_events, purge_published_events
 
 logger = logging.getLogger("app.outbox_worker")
 
@@ -43,6 +44,7 @@ def run_forever(stop_event: threading.Event | None = None) -> None:
                 channel = connection.channel()
                 declare_topology(channel)
                 backoff = RECONNECT_BACKOFF_SECONDS
+                last_cleanup_at = 0.0
                 while not stop_event.is_set():
                     # A publish failure can close the Pika channel while
                     # `dispatch_pending_events` deliberately keeps the
@@ -55,6 +57,25 @@ def run_forever(stop_event: threading.Event | None = None) -> None:
                     db = SessionLocal()
                     try:
                         dispatch_pending_events(db, channel)
+                        # Retention is intentionally on the same long-lived
+                        # dispatcher process as publication, but runs on a
+                        # much slower configurable cadence and in bounded
+                        # batches.  Cleanup errors are isolated so they do
+                        # not stop publication/retry processing.
+                        now_monotonic = time.monotonic()
+                        if now_monotonic - last_cleanup_at >= settings.outbox_cleanup_interval_seconds:
+                            try:
+                                removed = purge_published_events(
+                                    db,
+                                    retention_days=settings.outbox_retention_days,
+                                    batch_size=settings.outbox_cleanup_batch_size,
+                                )
+                                if removed:
+                                    logger.info("outbox retention removed %s published rows", removed)
+                                last_cleanup_at = now_monotonic
+                            except Exception:
+                                db.rollback()
+                                logger.exception("outbox retention cleanup failed; will retry later")
                     finally:
                         db.close()
                     stop_event.wait(POLL_INTERVAL_SECONDS)

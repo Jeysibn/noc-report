@@ -43,22 +43,52 @@ export function LogAnalysisPanel({
   const [model, setModel] = useState<string | undefined>(undefined);
   const [effort, setEffort] = useState<"low" | "medium" | "high" | undefined>(undefined);
   const [runs, setRuns] = useState<AnalysisRun[]>([]);
-  const [loaded, setLoaded] = useState(false);
+  const [historyState, setHistoryState] = useState<"loading" | "loaded" | "failed">("loading");
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [historyRetry, setHistoryRetry] = useState(0);
+  const [pollStale, setPollStale] = useState(false);
   const [requestError, setRequestError] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const canAnalyze = hasPermission("incident.analysis.execute");
 
   useEffect(() => {
-    if (!incidentId) return;
+    let cancelled = false;
+
+    if (!incidentId) {
+      setHistoryState("loaded");
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setHistoryState("loading");
+    setHistoryError(null);
+    setPollStale(false);
+    // Do not briefly show a run belonging to the previous incident while the
+    // newly selected incident's history is loading.
+    setRuns([]);
     analysisService
       .listRuns(incidentId)
-      .then(setRuns)
-      .finally(() => setLoaded(true));
+      .then((nextRuns) => {
+        if (cancelled) return;
+        setRuns(nextRuns);
+        setHistoryState("loaded");
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setHistoryState("failed");
+        setHistoryError(
+          err instanceof ApiError
+            ? err.message
+            : "Unable to load analysis status.",
+        );
+      });
     return () => {
+      cancelled = true;
       if (pollRef.current) clearInterval(pollRef.current);
     };
-  }, [incidentId]);
+  }, [incidentId, historyRetry]);
 
   const currentRun = runs.find((r) => r.isCurrent);
 
@@ -67,22 +97,39 @@ export function LogAnalysisPanel({
       clearInterval(pollRef.current);
       pollRef.current = null;
     }
-    if (!incidentId || !currentRun || !IN_FLIGHT.includes(currentRun.status))
+    if (
+      historyState !== "loaded" ||
+      !incidentId ||
+      !currentRun ||
+      !IN_FLIGHT.includes(currentRun.status)
+    )
       return;
 
     pollRef.current = setInterval(() => {
-      analysisService.getRun(incidentId, currentRun.jobId).then((updated) => {
-        setRuns((prev) =>
-          prev.map((r) => (r.jobId === updated.jobId ? updated : r)),
-        );
-      });
+      analysisService
+        .getRun(incidentId, currentRun.jobId)
+        .then((updated) => {
+          setPollStale(false);
+          setRuns((prev) =>
+            prev.map((r) => (r.jobId === updated.jobId ? updated : r)),
+          );
+        })
+        .catch(() => {
+          // Keep the last-known-good run visible. A transient poll failure is
+          // not evidence that the analysis disappeared or is NOT_ANALYZED.
+          setPollStale(true);
+        });
     }, POLL_INTERVAL_MS);
 
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [incidentId, currentRun?.jobId, currentRun?.status]);
+  }, [historyState, incidentId, currentRun?.jobId, currentRun?.status]);
+
+  function retryHistory() {
+    setHistoryRetry((value) => value + 1);
+  }
 
   async function requestAnalysis() {
     if (!incidentId) return;
@@ -111,8 +158,29 @@ export function LogAnalysisPanel({
     <Card className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
         <CardTitle>Log Analysis</CardTitle>
-        {loaded && <StatusPill status={pillStatus} label={label} />}
+        {historyState === "loaded" && <StatusPill status={pillStatus} label={label} />}
       </div>
+
+      {historyState === "loading" && incidentId && (
+        <p className="text-sm text-muted">Loading analysis status…</p>
+      )}
+
+      {historyState === "failed" && (
+        <div className="rounded-lg bg-critical-tint p-3 text-sm text-critical">
+          <p>
+            {historyError ?? "Unable to load analysis status."}
+          </p>
+          <Button className="mt-3" size="sm" variant="secondary" onClick={retryHistory}>
+            Retry
+          </Button>
+        </div>
+      )}
+
+      {pollStale && historyState === "loaded" && (
+        <p className="text-xs text-warning" role="status">
+          Analysis status temporarily unavailable — retrying…
+        </p>
+      )}
 
       {!hasLog && (
         <p className="text-sm text-muted">

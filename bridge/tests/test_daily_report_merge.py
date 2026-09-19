@@ -1,7 +1,9 @@
-"""AI cost-optimization mission Phase 2, Issue 6: unit tests for the
-deterministic daily-report assembly step — no Docker/Postgres/RabbitMQ
-needed, unlike the rest of bridge/tests/test_bridge.py, since this only
-exercises pure functions.
+"""Compatibility tests for the historical ``daily_report_docx`` assembler.
+
+The active report-document profile no longer emits Cross-Incident Findings;
+these tests intentionally preserve the old shape so immutable historical
+artifacts remain renderable. No Docker/Postgres/RabbitMQ is needed, unlike the
+rest of bridge/tests/test_bridge.py, since this only exercises pure functions.
 
 These prove the core Issue 6 claims: Claude's compact output supplies
 only the shift-level overview and cross-incident findings; every other

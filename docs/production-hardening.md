@@ -99,6 +99,14 @@ separate `previewable` and `downloadable` capabilities. Preview is gated by
 `report.read` and structured artifact identity; download is gated by
 `report.download` and exact DOCX identity.
 
+The Dashboard Current Shift card distinguishes `loading`, an active shift, a
+successful no-active-shift response, and a failed request. A failed request is
+shown with a concise error and retry action; it is never rendered as “No active
+shift.” Log Analysis history follows the same distinction: an initial history
+failure is not “Not analyzed,” while a transient polling failure preserves the
+last-known-good run and shows a non-blocking stale/retrying indicator until the
+next successful poll.
+
 ## RabbitMQ job lifecycle
 
 `packages/contracts/job_protocol.json` owns job types, exchanges, retry TTL,
@@ -106,6 +114,26 @@ and the events queue. `job_message.schema.json` owns the message shape and
 requires protocol version 1. The API validates before persisting an outbox
 payload; the bridge validates before reading job fields and DLQs malformed or
 unsupported messages. Messages contain references, never evidence bytes.
+
+Published outbox retention is controlled by `OUTBOX_RETENTION_DAYS` (default
+30 days), `OUTBOX_CLEANUP_BATCH_SIZE` (default 500), and
+`OUTBOX_CLEANUP_INTERVAL_SECONDS` (default one hour). The dispatcher removes
+only rows with `published_at` set and strictly older than the configured
+cutoff, in bounded, repeatable batches. Rows with `published_at IS NULL` are
+pending work and are never retention-cleaned.
+
+The bridge treats PostgreSQL lease ownership and RabbitMQ delivery settlement
+as separate state machines. A failed claim is classified as `CLAIMED`,
+`ALREADY_COMPLETED`, `LEASE_BUSY`, or `NOT_CLAIMABLE`. A live lease is
+temporary contention: its delivery is NACKed without requeue so the existing
+dead-letter retry queue delays it without incrementing the Job failure attempt.
+If the original worker died, the delayed delivery returns after the lease
+expires and is reclaimed; if the original worker completes, the duplicate is
+ACKed without another Claude invocation. Completed duplicates ACK immediately,
+and genuinely terminal/non-claimable rows are quarantined to the job DLQ.
+This closes the crash-after-claim/before-ACK window without weakening the
+existing artifact reconciliation, ReportPlan reuse, SkillSnapshot identity, or
+paid-AI reservation fences.
 
 ## Operational health
 

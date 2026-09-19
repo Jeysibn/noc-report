@@ -1,8 +1,9 @@
-"""Validation for the legacy daily-alert report assembler.
+"""Validation for the historical ``daily_report_docx`` assembler.
 
 This is deliberately outside generic bridge validation. It is a compatibility
-adapter for the current daily report renderer; new report profiles validate
-their own output schema and produce ReportDocument blocks.
+adapter for immutable legacy report rows; the active report profile validates
+its narrative-only ReportPlan and produces ReportDocument blocks without a
+Cross-Incident Findings field.
 """
 from __future__ import annotations
 

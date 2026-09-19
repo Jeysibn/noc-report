@@ -400,7 +400,7 @@ def compose_report(plan: dict, snapshot: dict) -> ReportDocument:
         for i, incident in enumerate(alert_incidents, start=1)
         if str(incident["id"]) in target_by_incident
     )
-    if canonical or navigation_entries:
+    if navigation_entries:
         parsed_blocks.append(AlertNavigation(navigation_entries))
     parsed_blocks.extend(
         _incident_block(

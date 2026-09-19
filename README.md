@@ -87,6 +87,14 @@ reports. Historical report artifacts and legacy renderer profiles remain
 frozen: they are displayed and downloaded exactly as originally generated and
 are not rewritten to match the current contract.
 
+RabbitMQ redelivery and the bridge's PostgreSQL Job lease are deliberately
+settled together: a live lease sends a duplicate through the delayed retry
+queue, an expired lease is reclaimable, and a completed duplicate is ACKed
+without another paid-AI execution. The Dashboard and Log Analysis UI also
+distinguish failed remote reads from truthful empty states. Published outbox
+rows are retained for the configured window and cleaned in bounded batches;
+unpublished rows are never deleted by retention.
+
 ## Milestones
 
 Implementation proceeds per the master plan's Development Milestones (§37).

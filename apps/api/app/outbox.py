@@ -23,16 +23,17 @@ Dispatcher behavior (per the reliability mission spec):
 A publish failure (broker unreachable, nacked/returned message) leaves
 the row unpublished (`published_at IS NULL`) with `attempt_count`
 incremented and `last_error` recorded, so the next dispatch pass retries
-it — outbox rows are never deleted here; retention/cleanup of old
-published rows is a separate, deliberately unimplemented concern (no
-retention policy has been decided yet).
+it.  Published history is cleaned separately by
+`purge_published_events`, using a configurable age and bounded batches;
+unpublished rows are never eligible for cleanup.
 """
 
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 from app.core.queue import JOBS_EXCHANGE, publish_message
@@ -41,6 +42,68 @@ from app.models.models import OutboxEvent
 logger = logging.getLogger("app.outbox")
 
 DEFAULT_BATCH_SIZE = 50
+
+
+def purge_published_events(
+    db: Session,
+    *,
+    retention_days: int,
+    batch_size: int,
+    now: datetime | None = None,
+) -> int:
+    """Delete one bounded batch of old, successfully published events.
+
+    This maintenance operation deliberately has a narrow eligibility
+    predicate: only rows with a non-null ``published_at`` older than the
+    retention cutoff can be removed.  Pending rows (``published_at IS NULL``)
+    remain durable until the dispatcher confirms publication.  Selecting IDs
+    with row locks before deleting them lets multiple dispatcher instances
+    run cleanup concurrently without deleting the same row twice.
+
+    ``now`` is injectable for deterministic boundary tests.  As with the
+    dispatcher, this helper owns the transaction for the rows it cleans and
+    should be called with a maintenance/session-only SQLAlchemy session.
+    """
+    if retention_days < 0:
+        raise ValueError("retention_days must be non-negative")
+    if batch_size < 1:
+        raise ValueError("batch_size must be positive")
+
+    current_time = now or datetime.now(timezone.utc)
+    if current_time.tzinfo is None:
+        current_time = current_time.replace(tzinfo=timezone.utc)
+    cutoff = current_time - timedelta(days=retention_days)
+
+    eligible_ids = db.scalars(
+        select(OutboxEvent.id)
+        .where(
+            OutboxEvent.published_at.is_not(None),
+            OutboxEvent.published_at < cutoff,
+        )
+        .order_by(OutboxEvent.published_at.asc(), OutboxEvent.id.asc())
+        .limit(batch_size)
+        .with_for_update(skip_locked=True)
+    ).all()
+    if not eligible_ids:
+        # End the read transaction opened by SELECT without affecting any
+        # caller work.  The worker supplies a dedicated maintenance session.
+        db.rollback()
+        return 0
+
+    deleted = db.execute(
+        delete(OutboxEvent).where(
+            OutboxEvent.id.in_(eligible_ids),
+            OutboxEvent.published_at.is_not(None),
+            OutboxEvent.published_at < cutoff,
+        )
+    ).rowcount or 0
+    db.commit()
+    logger.info(
+        "outbox retention cleanup deleted %s published events older than %s",
+        deleted,
+        cutoff.isoformat(),
+    )
+    return deleted
 
 
 def dispatch_pending_events(db: Session, channel, *, batch_size: int = DEFAULT_BATCH_SIZE) -> int:

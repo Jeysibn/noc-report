@@ -454,7 +454,9 @@ class OutboxEvent(Base):
     broker has confirmed the publish; a row with `published_at is None` is
     still due and safe to retry (publishing is at-least-once, matching
     RabbitMQ's own delivery guarantee — the job lifecycle module handles
-    the resulting idempotency on the consumer side)."""
+    the resulting idempotency on the consumer side). Published rows are
+    retained for the configured outbox retention window before bounded
+    cleanup; unpublished rows are never retention-cleaned."""
 
     __tablename__ = "outbox_events"
     __table_args__ = (Index("ix_outbox_events_unpublished", "published_at", "created_at"),)

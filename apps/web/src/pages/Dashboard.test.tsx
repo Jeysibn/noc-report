@@ -1,17 +1,18 @@
-import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { Dashboard } from "./Dashboard";
 
 const getDashboardSummary = vi.fn();
 const listIncidents = vi.fn();
+const getCurrentShift = vi.fn();
 
 vi.mock("@/services", () => ({
   incidentService: {
     getDashboardSummary: (...args: unknown[]) => getDashboardSummary(...args),
     list: (...args: unknown[]) => listIncidents(...args),
   },
-  shiftService: { getCurrentShift: vi.fn().mockResolvedValue(null) },
+  shiftService: { getCurrentShift: (...args: unknown[]) => getCurrentShift(...args) },
 }));
 
 vi.mock("@/lib/operationalHealth", () => ({
@@ -19,6 +20,12 @@ vi.mock("@/lib/operationalHealth", () => ({
 }));
 
 describe("Dashboard", () => {
+  beforeEach(() => {
+    getCurrentShift.mockReset().mockResolvedValue(null);
+    getDashboardSummary.mockReset();
+    listIncidents.mockReset();
+  });
+
   it("renders aggregate metrics and only factual status text", async () => {
     getDashboardSummary.mockResolvedValue({
       openIncidents: 301,
@@ -49,5 +56,26 @@ describe("Dashboard", () => {
     render(<MemoryRouter><Dashboard /></MemoryRouter>);
 
     expect(await screen.findByText(/unable to load recent incidents/i)).toBeInTheDocument();
+  });
+
+  it("distinguishes current-shift load failure from no active shift and supports retry", async () => {
+    getDashboardSummary.mockResolvedValue({
+      openIncidents: 0, activeAlerts: 0, recoveredAlerts: 0,
+      logsAwaitingAnalysis: 0, analysesRunning: 0, reportsGeneratedThisShift: 0,
+    });
+    listIncidents.mockResolvedValue({ items: [], total: 0 });
+    getCurrentShift
+      .mockRejectedValueOnce(new Error("shift service unavailable"))
+      .mockResolvedValueOnce(null);
+
+    render(<MemoryRouter><Dashboard /></MemoryRouter>);
+
+    expect(await screen.findByText(/unable to load current shift/i)).toBeInTheDocument();
+    expect(screen.getByText(/shift service unavailable/i)).toBeInTheDocument();
+    expect(screen.queryByText("No active shift.")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("No active shift.")).toBeInTheDocument();
+    expect(screen.queryByText(/unable to load current shift/i)).not.toBeInTheDocument();
   });
 });

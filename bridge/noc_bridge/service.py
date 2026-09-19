@@ -229,14 +229,14 @@ def _reconcile_artifacts(
 
 
 def _merge_daily_report(snapshot: dict, ai_output: dict) -> dict:
-    """AI cost-optimization mission Phase 2, Issue 6: deterministically
-    rebuilds the full report structure `_validate_daily_report` and
-    `render_daily_report_docx` expect, from (a) the frozen snapshot this
-    bridge downloaded before ever invoking the sandbox and (b) Claude's
-    compact 4-field output (overview_en/zh, cross_incident_findings_en/zh).
-    Per-incident fields (title/status/grafana_url/log_filename/
-    screenshots/existing analysis) are carried through verbatim — never
-    regenerated or round-tripped through Claude."""
+    """Rebuild the historical ``daily_report_docx`` shape deterministically.
+
+    This compatibility path is selected only by old frozen SkillSnapshots;
+    current Daily Alert Reports use ``report-document-v1`` and the
+    narrative-only ReportPlan in ``skills/daily-alert-report``. The legacy
+    fields are retained solely so immutable historical artifacts can still be
+    rendered exactly as generated.
+    """
     shift_starts_at = snapshot.get("shift_starts_at")
     shift_ends_at = snapshot.get("shift_ends_at")
     title = f"Daily Alert Report — {shift_starts_at} to {shift_ends_at}"
@@ -803,10 +803,12 @@ class BridgeService:
         # arrive more than once. Before doing anything else:
         #   - a job already COMPLETED is a pure redelivery of finished
         #     work — ack and do nothing.
-        #   - claim the job otherwise; a claim can fail only if some other
-        #     delivery holds a still-live lease on it, in which case this
-        #     delivery is redundant right now and is safely ack'd without
-        #     executing (the other delivery owns finishing it).
+        #   - a live lease is temporary contention, not a successful
+        #     duplicate settlement. NACK it without requeue so the main
+        #     queue's DLX routes it through the delayed retry queue. This is
+        #     the crash-after-claim safety fence: if the original worker died,
+        #     the message remains available until its lease expires.
+        #   - an expired lease is reclaimed by claim_job and processed here.
         existing = db.fetch_job_row(pg_conn, job_uuid)
         if existing is None:
             logger.error("job %s is not present in Postgres; routing to DLQ", job_id)
@@ -850,9 +852,37 @@ class BridgeService:
         # to run, plus a fixed safety margin for the bridge's own
         # pre/post-sandbox work (download, upload, DB writes).
         lease_seconds = db.load_system_config(pg_conn)["job_timeout_seconds"] + _LEASE_SAFETY_MARGIN_SECONDS
-        claimed = db.claim_job(pg_conn, job_uuid, worker_id=self.worker_id, lease_seconds=lease_seconds)
-        if claimed is None:
-            logger.info("job %s could not be claimed (already leased elsewhere) — ack without re-executing", job_id)
+        claim_result = db.claim_job(
+            pg_conn,
+            job_uuid,
+            worker_id=self.worker_id,
+            lease_seconds=lease_seconds,
+        )
+        if claim_result.disposition is db.JobClaimDisposition.ALREADY_COMPLETED:
+            logger.info("job %s completed while claim was in flight — ACK without re-executing", job_id)
+            channel.basic_ack(delivery_tag=method.delivery_tag)
+            return
+        if claim_result.disposition is db.JobClaimDisposition.LEASE_BUSY:
+            logger.info(
+                "job %s has a live lease owned by another worker — delaying delivery",
+                job_id,
+            )
+            channel.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+            return
+        if claim_result.disposition is db.JobClaimDisposition.NOT_CLAIMABLE:
+            # A status outside the executable lifecycle (or a missing row
+            # observed after the earlier existence check) is terminal for this
+            # message. Preserve it in the job-type DLQ rather than silently
+            # ACKing an operator-visible delivery.
+            logger.error("job %s is not claimable; routing delivery to DLQ", job_id)
+            send_to_dlq(channel, job_type=job_type, body=payload)
+            channel.basic_ack(delivery_tag=method.delivery_tag)
+            return
+
+        claimed = claim_result.job
+        if claimed is None:  # defensive guard for malformed DB adapters
+            logger.error("job %s returned CLAIMED without a row; routing delivery to DLQ", job_id)
+            send_to_dlq(channel, job_type=job_type, body=payload)
             channel.basic_ack(delivery_tag=method.delivery_tag)
             return
 

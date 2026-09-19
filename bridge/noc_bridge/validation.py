@@ -10,9 +10,10 @@ sandbox and runs standard JSON Schema validation. A skill's output format can
 change by editing its schema file alone; generic bridge code does not define
 result fields.
 
-The current daily-report compatibility assembler has its own validation in
-`report_validation.py`. Generic runtime validation does not inspect report
-fields or semantics.
+The historical `daily_report_docx` compatibility assembler has its own
+validation in `report_validation.py`. Generic runtime validation does not
+inspect report fields or semantics; current `report-document-v1` reports use
+the Daily Alert Report skill's narrative-only schema.
 """
 from __future__ import annotations
 
