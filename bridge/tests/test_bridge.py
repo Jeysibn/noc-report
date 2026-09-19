@@ -11,10 +11,12 @@ import json
 import os
 import pathlib
 import tempfile
+import time
 import uuid
 from unittest.mock import Mock
 
 import pytest
+from pika.exchange_type import ExchangeType
 
 # `test_end_to_end_log_triage_job` now invokes the real Claude Code CLI
 # (ADR 0003), authenticated via the operator's own OAuth credential, and
@@ -198,10 +200,14 @@ def test_live_lease_redelivery_enters_real_retry_queue_without_running_job(pg_co
             "attempt": 1,
         }
         names = queue_names("log_triage")
-        # Use an isolated main queue so a developer's already-running bridge
-        # cannot steal the delivery before this test exercises the settlement
-        # path. Its dead-letter arguments intentionally match the production
-        # main queue, so NACK still lands in the real retry queue.
+        test_jobs_exchange = f"noc.test.jobs.{job_id}"
+        test_dlx_exchange = f"noc.test.dlx.{job_id}"
+        mq_channel.exchange_declare(test_jobs_exchange, ExchangeType.direct, durable=False, auto_delete=True)
+        mq_channel.exchange_declare(test_dlx_exchange, ExchangeType.direct, durable=False, auto_delete=True)
+        # Use isolated exchanges/queues so a developer's already-running
+        # bridge cannot steal the delivery before this test exercises the
+        # settlement path. The queue arguments still mirror production DLX
+        # behavior.
         isolated_queue = f"noc.test.lease.{job_id}"
         mq_channel.queue_declare(
             isolated_queue,
@@ -209,14 +215,17 @@ def test_live_lease_redelivery_enters_real_retry_queue_without_running_job(pg_co
             exclusive=True,
             auto_delete=True,
             arguments={
-                "x-dead-letter-exchange": DLX_EXCHANGE,
+                "x-dead-letter-exchange": test_dlx_exchange,
                 "x-dead-letter-routing-key": names["routing_key"],
             },
         )
-        mq_channel.queue_bind(isolated_queue, "noc.jobs", routing_key=names["routing_key"])
+        mq_channel.queue_bind(isolated_queue, test_jobs_exchange, routing_key=names["routing_key"])
+        isolated_retry = f"noc.test.lease.retry.{job_id}"
+        mq_channel.queue_declare(isolated_retry, durable=False, exclusive=True, auto_delete=True)
+        mq_channel.queue_bind(isolated_retry, test_dlx_exchange, routing_key=names["routing_key"])
         mq_channel.confirm_delivery()
         mq_channel.basic_publish(
-            exchange="noc.jobs", routing_key=names["routing_key"], body=json.dumps(payload).encode()
+            exchange=test_jobs_exchange, routing_key=names["routing_key"], body=json.dumps(payload).encode()
         )
         method, properties, body = mq_channel.basic_get(isolated_queue)
         assert method is not None
@@ -234,7 +243,12 @@ def test_live_lease_redelivery_enters_real_retry_queue_without_running_job(pg_co
             job_type="log_triage",
         )
 
-        retry_method, _, retry_body = mq_channel.basic_get(names["retry"], auto_ack=True)
+        retry_deadline = time.monotonic() + 0.5
+        retry_state = mq_channel.queue_declare(isolated_retry, passive=True)
+        while retry_state.method.message_count == 0 and time.monotonic() < retry_deadline:
+            time.sleep(0.02)
+            retry_state = mq_channel.queue_declare(isolated_retry, passive=True)
+        retry_method, _, retry_body = mq_channel.basic_get(isolated_retry, auto_ack=True)
         assert retry_method is not None
         assert json.loads(retry_body)["job_id"] == str(job_id)
         process.assert_not_called()
@@ -257,6 +271,158 @@ def test_expired_lease_is_reclaimable_against_real_postgres(pg_conn):
         assert result.disposition is db.JobClaimDisposition.CLAIMED
         assert result.job["worker_id"] == "recovery-worker"
     finally:
+        _delete_job_row(pg_conn, job_id)
+
+
+def test_crash_after_claim_redelivery_reclaims_after_lease_expiry(pg_conn, mq_channel, monkeypatch):
+    """Exercise the complete crash/retry/reclaim path with real services.
+
+    Worker A claims the Job and then disappears without ACKing its delivery.
+    Worker B receives a duplicate while that lease is live, sends it through
+    a short-lived retry queue, and later reclaims it after the lease expires.
+    The processing seam is stubbed only to avoid a paid Claude call; the Job
+    is still completed through the real bridge delivery handler and database.
+    """
+    job_id = uuid.uuid4()
+    snapshot_id, skill_hash = _insert_job_row(pg_conn, job_id, "log_triage")
+    names = queue_names("log_triage")
+    test_jobs_exchange = f"noc.test.crash.jobs.{job_id}"
+    test_dlx_exchange = f"noc.test.crash.dlx.{job_id}"
+    main_queue = f"noc.test.crash.main.{job_id}"
+    retry_queue = f"noc.test.crash.retry.{job_id}"
+    original_method = None
+    try:
+        # Isolated exchanges avoid interference from a locally running bridge;
+        # the retry TTL is short so the integration test does not wait 30s.
+        mq_channel.exchange_declare(test_jobs_exchange, ExchangeType.direct, durable=False, auto_delete=True)
+        mq_channel.exchange_declare(test_dlx_exchange, ExchangeType.direct, durable=False, auto_delete=True)
+        mq_channel.queue_declare(
+            main_queue,
+            durable=False,
+            exclusive=True,
+            auto_delete=True,
+            arguments={
+                "x-dead-letter-exchange": test_dlx_exchange,
+                "x-dead-letter-routing-key": names["routing_key"],
+            },
+        )
+        mq_channel.queue_bind(main_queue, test_jobs_exchange, routing_key=names["routing_key"])
+        mq_channel.queue_declare(
+            retry_queue,
+            durable=False,
+            exclusive=True,
+            auto_delete=True,
+            arguments={
+                "x-message-ttl": 1000,
+                "x-dead-letter-exchange": test_jobs_exchange,
+                "x-dead-letter-routing-key": names["routing_key"],
+            },
+        )
+        mq_channel.queue_bind(retry_queue, test_dlx_exchange, routing_key=names["routing_key"])
+
+        payload = {
+            "protocol_version": 1,
+            "job_id": str(job_id),
+            "job_type": "log_triage",
+            "incident_id": None,
+            "object_refs": [],
+            "model": "claude-sonnet-5",
+            "effort": "medium",
+            "skill_name": "log-triage-summary",
+            "skill_version": "1",
+            "skill_hash": skill_hash,
+            "skill_snapshot_id": snapshot_id,
+            "correlation_id": str(uuid.uuid4()),
+            "expected_output_type": "log_triage.result",
+            "attempt": 1,
+        }
+        mq_channel.confirm_delivery()
+        mq_channel.basic_publish(
+            exchange=test_jobs_exchange, routing_key=names["routing_key"], body=json.dumps(payload).encode()
+        )
+
+        # Worker A owns the Job, then crashes before ACKing its original
+        # delivery. Keep this delivery outstanding while Worker B handles the
+        # duplicate below, just as RabbitMQ would after redelivery.
+        original_method, original_properties, original_body = mq_channel.basic_get(main_queue)
+        assert original_method is not None
+        original_method = (original_method, original_properties, original_body)
+        first_claim = db.claim_job(pg_conn, job_id, worker_id="worker-a", lease_seconds=1)
+        assert first_claim.disposition is db.JobClaimDisposition.CLAIMED
+
+        mq_channel.basic_publish(
+            exchange=test_jobs_exchange, routing_key=names["routing_key"], body=json.dumps(payload).encode()
+        )
+        duplicate_method, duplicate_properties, duplicate_body = mq_channel.basic_get(main_queue)
+        assert duplicate_method is not None
+        service = BridgeService(SETTINGS)
+        monkeypatch.setattr(
+            service,
+            "_process_job",
+            Mock(side_effect=AssertionError("live duplicate ran too early")),
+        )
+        service._handle_delivery(
+            mq_channel,
+            duplicate_method,
+            properties=duplicate_properties,
+            body=duplicate_body,
+            pg_conn=pg_conn,
+            minio_client=None,
+            job_type="log_triage",
+        )
+
+        retry_deadline = time.monotonic() + 0.5
+        retry_state = mq_channel.queue_declare(retry_queue, passive=True)
+        while retry_state.method.message_count == 0 and time.monotonic() < retry_deadline:
+            time.sleep(0.02)
+            retry_state = mq_channel.queue_declare(retry_queue, passive=True)
+        assert retry_state.method.message_count == 1
+
+        # Make the lease expiry explicit and wait for the isolated retry TTL
+        # to return the delivery to the isolated main queue.
+        with pg_conn.cursor() as cur:
+            cur.execute(
+                "UPDATE jobs SET lease_expires_at = now() + interval '100 milliseconds' WHERE id = %s",
+                (str(job_id),),
+            )
+        pg_conn.commit()
+        time.sleep(0.3)
+        with pg_conn.cursor() as cur:
+            cur.execute("SELECT lease_expires_at < now() FROM jobs WHERE id = %s", (str(job_id),))
+            assert cur.fetchone()[0] is True
+        returned = None
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            returned = mq_channel.basic_get(main_queue)
+            if returned[0] is not None:
+                break
+            time.sleep(0.05)
+        assert returned is not None and returned[0] is not None
+        processed = Mock()
+
+        def _complete_without_paid_ai(job_type, payload, conn, minio_client, channel):
+            processed(payload["job_id"])
+            db.mark_completed(conn, job_id)
+
+        service._process_job = _complete_without_paid_ai
+        service._handle_delivery(
+            mq_channel,
+            returned[0],
+            properties=returned[1],
+            body=returned[2],
+            pg_conn=pg_conn,
+            minio_client=None,
+            job_type="log_triage",
+        )
+
+        processed.assert_called_once_with(str(job_id))
+        assert db.fetch_job_row(pg_conn, job_id)["status"] == "COMPLETED"
+        assert mq_channel.basic_get(names["dlq"], auto_ack=True)[0] is None
+    finally:
+        # ACK the deliberately outstanding Worker A delivery only during test
+        # cleanup; the production crash path leaves RabbitMQ to redeliver it.
+        if original_method is not None:
+            mq_channel.basic_ack(delivery_tag=original_method[0].delivery_tag)
         _delete_job_row(pg_conn, job_id)
 
 
