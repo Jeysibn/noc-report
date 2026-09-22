@@ -16,7 +16,7 @@ release path around the existing implementation instead of redesigning it.
 | ReportSnapshot | Freezes shift facts, evidence, analyses, policy, timezone | `snapshot_json` and SHA-256; `shift_timezone` | Manila/UTC/DST and historical freeze tests | ALREADY FIXED |
 | AI budget | Atomic reservations plus cumulative `record_paid_ai_calls` | Job budget/reserved/used columns and migrations | 2 + 2 calls reaches 4; fifth reservation returns 0 | ALREADY FIXED |
 | Model/effort | Bridge AI governance resolves omitted Auto values from `system_config` | nullable request overrides; durable effective policy | Auto and explicit override tests | ALREADY FIXED |
-| ReportPlan | Claude produces narrative only; composition derives coverage | Daily Report schema requires bilingual `general_summary` | missing/empty summary and narrative composition tests | ALREADY FIXED |
+| ReportPlan | retired provider produces narrative only; composition derives coverage | Daily Report schema requires bilingual `general_summary` | missing/empty summary and narrative composition tests | ALREADY FIXED |
 | AnalysisRun | Application transition plus PostgreSQL partial unique index | Alembic `f9a0b1c2d3e4` | current-run invariant and duplicate repair coverage | ALREADY FIXED |
 | ReportDocument | Deterministic `Alerts → General Summary → Log Analysis` | renderer-neutral JSON contract | DOCX/Web composition, fidelity, pagination tests | ALREADY FIXED |
 | CI/release coherence | Existing component jobs plus new static gate | `scripts/check_coherence.py` | gate reproduces contract assumptions | PARTIALLY CONFIRMED |
@@ -66,7 +66,7 @@ and `default_effort`; explicit model/effort values win.
 ### ReportPlan and summary
 
 The canonical schema has only required bilingual `general_summary` and optional
-cross-incident narrative. It does not ask Claude for 10 incident IDs and 10
+cross-incident narrative. It does not ask retired provider for 10 incident IDs and 10
 analysis IDs. Composition still materializes every frozen alert and available
 analysis. Missing, empty, or whitespace-only `zh`/`en` values fail validation;
 substantive bilingual values pass.
@@ -85,7 +85,7 @@ order. Alerts have no arbitrary ten-item cap.
 The repository CI order was rerun locally after applying migrations:
 
 - API: 108 passed.
-- Bridge: 79 passed, 2 skipped (live Claude and Docker-dependent test gates).
+- Bridge: 79 passed, 2 skipped (live retired provider and Docker-dependent test gates).
 - Sandbox: 53 passed.
 - Frontend: 21 passed; lint and production build passed.
 - Alembic: upgraded cleanly to `f9a0b1c2d3e4`.
@@ -109,7 +109,7 @@ failure.
 ## Remaining risks
 
 - **P0:** none identified in the inspected scope.
-- **P1:** live Claude/Docker end-to-end paths remain opt-in/skipped in normal
+- **P1:** live retired provider/Docker end-to-end paths remain opt-in/skipped in normal
   CI and must be exercised during an operational release rehearsal.
 - **P2:** the static coherence gate is intentionally narrow; contract changes
   still require focused tests and migration review.

@@ -240,11 +240,11 @@ def get_system_config(
     db: Session = Depends(get_db),
     _: User = Depends(require_permission("system.read")),
 ) -> SystemConfigOut:
-    """Milestone 17 gap follow-up (AI Configuration). Real config,
-    live-wired to the bridge (operator's explicit scope choice) — the
-    bridge reads this same table directly (see bridge/noc_bridge/config.py's
-    `load_system_config`) rather than through this HTTP endpoint, since the
-    bridge is a separate host-side process with its own Postgres connection."""
+    """Return generic worker settings for the admin UI.
+
+    No external runtime is configured in the current phase; these settings
+    remain available for a future separately deployed runtime worker.
+    """
     return _get_or_create_system_config(db)
 
 
@@ -354,7 +354,7 @@ def requeue_dlq(
             job.started_at = None
             job.completed_at = None
             # Reliability mission Batch A: clear any stale claim/lease so
-            # the idempotent job lifecycle module (bridge/noc_bridge/db.py's
+            # the idempotent job lifecycle module's
             # claim_job) is willing to claim this job again rather than
             # treating it as still leased by whatever worker had it before.
             job.claimed_at = None

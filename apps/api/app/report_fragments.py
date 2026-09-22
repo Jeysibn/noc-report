@@ -33,16 +33,21 @@ def build_report_fragment(result: dict | None) -> dict | None:
                 (context.get("summary") or {}).get("zh") if isinstance(context.get("summary"), dict) else context.get("summary_zh"),
                 (context.get("summary") or {}).get("en") if isinstance(context.get("summary"), dict) else context.get("summary_en"),
             ),
-            "likely_cause": _pair(
-                (context.get("likely_cause") or {}).get("zh") if isinstance(context.get("likely_cause"), dict) else context.get("likely_cause_zh"),
-                (context.get("likely_cause") or {}).get("en") if isinstance(context.get("likely_cause"), dict) else context.get("likely_cause_en"),
-            ),
-            "recommended_action": _pair(
-                (context.get("recommended_action") or {}).get("zh") if isinstance(context.get("recommended_action"), dict) else context.get("recommended_action_zh"),
-                (context.get("recommended_action") or {}).get("en") if isinstance(context.get("recommended_action"), dict) else context.get("recommended_action_en"),
-            ),
             "findings": list(context.get("findings") or [])[:5],
         }
+        # Cause/action are compatibility-only report-fragment fields. The
+        # active canonical analysis has no such fields and therefore does not
+        # carry empty slots through the Daily Report prompt.
+        if any(key in context for key in ("likely_cause", "likely_cause_zh", "likely_cause_en")):
+            fragment["likely_cause"] = _pair(
+                (context.get("likely_cause") or {}).get("zh") if isinstance(context.get("likely_cause"), dict) else context.get("likely_cause_zh"),
+                (context.get("likely_cause") or {}).get("en") if isinstance(context.get("likely_cause"), dict) else context.get("likely_cause_en"),
+            )
+        if any(key in context for key in ("recommended_action", "recommended_action_zh", "recommended_action_en")):
+            fragment["recommended_action"] = _pair(
+                (context.get("recommended_action") or {}).get("zh") if isinstance(context.get("recommended_action"), dict) else context.get("recommended_action_zh"),
+                (context.get("recommended_action") or {}).get("en") if isinstance(context.get("recommended_action"), dict) else context.get("recommended_action_en"),
+            )
         return fragment
 
     findings = []
@@ -56,14 +61,19 @@ def build_report_fragment(result: dict | None) -> dict | None:
                     "detail_en": str(finding.get("detail_en") or ""),
                 }
             )
-    return {
+    fragment = {
         "contract": REPORT_FRAGMENT_CONTRACT,
         "headline": str(result.get("summary_en") or result.get("summary_zh") or ""),
         "severity": result.get("severity_signal"),
         "summary": _pair(result.get("summary_zh"), result.get("summary_en")),
-        "likely_cause": _pair(result.get("likely_cause_zh"), result.get("likely_cause_en")),
-        "recommended_action": _pair(
-            result.get("recommended_action_zh"), result.get("recommended_action_en")
-        ),
         "findings": findings,
     }
+    # Preserve old stored output for compatibility, but never add these
+    # fields to a new canonical result that does not contain them.
+    if any(key in result for key in ("likely_cause_zh", "likely_cause_en")):
+        fragment["likely_cause"] = _pair(result.get("likely_cause_zh"), result.get("likely_cause_en"))
+    if any(key in result for key in ("recommended_action_zh", "recommended_action_en")):
+        fragment["recommended_action"] = _pair(
+            result.get("recommended_action_zh"), result.get("recommended_action_en")
+        )
+    return fragment

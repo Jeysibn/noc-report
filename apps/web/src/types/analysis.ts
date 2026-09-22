@@ -4,7 +4,7 @@
  * breakdown used by the log-triage-summary skill.
  */
 /**
- * Mirrors the bridge's actual job.status values (bridge/noc_bridge/db.py:
+ * Mirrors the runtime job.status values:
  * mark_started/mark_completed/mark_failed) plus the client-only
  * "NOT_ANALYZED" placeholder for an incident with no run yet — the backend
  * only ever writes QUEUED/PROCESSING/COMPLETED/FAILED, it has no STARTING
@@ -16,6 +16,8 @@ export type AnalysisJobStatus = "NOT_ANALYZED" | "QUEUED" | "PROCESSING" | "COMP
 export type SeveritySignal = "low" | "medium" | "high" | "critical";
 
 export interface AnalysisFind {
+  /** Shared identity for the bilingual finding; optional only for legacy runs. */
+  id?: string;
   labelEn: string;
   labelZh: string;
   count: number | null;

@@ -3,6 +3,7 @@ import type { AnalysisFind, AnalysisRun, SeveritySignal } from "@/types/analysis
 import { httpRequest } from "@/lib/http";
 
 interface RawFind {
+  id?: string;
   label_en: string;
   label_zh: string;
   count: number | null;
@@ -38,6 +39,7 @@ interface RawAnalysisRunOut {
 
 function toFind(raw: RawFind): AnalysisFind {
   return {
+    id: raw.id,
     labelEn: raw.label_en,
     labelZh: raw.label_zh,
     count: raw.count,
@@ -75,12 +77,9 @@ function toRun(raw: RawAnalysisRunOut): AnalysisRun {
 
 export class ApiAnalysisService implements AnalysisService {
   async requestAnalysis(incidentId: string, input: AnalysisRequestInput): Promise<AnalysisRun> {
-    const body: AnalysisRequestInput = {};
-    if (input.model) body.model = input.model;
-    if (input.effort) body.effort = input.effort;
     const raw = await httpRequest<RawAnalysisRunOut>(`/api/v1/incidents/${incidentId}/analysis-runs`, {
       method: "POST",
-      body,
+      body: input,
     });
     return toRun(raw);
   }

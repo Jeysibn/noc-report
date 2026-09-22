@@ -2,7 +2,7 @@
 """Sample the local Phase 12 stack's memory, CPU, and swap footprint.
 
 This is intentionally an observation tool, not a process supervisor. Start
-the representative API/web/bridge/Ollama stack first, then pass the relevant
+the representative API/web/Ollama stack first, then pass the relevant
 host PIDs. It reports actual host measurements and does not pretend a 32 GiB
 developer host is a 16 GiB VM.
 """

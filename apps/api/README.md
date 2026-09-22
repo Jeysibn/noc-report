@@ -50,7 +50,8 @@ Set `LOCAL_PREFILL_AI_ENABLED=true` and
 instruct model, context 2048, five-minute keep-alive, one inference, a
 measured local mapping timeout of 75 seconds, and a bounded queue. If Ollama
 is unavailable, OCR and deterministic fields remain
-available and ambiguous fields stay manual. This path never invokes Claude.
+available and ambiguous fields stay manual. This path is independent of the
+external AI runtime boundary.
 
 Run tests against a disposable real Postgres database. The fixture drops and
 recreates its schema, so never point it at the live development database:
@@ -63,3 +64,23 @@ python3 -m pytest -q
 
 Models use Postgres-only UUID types and evidence tests PUT/GET real objects,
 so SQLite/mocked-S3 substitutes are not valid stand-ins.
+
+### Phase 1 Hermes runtime
+
+The API remains the application boundary. Set `AI_RUNTIME=hermes` only when
+the separately deployed `ai-worker` and Hermes service are available; otherwise
+the safe default is `AI_RUNTIME=disabled`. The API does not receive provider
+credentials. The worker receives only its internal Hermes API key and the
+application credentials needed to verify evidence and update job artifacts.
+
+Start the local Phase 1 runtime from the repository root:
+
+```bash
+HERMES_API_KEY='replace-with-a-long-random-value' \
+docker compose -f infrastructure/docker-compose.dev.yml up -d postgres minio rabbitmq hermes ai-worker
+```
+
+The Hermes API is internal-only in Compose. Provider login/model selection is a
+manual Hermes setup step; do not commit provider credentials or copy them into
+FastAPI configuration. The AI worker exposes local operator health on port
+`8092`; Hermes exposes `/health` only on the internal Docker network.

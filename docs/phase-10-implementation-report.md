@@ -2,7 +2,7 @@
 
 The canonical Daily Report now uses a narrative-only ReportPlan. The frozen
 snapshot and `noc-daily-report-v1` composition profile provide all incidents
-and available analyses, so Claude no longer emits incident or AnalysisRun
+and available analyses, so retired provider no longer emits incident or AnalysisRun
 references. Composition requires substantive Chinese and English General
 Summary text and inserts `Alerts -> General Summary -> Log Analysis` with
 natural Alert pagination and deterministic section breaks.
@@ -30,4 +30,4 @@ shows historical reference-heavy versus narrative-only plan JSON sizes:
 | 10 | 1,225 | 58 |
 
 These are fixture serialization measurements, not unsupported live token or
-cost savings. Live Claude benchmarking remains explicitly gated.
+cost savings. Live retired provider benchmarking remains explicitly gated.

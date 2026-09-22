@@ -6,7 +6,7 @@ Accepted
 
 ## Decisions
 
-- Paid Claude usage is governed through one bridge seam and a transactional Job counter. `paid_ai_calls_used` is cumulative; reservations are a crash fence and never allow `used + reservation` to exceed `paid_ai_call_budget`.
+- Paid retired provider usage is governed through one bridge seam and a transactional Job counter. `paid_ai_calls_used` is cumulative; reservations are a crash fence and never allow `used + reservation` to exceed `paid_ai_call_budget`.
 - Daily Report effort is System Default/Auto in the UI. A missing override remains `NULL` in the Job message and the bridge resolves the configured system default, currently LOW.
 - Shift readiness and ReportSnapshot creation share the shift-scoped incident statement. Readiness requests use `limit=0` to retrieve the complete scope.
 - `ReportDocument.metadata` is operator-facing. `ReportDocument.provenance` and analysis provenance remain internal and are rendered only with explicit audit mode. Preview JSON excludes it.

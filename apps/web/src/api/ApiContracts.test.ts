@@ -63,9 +63,5 @@ describe("API integration contracts", () => {
     expect(request).toHaveBeenLastCalledWith("/api/v1/incidents/incident-1/analysis-runs", {
       method: "POST", body: {},
     });
-    await analysis.requestAnalysis("incident-1", { model: "claude-opus-5", effort: "high" });
-    expect(request).toHaveBeenLastCalledWith("/api/v1/incidents/incident-1/analysis-runs", {
-      method: "POST", body: { model: "claude-opus-5", effort: "high" },
-    });
   });
 });

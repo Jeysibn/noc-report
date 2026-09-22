@@ -1,13 +1,13 @@
 # Skill manifest (Reliability mission Batch B; deepened under Skill
 # Runtime mission Phase 5). This, SKILL.md, and output.schema.json
 # together are the complete, hashable identity of this skill —
-# apps/api/app/skills/registry.py and bridge/noc_bridge/skill_registry.py
+# apps/api/app/skills/registry.py and the runtime support registry
 # both hash the three files' bytes to produce the skill_hash that flows
-# through Job/AnalysisRun/cache lookups and is re-verified by the bridge
+# through Job/AnalysisRun/cache lookups and is re-verified by the runtime worker
 # before every job execution.
 #
 # Phase 5: this manifest is no longer just hashed opaque bytes — it is
-# now parsed at runtime by sandbox/entrypoint.py to source the input
+# now parsed by deterministic preprocessing to source the input
 # filename and prompt intro text, replacing what used to be a second,
 # hard-coded copy of the same facts in Python
 # (`_INPUT_FILE_BY_SKILL`/`_INPUT_FILENAME_BY_JOB_TYPE`). Structural
@@ -17,7 +17,7 @@
 # instead of inventing new out-of-band config.
 id: log-triage-summary
 name: log-triage-summary
-version: "2"
+version: "3"
 kind: analysis
 exports:
   reasoning:

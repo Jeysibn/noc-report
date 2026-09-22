@@ -1,10 +1,9 @@
-"""Reliability mission Phase 21: before/after benchmark.
+"""Reliability benchmark for durable job and skill contracts.
 
-Unlike scripts/benchmark_live_ab.py (AI cost-optimization mission — real
-Claude CLI cost/quality), this measures the reliability characteristics
+This measures the reliability characteristics
 the Batch A-D changes actually targeted: job durability across a crash,
 wasted-retry avoidance from failure classification, and skill-drift
-detection latency. No live Claude CLI calls, no external services beyond
+detection latency. No live external-runtime calls, no external services beyond
 the same dev Postgres/RabbitMQ this repo's test suites already use — safe
 to run any time.
 
@@ -44,8 +43,8 @@ def benchmark_job_durability() -> dict:
         job_type="log_triage",
         incident_id=None,
         object_refs=[],
-        model="claude-sonnet-5",
-        effort="low",
+        model=None,
+        effort=None,
         skill_name="log-triage-summary",
         skill_version="1",
         correlation_id="bench-correlation-id",
@@ -71,16 +70,15 @@ def benchmark_failure_classification_avoids_wasted_retries() -> dict:
     classify_failure sorts failures into RETRYABLE/TERMINAL so a permanent
     failure (unsupported skill, invalid schema, skill-hash drift) gives up
     after attempt 1 instead of burning the full retry budget — each of
-    which, for a Claude-invoking job, would have meant repeating the exact
-    same (paid) Claude CLI call for no benefit."""
+    which would have meant repeating the same unavailable runtime operation
+    for no benefit."""
     from noc_bridge.failures import TERMINAL, classify_failure
-    from noc_bridge.service import UnsupportedJobType
     from noc_bridge.skill_registry import SkillHashMismatch
     from noc_bridge.validation import OutputValidationError
 
-    max_attempts = 5  # matches the bridge's real MAX_ATTEMPTS default
+    max_attempts = 5  # bounded worker retry budget used by the protocol
     representative_terminal_failures = [
-        UnsupportedJobType("no such job type: bogus_job"),
+        RuntimeError("unsupported skill: bogus_job"),
         OutputValidationError("result missing required field 'summary'"),
         SkillHashMismatch("log-triage-summary content changed since enqueue"),
     ]
@@ -105,11 +103,9 @@ def benchmark_failure_classification_avoids_wasted_retries() -> dict:
 
 
 def benchmark_skill_drift_detection() -> dict:
-    """Before Batch B: a skill_name/skill_version pair had no way to
-    detect that SKILL.md content had changed underneath a job already
-    enqueued against the old label — it would silently execute the new
-    content under the old version label. After: verify_skill_hash raises
-    immediately (before any Claude CLI invocation, so no wasted cost)."""
+    """A skill_name/skill_version pair must not silently drift after enqueue.
+    detect that SKILL.md content has changed underneath a queued job.
+    """
     import tempfile
 
     from noc_bridge.skill_registry import SkillHashMismatch, compute_skill_hash, verify_skill_hash

@@ -16,10 +16,13 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column("reports", sa.Column("document_object_key", sa.String(length=1000), nullable=True))
-    op.add_column("reports", sa.Column("screenshots_object_key", sa.String(length=1000), nullable=True))
+    if sa.inspect(op.get_bind()).has_table("reports"):
+        op.add_column("reports", sa.Column("document_object_key", sa.String(length=1000), nullable=True))
+        op.add_column("reports", sa.Column("screenshots_object_key", sa.String(length=1000), nullable=True))
 
 
 def downgrade() -> None:
+    if not sa.inspect(op.get_bind()).has_table("reports"):
+        return
     op.drop_column("reports", "screenshots_object_key")
     op.drop_column("reports", "document_object_key")

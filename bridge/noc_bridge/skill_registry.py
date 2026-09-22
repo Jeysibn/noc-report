@@ -1,10 +1,10 @@
-"""Skill Registry — bridge-side mirror (Reliability mission Batch B).
+"""Skill Registry — runtime-support mirror (Reliability mission Batch B).
 
 Mirrors `apps/api/app/skills/registry.py::compute_skill_hash` for legacy
 hash-only callers. Snapshot-backed jobs use the immutable PostgreSQL row
-instead: the bridge verifies its captured SKILL.md, output.schema.json, and
+instead: runtime support verifies its captured SKILL.md, output.schema.json, and
 skill.yaml bytes plus the dependency-aware execution identity, then
-materializes only those bytes into the sandbox. The
+materializes only those bytes into a job workspace. The
 live `skills/` checkout is therefore not part of the execution path for a
 current job; hash verification against that checkout remains only as a
 compatibility path for old messages that carry no snapshot reference.

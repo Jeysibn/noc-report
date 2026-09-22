@@ -9,7 +9,7 @@
 Skill metadata existed before this phase, but queued work could still be
 coupled to a mutable checkout and generic runtime code contained assumptions
 about one analysis/report shape. The system also needed explicit ownership for
-outbox rows and a lease policy safe for long-running Claude jobs.
+outbox rows and a lease policy safe for long-running retired provider jobs.
 
 ## Decisions
 
@@ -25,7 +25,7 @@ rollback is simply activation of an older snapshot. Existing jobs never change.
 
 ### Skill-owned contracts
 
-The snapshot's `output.schema.json` is passed to Claude and used by generic
+The snapshot's `output.schema.json` is passed to retired provider and used by generic
 JSON Schema validation. Result field names are not part of bridge or sandbox
 infrastructure. Execution policy and input materialization details are
 declared in `skill.yaml`; legacy manifests remain readable during migration.
@@ -68,7 +68,7 @@ flowchart TD
   Q --> W[Idempotent worker claim]
   W --> R[Skill Runtime loads exact snapshot]
   R --> S[Exact SKILL.md + skill.yaml + schema]
-  S --> CL[Claude]
+  S --> CL[retired provider]
   CL --> V[Generic schema validation]
   V --> AP[Analysis persistence]
   V --> RA[Report assembly]

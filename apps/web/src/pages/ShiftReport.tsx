@@ -7,7 +7,6 @@ import { ReportPreview } from "@/components/ReportPreview";
 import { Table, Thead, Tbody, Tr, Th, Td } from "@/components/ui/Table";
 import { StatusPill } from "@/components/ui/StatusPill";
 import { Button } from "@/components/ui/Button";
-import { Select } from "@/components/ui/Form";
 import { ApiError } from "@/lib/http";
 import { hasPermission } from "@/lib/session";
 import { formatTime } from "@/lib/incidentStatus";
@@ -49,13 +48,11 @@ function readinessFor(incident: Incident): IncidentReadiness {
  * snapshot of whatever incident/analysis state exists right now. Skill is
  * fixed (Daily Alert Report). Generation is a real job: POST
  * /shifts/{id}/reports enqueues it, then this polls the report list until
- * the bridge marks it COMPLETED/FAILED, same pattern as LogAnalysisPanel.
+ * a runtime worker marks it COMPLETED/FAILED, same pattern as LogAnalysisPanel.
  */
 export function ShiftReport() {
   const [shift, setShift] = useState<Shift | null>(null);
   const [incidents, setIncidents] = useState<Incident[]>([]);
-  const [model, setModel] = useState("auto");
-  const [effort, setEffort] = useState<"auto" | "low" | "medium">("auto");
   const [versions, setVersions] = useState<ReportRun[]>([]);
   const [versionsLoading, setVersionsLoading] = useState(false);
   const [versionsError, setVersionsError] = useState<string | null>(null);
@@ -192,10 +189,7 @@ export function ShiftReport() {
     if (!shift) return;
     setRequestError(null);
     try {
-      const run = await reportService.generate(shift.id, {
-        ...(model === "auto" ? {} : { model }),
-        ...(effort === "auto" ? {} : { effort }),
-      });
+      const run = await reportService.generate(shift.id, {});
       setVersions((prev) => [run, ...prev]);
     } catch (err) {
       setRequestError(
@@ -308,36 +302,9 @@ export function ShiftReport() {
           )}
           {canGenerateReport && (
             <>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium">
-                    Model
-                  </label>
-                  <Select
-                    value={model}
-                    onChange={(e) => setModel(e.target.value)}
-                    disabled={isBusy}
-                  >
-                    <option value="auto">System default / Auto</option>
-                    <option value="claude-sonnet-5">Claude Sonnet 5</option>
-                    <option value="claude-opus-5">Claude Opus 5</option>
-                  </Select>
-                </div>
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium">
-                    Effort
-                  </label>
-                  <Select
-                    value={effort}
-                    onChange={(e) => setEffort(e.target.value as typeof effort)}
-                    disabled={isBusy}
-                  >
-                    <option value="auto">System default / Auto</option>
-                    <option value="low">Low</option>
-                    <option value="medium">Medium</option>
-                  </Select>
-                </div>
-              </div>
+              <p className="text-sm text-muted">
+                Analysis engine is not currently configured. Historical reports remain available below.
+              </p>
               <p className="text-sm text-muted">
                 Skill: Daily Alert Report (fixed)
               </p>

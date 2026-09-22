@@ -7,14 +7,14 @@ Accepted — local development and E2E testing.
 ## Context
 
 The local NOC stack runs the FastAPI API, an embedded transactional-outbox
-dispatcher, RabbitMQ, the host-side Claude bridge, and an ephemeral Docker
+dispatcher, RabbitMQ, the host-side retired provider bridge, and an ephemeral Docker
 sandbox. E2E testing exposed several process-boundary failures that did not
 appear in isolated unit tests:
 
 - `exec /usr/local/bin/python3: resource temporarily unavailable` when the
   sandbox applied `nproc=128` to the desktop user's host UID, because that UID
   already owned more than 128 host threads;
-- Claude reporting `Not logged in` because the explicit host-UID override
+- retired provider reporting `Not logged in` because the explicit host-UID override
   could not traverse the image's private `/home/sandbox` directory;
 - queued jobs remaining unpublished after the outbox RabbitMQ channel closed;
 - browser login failures when the UI was opened on `127.0.0.1:5173` while the
@@ -30,13 +30,13 @@ by that UID. Docker's per-container `pids_limit=128` remains the process-tree
 bound. The real job path does not apply a Linux `nproc` ulimit, because that
 limit is accounted per host UID and includes unrelated desktop threads.
 
-### Claude credentials
+### retired provider credentials
 
 Only the copied `.credentials.json` is mounted read-only. It is mounted under
-`/tmp/claude-home/.claude`, with `HOME=/tmp/claude-home`, because the image's
+`/tmp/retired-runtime-home/.retired-runtime`, with `HOME=/tmp/retired-runtime-home`, because the image's
 `/home/sandbox` directory is intentionally private to UID 10001 and is not
 traversable by the host UID used for private bind mounts. The host's real
-`~/.claude` directory is never mounted.
+`~/.retired-runtime` directory is never mounted.
 
 ### Outbox recovery
 
@@ -63,8 +63,8 @@ RabbitMQ consumers include noc.jobs.log-triage and noc.jobs.daily-report
 
 If a job remains `QUEUED`, inspect its `outbox_events.published_at` and
 `last_error` first. A healthy bridge cannot process a job that the outbox has
-not published. If the job reaches the bridge but Claude returns
-`budget_exhausted`, the configured per-job Claude budget was exceeded; this is
+not published. If the job reaches the bridge but retired provider returns
+`budget_exhausted`, the configured per-job retired provider budget was exceeded; this is
 distinct from a worker or RabbitMQ failure.
 
 ## Known follow-up work

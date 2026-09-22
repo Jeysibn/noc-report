@@ -41,8 +41,13 @@ class Settings(BaseSettings):
 
     # Milestone 11 — RabbitMQ (master plan §26)
     rabbitmq_url: str = "amqp://noc:noc-rabbit-secret@localhost:55672/"
-    bridge_health_url: str = "http://127.0.0.1:8091/health"
     health_timeout_seconds: float = 2.0
+
+    # Provider-neutral semantic runtime switch. The worker owns Hermes
+    # credentials; FastAPI only decides whether log-analysis requests may be
+    # queued. Keeping the default disabled preserves zero-config local tests.
+    ai_runtime: Literal["disabled", "hermes"] = "disabled"
+    hermes_base_url: str = "http://localhost:8642"
 
     # Skill Runtime mission Phase 12: whether the outbox dispatcher runs as
     # a background thread embedded in this API process ("embedded", the
@@ -82,8 +87,8 @@ class Settings(BaseSettings):
     local_prefill_context_size: int = 2048
     local_prefill_keep_alive: str = "5m"
     # Measured CPU latency for the constrained Q4 3B profile is about 60s on
-    # the validation host; keep a bounded margin without inheriting Claude's
-    # much larger job timeout.
+    # the validation host; keep a bounded margin without inheriting a
+    # much larger external-runtime timeout.
     local_prefill_timeout_seconds: float = 75.0
     local_prefill_max_concurrency: int = 1
     local_prefill_max_queue: int = 8

@@ -36,8 +36,7 @@ export interface AdminService {
   ): Promise<ShiftDefinition>;
   listStorageStatus(): Promise<StorageBucketStatus[]>;
 
-  /** Milestone 17 gap follow-up (AI Configuration): real config, live-wired
-   * to the bridge — per the operator's explicit scope choice. */
+  /** Generic worker configuration retained outside provider selection. */
   getSystemConfig(): Promise<SystemConfig>;
   updateSystemConfig(update: SystemConfigUpdate): Promise<SystemConfig>;
 }

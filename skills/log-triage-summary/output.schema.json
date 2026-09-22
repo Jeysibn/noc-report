@@ -1,18 +1,19 @@
 {
-  "$comment": "Skill Registry (Reliability mission Batch B): the single source of truth for log-triage-summary's output contract. sandbox/entrypoint.py loads this file at run time instead of the inline dict it used to hard-code, so a schema change here is automatically reflected in both the sandbox's --json-schema enforcement AND this skill's content hash (see apps/api/app/skills/registry.py and bridge/noc_bridge/skill_registry.py) — no more editing two places and hoping they stay in sync.",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$comment": "Active canonical LogAnalysisResult contract. Deterministic preprocessing supplies total_entries/count/percentage from the physical log manifest, then the runtime worker applies semantic validation. Chinese and English are presentations of the same finding object; pattern_ids is the shared finding identity and list membership is the shared Key-vs-Secondary classification. Historical snapshots may retain the legacy cause/action fields under their frozen schema.",
   "type": "object",
   "properties": {
     "total_entries": {"type": "integer", "minimum": 0},
-    "summary_en": {"type": "string"},
-    "summary_zh": {"type": "string"},
+    "summary_en": {"type": "string", "minLength": 1, "maxLength": 800},
+    "summary_zh": {"type": "string", "minLength": 1, "maxLength": 800},
     "key_finds": {
       "type": "array",
-      "items": {"$ref": "#/$defs/find"},
+      "items": {"$ref": "#/$defs/key_find"},
       "minItems": 1
     },
     "secondary_finds": {
       "type": "array",
-      "items": {"$ref": "#/$defs/find"}
+      "items": {"$ref": "#/$defs/secondary_find"}
     },
     "severity_signal": {"type": "string", "enum": ["low", "medium", "high", "critical"]},
     "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0}
@@ -26,20 +27,40 @@
     "find": {
       "type": "object",
       "properties": {
-        "label_en": {"type": "string"},
-        "label_zh": {"type": "string"},
-        "count": {"type": ["integer", "null"]},
-        "percentage": {"type": ["number", "null"]},
+        "id": {"type": "string", "minLength": 1},
+        "label_en": {"type": "string", "minLength": 1},
+        "label_zh": {"type": "string", "minLength": 1},
+        "count": {"type": ["integer", "null"], "minimum": 0},
+        "percentage": {"type": ["number", "null"], "minimum": 0, "maximum": 100},
         "pattern_ids": {
           "type": "array",
           "items": {"type": "string"},
-          "minItems": 1
+          "minItems": 1,
+          "uniqueItems": true
         },
-        "detail_en": {"type": "string"},
-        "detail_zh": {"type": "string"}
+        "detail_en": {"type": "string", "minLength": 1},
+        "detail_zh": {"type": "string", "minLength": 1}
       },
-      "required": ["label_en", "label_zh", "count", "percentage", "pattern_ids", "detail_en", "detail_zh"],
+      "required": ["id", "label_en", "label_zh", "count", "percentage", "pattern_ids", "detail_en", "detail_zh"],
       "additionalProperties": false
+    },
+    "key_find": {
+      "allOf": [
+        {"$ref": "#/$defs/find"},
+        {"properties": {
+          "detail_en": {"maxLength": 600},
+          "detail_zh": {"maxLength": 600}
+        }}
+      ]
+    },
+    "secondary_find": {
+      "allOf": [
+        {"$ref": "#/$defs/find"},
+        {"properties": {
+          "detail_en": {"maxLength": 320},
+          "detail_zh": {"maxLength": 320}
+        }}
+      ]
     }
   }
 }

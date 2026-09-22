@@ -20,7 +20,7 @@ without ever removing an unpublished event that still represents work.
 `LEASE_BUSY`, or `NOT_CLAIMABLE`. A live lease is temporary contention and its
 delivery is NACKed without requeue so the existing dead-letter retry queue
 delays it. Once the lease expires, the delivery can be reclaimed. Completed
-duplicates ACK without another Claude call; terminal rows are quarantined to
+duplicates ACK without another retired provider call; terminal rows are quarantined to
 the job DLQ. Lease contention does not increment the Job failure attempt.
 
 The outbox dispatcher periodically deletes only rows whose `published_at` is

@@ -7,13 +7,13 @@ Date: 2026-09-17
 The review confirmed a small number of high-risk seam defects rather than a
 need for an architectural rewrite. The main branch now treats Evidence
 deletion as a database-first, retryable lifecycle; pins generated reports to
-exact MinIO versions; validates Claude execution policy from one shared
+exact MinIO versions; validates retired provider execution policy from one shared
 contract; reports the bridge's actual serial capacity; distinguishes broker
 health from DLQ pipeline health; and fails closed for unsafe production bridge
 configuration.
 
 The installation remains a shared NOC workspace. Existing immutable snapshots,
-RabbitMQ protocol, Claude bridge, sandbox, RBAC, AI budgets, report
+RabbitMQ protocol, retired provider bridge, sandbox, RBAC, AI budgets, report
 composition, and local OCR/AI split were preserved.
 
 ## Findings verification
@@ -48,7 +48,7 @@ freezes the generated DOCX artifact's `bucket`, `object_key`, `version_id`,
 SHA-256, byte size, and content type. API downloads use that exact version and
 verify the checksum; overwriting the same key cannot change a completed report.
 
-Claude policy is now defined in
+retired provider policy is now defined in
 `packages/contracts/ai_execution_policy.json`, consumed by API validation and
 bridge governance. The callback remains synchronous, so effective capacity is
 one and RabbitMQ prefetch is not presented as parallel execution.
@@ -76,7 +76,7 @@ database. `alembic check` reports no model/migration drift.
 - Invalid model, effort, timeout, budget, and capacity values are rejected at
   the API seam and again at the privileged bridge seam.
 - Production bridge startup rejects development infrastructure credentials,
-  missing Claude binary/credential files, and non-serial capacity.
+  missing retired provider binary/credential files, and non-serial capacity.
 - Optional Ollama is `disabled`, not `unknown`; RabbitMQ reachability and DLQ
   pipeline degradation are distinct signals.
 
@@ -90,12 +90,12 @@ database. `alembic check` reports no model/migration drift.
 | Frontend build | PASS |
 | Backend complete suite | PASS — 137 tests, 4 warnings |
 | Evidence lifecycle/report artifact tests | PASS — included in backend suite |
-| Bridge suite | PASS — 85 passed, 2 live-Claude tests skipped |
+| Bridge suite | PASS — 85 passed, 2 live-retired provider tests skipped |
 | Sandbox suite | PASS — 56 tests |
 | AI policy/config tests | PASS — API/bridge focused tests |
 | Migration coherence | PASS — `alembic check` |
 | Coherence gate | PASS |
-| Live Claude execution | NOT RUN — credentialed and paid path is intentionally excluded |
+| Live retired provider execution | NOT RUN — credentialed and paid path is intentionally excluded |
 | 16 GB VM/resource benchmark | NOT RUN in this pass — requires representative deployment workload |
 
 The API suite ran against `noc_report_test`, never the live development
@@ -140,7 +140,7 @@ builds stable operator-facing error templates: request IDs, endpoints,
 accounts, order numbers, tokens, URLs, and stack locations are normalized or
 removed, while meaningful statuses and error classes remain. Each omitted
 template is appended as a deterministic secondary finding. The runtime still
-owns every count and percentage; Claude supplies labels and explanations only
+owns every count and percentage; retired provider supplies labels and explanations only
 for the templates it discusses. The cache contract was bumped so old
 under-classified results are not reused. The verified fixture produces 24
 stable templates totaling 2,965 entries with no generic `other` bucket and no

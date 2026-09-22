@@ -29,12 +29,11 @@ const roleDescriptions: Record<string, string> = {
 };
 
 /**
- * Admin: Users, Roles, Shift Configuration, AI/Claude Configuration,
+ * Admin: Users, Roles, Shift Configuration, AI Runtime status,
  * Storage, Queue, Audit — grouped as tabs on one page per the plan's Admin
  * scope table. Users/Roles/Shift Configuration/Storage/Queue/Audit are all
- * wired to real backend endpoints (Milestones 8/11/17), including AI
- * Configuration — a real, single-row system_config table, live-wired to
- * the bridge (it re-reads the row on every job dispatch).
+ * wired to real backend endpoints. The AI tab is intentionally read-only
+ * while no external runtime is configured.
  */
 export function Admin() {
   const [dlqStatus, setDlqStatus] = useState<DlqQueueStatus[] | null>(null);
@@ -80,19 +79,10 @@ export function Admin() {
   >(null);
   const [storageError, setStorageError] = useState<string | null>(null);
 
-  const canManageSystemConfig = hasPermission("system.configure");
   const [systemConfig, setSystemConfig] = useState<SystemConfig | null>(null);
-  const [systemConfigDraft, setSystemConfigDraft] = useState({
-    defaultModel: "claude-sonnet-5",
-    defaultEffort: "medium",
-    jobTimeoutSeconds: 300,
-    maxConcurrentJobs: 1,
-    claudeMaxBudgetUsd: 0.5,
-  });
   const [systemConfigError, setSystemConfigError] = useState<string | null>(
     null,
   );
-  const [systemConfigSaving, setSystemConfigSaving] = useState(false);
 
   const loadUsers = useCallback(() => {
     adminService
@@ -139,30 +129,10 @@ export function Admin() {
       .getSystemConfig()
       .then((config) => {
         setSystemConfig(config);
-        setSystemConfigDraft({
-          defaultModel: config.defaultModel,
-          defaultEffort: config.defaultEffort,
-          jobTimeoutSeconds: config.jobTimeoutSeconds,
-          maxConcurrentJobs: config.maxConcurrentJobs,
-          claudeMaxBudgetUsd: config.claudeMaxBudgetUsd,
-        });
         setSystemConfigError(null);
       })
       .catch(() => setSystemConfigError("Could not load AI configuration."));
   }, [loadUsers, loadShiftDefinitions]);
-
-  async function handleSaveSystemConfig() {
-    setSystemConfigSaving(true);
-    try {
-      const updated = await adminService.updateSystemConfig(systemConfigDraft);
-      setSystemConfig(updated);
-      setSystemConfigError(null);
-    } catch {
-      setSystemConfigError("Could not save AI configuration.");
-    } finally {
-      setSystemConfigSaving(false);
-    }
-  }
 
   async function handleToggleShift(def: ShiftDefinition) {
     setShiftActionPending(def.id);
@@ -640,130 +610,26 @@ export function Admin() {
 
           <TabsContent value="ai">
             <Card className="flex flex-col gap-4">
-              <CardTitle>AI / Claude Configuration</CardTitle>
+              <CardTitle>AI Runtime</CardTitle>
               {systemConfigError && (
                 <p className="text-sm text-danger" role="alert">
                   {systemConfigError}
                 </p>
               )}
               {systemConfig === null && !systemConfigError && (
-                <p className="text-sm text-muted">Loading AI configuration…</p>
+                <p className="text-sm text-muted">Loading runtime status…</p>
               )}
               {systemConfig !== null && (
                 <>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="mb-1.5 block text-sm font-medium">
-                        Default model
-                      </label>
-                      <Select
-                        value={systemConfigDraft.defaultModel}
-                        disabled={!canManageSystemConfig}
-                        onChange={(e) =>
-                          setSystemConfigDraft((d) => ({
-                            ...d,
-                            defaultModel: e.target.value,
-                          }))
-                        }
-                      >
-                        <option value="claude-sonnet-5">Claude Sonnet 5</option>
-                        <option value="claude-opus-5">Claude Opus 5</option>
-                      </Select>
-                    </div>
-                    <div>
-                      <label className="mb-1.5 block text-sm font-medium">
-                        Default effort
-                      </label>
-                      <Select
-                        value={systemConfigDraft.defaultEffort}
-                        disabled={!canManageSystemConfig}
-                        onChange={(e) =>
-                          setSystemConfigDraft((d) => ({
-                            ...d,
-                            defaultEffort: e.target.value,
-                          }))
-                        }
-                      >
-                        <option value="low">Low</option>
-                        <option value="medium">Medium</option>
-                        <option value="high">High</option>
-                      </Select>
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="mb-1.5 block text-sm font-medium">
-                        Job timeout (seconds)
-                      </label>
-                      <input
-                        type="number"
-                        min={1}
-                        className="w-full rounded border border-border bg-transparent px-2 py-1.5 text-sm"
-                        value={systemConfigDraft.jobTimeoutSeconds}
-                        disabled={!canManageSystemConfig}
-                        onChange={(e) =>
-                          setSystemConfigDraft((d) => ({
-                            ...d,
-                            jobTimeoutSeconds: Number(e.target.value),
-                          }))
-                        }
-                      />
-                    </div>
-                    <div>
-                      <label className="mb-1.5 block text-sm font-medium">
-                        Bridge worker concurrency
-                      </label>
-                      <input
-                        type="number"
-                        min={1}
-                        max={1}
-                        readOnly
-                        className="w-full rounded border border-border bg-transparent px-2 py-1.5 text-sm"
-                        value={1}
-                        disabled
-                      />
-                      <p className="mt-1 text-xs text-muted">
-                        Serial host bridge; RabbitMQ prefetch is not worker parallelism.
-                      </p>
-                    </div>
-                    <div>
-                      <label className="mb-1.5 block text-sm font-medium">
-                        Claude budget per invocation (USD)
-                      </label>
-                      <input
-                        type="number"
-                        min={0.01}
-                        max={10}
-                        step={0.01}
-                        className="w-full rounded border border-border bg-transparent px-2 py-1.5 text-sm"
-                        value={systemConfigDraft.claudeMaxBudgetUsd}
-                        disabled={!canManageSystemConfig}
-                        onChange={(e) =>
-                          setSystemConfigDraft((d) => ({
-                            ...d,
-                            claudeMaxBudgetUsd: Number(e.target.value),
-                          }))
-                        }
-                      />
-                      <p className="mt-1 text-xs text-muted">
-                        Maximum Claude spend for one CLI invocation. Allowed range: $0.01–$10.00.
-                      </p>
-                    </div>
-                  </div>
-                  {canManageSystemConfig && (
-                    <div className="flex items-center gap-3 border-t border-border pt-4">
-                      <Button
-                        onClick={handleSaveSystemConfig}
-                        disabled={systemConfigSaving}
-                      >
-                        {systemConfigSaving ? "Saving…" : "Save changes"}
-                      </Button>
-                      <span className="text-sm text-muted">
-                        Applies to the very next job the bridge dispatches — no
-                        restart required.
-                      </span>
-                    </div>
-                  )}
+                  <p className="text-sm text-muted">
+                    No external AI runtime is currently configured. New log
+                    analysis and report generation fail clearly and do not
+                    create queue jobs.
+                  </p>
+                  <p className="text-sm text-muted">
+                    Worker timeout: {systemConfig.jobTimeoutSeconds}s ·
+                    capacity: {systemConfig.maxConcurrentJobs}
+                  </p>
                   <div className="flex items-center gap-2 border-t border-border pt-4 text-sm text-muted">
                     Last updated {formatTime(systemConfig.updatedAt)}
                   </div>

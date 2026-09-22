@@ -3,10 +3,8 @@ RabbitMQ topology and job publisher — master plan §26.
 
 Milestone 11 scope: exchanges, durable queues, retry queues, DLQs, a job
 publisher, job records, status events. The consumer side (host
-`noc-claude-bridge.service`, Docker sandboxing, actually running Claude
-Code CLI) is Milestone 12 and deliberately not built here (coding-agent
-rule 20) — this module only declares topology and publishes/ACKs
-messages; nothing in this milestone consumes a job queue to do real work.
+the runtime worker and sandbox execution are deliberately outside this
+module — this module only declares topology and publishes messages.
 
 Topology exactly as specified:
 
@@ -32,9 +30,8 @@ from pika.exchange_type import ExchangeType
 from app.core.config import settings
 
 # Skill Runtime mission Phase 14: the job message protocol's single source
-# of truth is this schema file, shared with the bridge (which validates the
-# same file against its own incoming payloads in
-# bridge/noc_bridge/service.py) rather than each side's shape living only
+# of truth is this schema file, shared with the runtime support package
+# rather than each side's shape living only
 # in Python code kept in sync by hand.
 _CONTRACTS_DIR = pathlib.Path(__file__).resolve().parents[4] / "packages" / "contracts"
 _JOB_MESSAGE_SCHEMA_PATH = _CONTRACTS_DIR / "job_message.schema.json"
@@ -98,9 +95,9 @@ def build_job_message(
 
     `skill_hash` (Reliability mission Batch B — Skill Registry) is the
     content hash of the SkillSnapshot the API resolved at enqueue time;
-    the bridge recomputes its own local hash for the same skill_name
+    the runtime support package recomputes its own local hash for the same skill_name
     before executing the job and refuses to run on a mismatch (drift
-    protection — see bridge/noc_bridge/skill_registry.py). Optional/None
+    protection — see the runtime support skill registry). Optional/None
     for callers that haven't been updated to pass it (tests, tooling)."""
     if job_type not in JOB_TYPES:
         raise ValueError(f"Unknown job_type: {job_type}")
@@ -129,7 +126,7 @@ def build_job_message(
     # protocol schema before it's ever persisted into an OutboxEvent.payload
     # or published — a producer-side bug that drifts from the protocol is
     # caught here, at message-build time, rather than surfacing later as a
-    # bridge-side KeyError deep inside job processing.
+    # runtime-side KeyError deep inside job processing.
     jsonschema.validate(
         message,
         _job_message_schema,

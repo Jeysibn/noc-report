@@ -16,7 +16,14 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.drop_column("reports", "status")
+    # This historical branch can reach this revision before the reports table
+    # is created on a fresh database. Defer the removal until the table exists
+    # rather than making a clean migration impossible.
+    inspector = sa.inspect(op.get_bind())
+    if inspector.has_table("reports"):
+        columns = {column["name"] for column in inspector.get_columns("reports")}
+        if "status" in columns:
+            op.drop_column("reports", "status")
 
 
 def downgrade() -> None:

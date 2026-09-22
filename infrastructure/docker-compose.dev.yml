@@ -15,7 +15,7 @@ services:
       - noc-report-postgres-data:/var/lib/postgresql/data
 
   minio:
-    image: minio/minio:RELEASE.2024-11-07T00-52-20Z
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
     container_name: noc-report-minio
     restart: unless-stopped
     environment:
@@ -70,8 +70,99 @@ services:
     volumes:
       - noc-report-ollama-data:/root/.ollama
 
+  # Dedicated, provider-independent semantic runtime. Its only application
+  # network peer is the AI Worker; Postgres/MinIO/RabbitMQ stay on the worker
+  # side of the boundary. The API server port is intentionally not published.
+  hermes:
+    image: ${HERMES_IMAGE:-nousresearch/hermes-agent@sha256:d0fec5607ee4abb603921f93419f937c690cd036e24cb87a0d8dae493dfe2fcc}
+    container_name: noc-report-hermes
+    restart: unless-stopped
+    command:
+      - sh
+      - -ec
+      - |
+        profile_dir=/opt/data/profiles/noc-log-analysis
+        if [ ! -f "$$profile_dir/SOUL.md" ]; then
+          hermes profile create noc-log-analysis
+        fi
+        if [ ! -f "$$profile_dir/.noc-report-seeded" ]; then
+          cp /opt/noc-report/hermes/noc-log-analysis/config.yaml "$$profile_dir/config.yaml"
+          touch "$$profile_dir/.noc-report-seeded"
+        fi
+        if ! grep -q '^API_SERVER_KEY=' "$$profile_dir/.env" 2>/dev/null; then
+          printf '\nAPI_SERVER_KEY=%s\n' "$$API_SERVER_KEY" >> "$$profile_dir/.env"
+        fi
+        exec hermes gateway run
+    environment:
+      API_SERVER_ENABLED: "true"
+      API_SERVER_HOST: "0.0.0.0"
+      API_SERVER_PORT: "8642"
+      API_SERVER_KEY: ${HERMES_API_KEY:-change-me-local-dev}
+      # The per-profile .env is created by the command above; this variable is
+      # also present for the first profile bootstrap/setup invocation.
+      HERMES_SKIP_CONFIG_MIGRATION: "1"
+    volumes:
+      - noc-report-hermes-data:/opt/data
+      - ./hermes/noc-log-analysis/config.yaml:/opt/data/config.yaml:ro
+      - ./hermes/noc-log-analysis/config.yaml:/opt/noc-report/hermes/noc-log-analysis/config.yaml:ro
+      - ../skills:/opt/noc-report/skills:ro
+    networks:
+      - hermes-internal
+    mem_limit: 4g
+    cpus: 2.0
+    pids_limit: 512
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8642/health', timeout=3)"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+
+  # The worker is the only component allowed to hold application credentials
+  # and the Hermes API key. It consumes log_triage only in Phase 1.
+  ai-worker:
+    build:
+      context: ..
+      dockerfile: bridge/Dockerfile
+    container_name: noc-report-ai-worker
+    restart: unless-stopped
+    command: ["python", "-m", "noc_bridge.worker"]
+    environment:
+      RUNTIME_RABBITMQ_URL: amqp://noc:noc-rabbit-secret@rabbitmq:5672/
+      RUNTIME_DATABASE_URL: postgresql://noc:noc@postgres:5432/noc_report
+      RUNTIME_MINIO_ENDPOINT_URL: http://minio:9000
+      RUNTIME_MINIO_ACCESS_KEY: noc-minio
+      RUNTIME_MINIO_SECRET_KEY: noc-minio-secret
+      RUNTIME_HERMES_BASE_URL: http://hermes:8642/p/noc-log-analysis
+      RUNTIME_HERMES_API_KEY: ${HERMES_API_KEY:-change-me-local-dev}
+      RUNTIME_HERMES_PROFILE: noc-log-analysis
+      RUNTIME_HERMES_VERSION: ${HERMES_VERSION:-v0.21.4-2026.9.21}
+      RUNTIME_HEALTH_PORT: "8092"
+      PYTHONPATH: /opt/noc-report/sandbox:/opt/noc-report/bridge
+    depends_on:
+      hermes:
+        condition: service_healthy
+      postgres:
+        condition: service_started
+      rabbitmq:
+        condition: service_started
+      minio:
+        condition: service_started
+    volumes:
+      - ../skills:/opt/noc-report/skills:ro
+    networks:
+      - default
+      - hermes-internal
+    mem_limit: 768m
+    cpus: 1.0
+    pids_limit: 256
+
 volumes:
   noc-report-postgres-data:
   noc-report-minio-data:
   noc-report-rabbitmq-data:
   noc-report-ollama-data:
+  noc-report-hermes-data:
+
+networks:
+  hermes-internal:
+    driver: bridge

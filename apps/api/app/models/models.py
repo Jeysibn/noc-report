@@ -162,37 +162,23 @@ class Shift(Base):
     definition: Mapped["ShiftDefinition"] = relationship()
 
 
-# --- AI / Claude configuration (Milestone 17 gap follow-up) -----------------
+# --- Runtime worker configuration -------------------------------------------
 #
-# Admin's "AI Configuration" tab, per the operator's explicit scope choice:
-# "real config, live-wired to the bridge" — not just admin-page display, the
-# bridge (bridge/noc_bridge/service.py) actually reads this table and applies
-# it when dispatching sandbox jobs. Single-row table (id is always the same
-# fixed UUID, see app/seed.py) rather than a key/value table — these are
-# explicitly governed settings, not arbitrary user-defined keys.
+# This single-row table retains generic worker limits for asynchronous
+# infrastructure. Hermes/provider selection is intentionally not modeled here;
+# provider credentials and model selection belong to Hermes.
 
 
 class SystemConfig(Base):
     __tablename__ = "system_config"
     __table_args__ = (
         CheckConstraint("job_timeout_seconds > 0", name="ck_system_config_job_timeout_positive"),
-        CheckConstraint("max_concurrent_jobs = 1", name="ck_system_config_serial_bridge_capacity"),
-        CheckConstraint("claude_max_budget_usd > 0", name="ck_system_config_budget_positive"),
+        CheckConstraint("max_concurrent_jobs = 1", name="ck_system_config_serial_worker_capacity"),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
-    default_model: Mapped[str] = mapped_column(String(100), nullable=False, default="claude-sonnet-5")
-    # Cost-optimization mission Phase 4: low effort is the default for every
-    # job; the bridge escalates to a higher tier per-job only when a low-
-    # effort result signals it isn't sufficient (sandbox/entrypoint.py's
-    # _escalation_reason). Existing rows keep whatever value they already
-    # have — this only changes the default for a newly-seeded row.
-    default_effort: Mapped[str] = mapped_column(String(20), nullable=False, default="low")
     job_timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=300)
     max_concurrent_jobs: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
-    # Claude CLI's per-invocation USD ceiling; distinct from the durable
-    # per-Job paid-call budget stored on Job.
-    claude_max_budget_usd: Mapped[float] = mapped_column(Float, nullable=False, default=0.50)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=True
     )
@@ -396,7 +382,7 @@ class Job(Base):
     # the SkillSnapshot actually used for this row, computed by
     # app/skills/registry.py at enqueue time. skill_name/skill_version
     # remain a human-readable label; skill_hash is the tamper-evident
-    # identity a cache lookup and the bridge's pre-execution check both
+    # identity a cache lookup and the runtime worker's pre-execution check both
     # key off of.
     skill_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # Full immutable execution identity: this snapshot's content plus its
@@ -412,15 +398,15 @@ class Job(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # AI cost-optimization mission Phase 6: set when this job was satisfied
     # by reusing a prior identical-input AnalysisRun instead of invoking
-    # Claude at all (see app/api/v1/routers/analysis.py's exact-cache
+    # a semantic runtime at all (see app/api/v1/routers/analysis.py's cache
     # lookup). cache_type is "exact" for now; a later pattern-cache phase
     # may add other values.
     used_cache: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     cache_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
-    # Paid Claude calls are a separate resource from RabbitMQ/MinIO retry
-    # attempts. The bridge reserves this budget atomically before launching
-    # the sandbox; a redelivery cannot reset it or purchase another set of
+    # Paid runtime calls are a separate resource from RabbitMQ/MinIO retry
+    # attempts. A runtime worker reserves this budget atomically before
+    # execution; a redelivery cannot reset it or purchase another set of
     # model calls. Four permits the current two structured-output tries plus
     # one bounded LOW->MEDIUM escalation (which can itself use two tries).
     paid_ai_call_budget: Mapped[int] = mapped_column(Integer, nullable=False, default=4)
@@ -428,12 +414,11 @@ class Job(Base):
     paid_ai_calls_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     # Reliability mission Batch A (idempotent job lifecycle): a claim/lease
-    # so the bridge can tell "am I the one allowed to execute this job right
+    # so a runtime worker can tell "am I the one allowed to execute this job right
     # now" apart from RabbitMQ's own at-least-once redelivery. `claim_token`
     # is a fresh uuid4 minted by whichever worker successfully claims the
-    # job (see bridge/noc_bridge/db.claim_job's conditional UPDATE); a
-    # redelivery that arrives while the lease is still live is not
-    # reclaimable and the bridge skips re-executing it. `lease_expires_at`
+    # job; a redelivery that arrives while the lease is still live is not
+    # reclaimable and the worker skips re-executing it. `lease_expires_at`
     # lets a crashed worker's claim eventually become reclaimable again
     # instead of wedging the job forever.
     claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -552,13 +537,18 @@ class AnalysisRun(Base):
     result_text: Mapped[str | None] = mapped_column(String, nullable=True)
     model: Mapped[str | None] = mapped_column(String(100), nullable=True)
     effort: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    runtime_name: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    runtime_version: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    runtime_profile: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    provider: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    runtime_model: Mapped[str | None] = mapped_column(String(150), nullable=True)
     skill_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     skill_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
     # Skill Registry (Reliability mission Batch B): the content hash of
     # the SkillSnapshot actually used for this row, computed by
     # app/skills/registry.py at enqueue time. skill_name/skill_version
     # remain a human-readable label; skill_hash is the tamper-evident
-    # identity a cache lookup and the bridge's pre-execution check both
+    # identity a cache lookup and the runtime worker's pre-execution check both
     # key off of.
     skill_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # Skill Runtime mission Phase 6: a direct FK to the exact
@@ -584,11 +574,10 @@ class AnalysisRun(Base):
     cache_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
     # AI cost-optimization mission Phase 1 (usage telemetry) — populated
-    # from the sandbox's telemetry.json (see sandbox/entrypoint.py's
-    # run_skill / _envelope_telemetry) when `_sync_completed_job` syncs a
+    # from the worker's telemetry artifact when `_sync_completed_job` syncs a
     # completed job's result. All nullable: telemetry is best-effort and
     # must never block a real analysis result from being usable. Left
-    # unset (None/False) on a cache hit, since no Claude call happened.
+    # unset (None/False) on a cache hit, since no runtime call happened.
     input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     total_model_input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -612,10 +601,10 @@ class AnalysisRun(Base):
     cache_contract_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
     # AI cost-optimization mission Phase 2, Issue 4 (cumulative escalation
-    # telemetry): a LOW->MEDIUM escalated job makes two real Claude calls,
+    # telemetry): an escalated job may make two runtime calls,
     # and total usage must be the sum of both, not just the escalated
     # call's. `estimated_cost_usd`/`input_tokens`/etc above already hold
-    # the totals (see sandbox/entrypoint.py's run_skill); these hold the
+    # the totals from runtime telemetry; these hold the
     # initial (always-made) attempt's own numbers separately, so a
     # dashboard can show "how much did the low-effort attempt alone cost"
     # vs. "how much did escalation add" — both nullable since a non-
@@ -635,7 +624,7 @@ class AnalysisRun(Base):
     # `escalated` is true. The `total_*` concept the mission asks for is
     # represented by the existing top-level fields above (input_tokens,
     # estimated_cost_usd, etc.) — those are now computed as
-    # initial + escalation (see sandbox/entrypoint.py's run_skill), so
+    # initial + escalation attempt accounting, so
     # there is no separate total_* column set duplicating them.
     escalation_model: Mapped[str | None] = mapped_column(String(100), nullable=True)
     escalation_effort: Mapped[str | None] = mapped_column(String(20), nullable=True)
@@ -682,7 +671,7 @@ class Report(Base):
     )
     # Milestone 14 addition: §22.11's Reports schema doesn't list job_id,
     # but polling needs to correlate a Report row back to the Job the
-    # bridge is (or was) working on — same precedent as Job.incident_id
+    # worker is (or was) working on — same precedent as Job.incident_id
     # in Milestone 13.
     job_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("jobs.id"), nullable=False, unique=True)
     version: Mapped[int] = mapped_column(nullable=False)
@@ -718,7 +707,7 @@ class Report(Base):
     # the SkillSnapshot actually used for this row, computed by
     # app/skills/registry.py at enqueue time. skill_name/skill_version
     # remain a human-readable label; skill_hash is the tamper-evident
-    # identity a cache lookup and the bridge's pre-execution check both
+    # identity a cache lookup and the runtime worker's pre-execution check both
     # key off of.
     skill_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     skill_execution_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)

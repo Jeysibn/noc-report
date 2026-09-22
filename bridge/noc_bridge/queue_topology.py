@@ -1,8 +1,8 @@
 """RabbitMQ topology loaded from the repository's shared job protocol.
 
-The bridge remains separately deployable and does not import ``apps/api``;
-both processes consume ``packages/contracts/job_protocol.json`` instead of
-keeping topology constants in sync by hand.
+The runtime support package remains separately deployable and does not import
+``apps/api``; both sides consume the shared contract instead of keeping
+topology constants in sync by hand.
 """
 from __future__ import annotations
 
@@ -38,17 +38,8 @@ def queue_names(job_type: str) -> dict:
     }
 
 
-# _handle_delivery runs a job's whole sandbox lifecycle (docker container
-# create/wait, up to the sandbox's own timeout) synchronously inside pika's
-# on_message_callback, so the BlockingConnection's IO loop can't service
-# heartbeats for that entire span. With RabbitMQ's default ~60s heartbeat,
-# any job that runs longer than a couple of missed intervals gets its
-# connection killed by the broker mid-job (seen in practice: a
-# StreamLostError killed the whole process, uncaught, taking the bridge
-# down with a job stuck at PROCESSING forever). A heartbeat comfortably
-# longer than the sandbox's own job timeout makes that starvation far less
-# likely; run_forever()'s reconnect loop is the backstop for when it still
-# happens.
+# The Phase 1 AI Worker consumes log-triage deliveries synchronously. Keep the
+# heartbeat explicit so the protocol layer remains safe for long jobs.
 CONNECTION_HEARTBEAT_SECONDS = 600
 
 

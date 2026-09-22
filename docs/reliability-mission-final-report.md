@@ -20,7 +20,7 @@ structured summary.
 - `bridge/noc_bridge/service.py` retried every job failure identically (a
   bare `except` up to `MAX_ATTEMPTS`) — a permanently-invalid schema or an
   unsupported job type burned the full retry budget reproducing the exact
-  same failure, at real Claude-CLI cost for a Claude-invoking job.
+  same failure, at real retired provider-CLI cost for a retired provider-invoking job.
 - `bridge/noc_bridge/failures.py` already referenced a
   `structured_output_retry_exhausted` retryable-failure marker that
   nothing in `sandbox/entrypoint.py` actually produced — dead code
@@ -46,7 +46,7 @@ literal string and finding zero matches.
   `bridge/noc_bridge/skill_registry.py` (bridge, hand-duplicated per this
   repo's separate-deployable convention) make a skill's sha256 content
   hash its real identity, recorded as immutable `SkillSnapshot` rows.
-- Bounded structured-output retry in `sandbox/entrypoint.py::_invoke_claude`
+- Bounded structured-output retry in `sandbox/entrypoint.py::_invoke_retired-runtime`
   (retry once, then raise `structured_output_retry_exhausted`), completing
   the retry contract `bridge/noc_bridge/failures.py` already expected.
 - Failure classification (`bridge/noc_bridge/failures.py::classify_failure`)
@@ -109,7 +109,7 @@ parse per CLI invocation before that failure ever reaches the bridge.
 
 ## Benchmark
 
-`scripts/benchmark_reliability.py` (no live Claude CLI calls, safe to run
+`scripts/benchmark_reliability.py` (no live retired provider CLI calls, safe to run
 anytime) — see `scripts/benchmark_reliability_results.json` for the last
 run's output:
 - **Job durability:** the old synchronous-publish design's loss window
@@ -123,7 +123,7 @@ run's output:
   wasted 12 total reproduced-failure attempts; classification now avoids
   all 12.
 - **Skill drift detection:** a changed `SKILL.md` is detected in ~1e-4s,
-  before any Claude CLI invocation — avoiding the cost of running a job
+  before any retired provider CLI invocation — avoiding the cost of running a job
   against the wrong content, not just the correctness risk.
 
 ## Security

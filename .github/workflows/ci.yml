@@ -25,19 +25,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Run branch coherence gate
-        run: npm run check:coherence
+      - run: npm run check:coherence
 
-  # AI cost-optimization mission Phase 2, Issue 9: CI previously ran only
-  # the frontend job above — none of the API, sandbox, bridge, cache,
-  # telemetry, or structured-output regression tests added across the
-  # cost-optimization work actually ran anywhere except a developer's own
-  # machine. This job runs the real API test suite (Postgres +
-  # MinIO + RabbitMQ services, same ports/credentials as
-  # infrastructure/docker-compose.dev.yml, so app defaults need no
-  # override) plus the sandbox unit tests (preprocessing, cache/telemetry
-  # shape, structured-output parsing, escalation) that don't need any of
-  # those services at all.
   api:
     runs-on: ubuntu-latest
     services:
@@ -61,7 +50,7 @@ jobs:
           --health-cmd="rabbitmq-diagnostics -q ping"
           --health-interval=5s --health-timeout=5s --health-retries=10
       minio:
-        image: minio/minio:RELEASE.2024-11-07T00-52-20Z
+        image: minio/minio:RELEASE.2025-04-22T22-12-26Z
         env:
           MINIO_ROOT_USER: noc-minio
           MINIO_ROOT_PASSWORD: noc-minio-secret
@@ -69,11 +58,6 @@ jobs:
         options: >-
           --health-cmd="curl -f http://localhost:9000/minio/health/live || exit 1"
           --health-interval=5s --health-timeout=5s --health-retries=10
-        # minio's default entrypoint needs an explicit command to serve;
-        # GH Actions service containers can't override CMD directly, so
-        # this relies on the upstream image's default CMD (server /data)
-        # already binding :9000. Console (:9091) isn't required by the
-        # app (only the S3 API is used), so a missing console is fine.
     env:
       DATABASE_URL: postgresql+psycopg2://noc:noc@localhost:55432/noc_report_test
       TEST_DATABASE_URL: postgresql+psycopg2://noc:noc@localhost:55432/noc_report_test
@@ -97,75 +81,22 @@ jobs:
       - name: Verify ORM and migrations are coherent
         working-directory: apps/api
         run: alembic check
-      - name: Run API test suite (real Postgres/RabbitMQ/MinIO)
+      - name: Run API test suite
         working-directory: apps/api
         run: python -m pytest tests/ -q
 
-  sandbox:
+  deterministic:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install declared sandbox test dependencies
-        run: pip install pytest pyyaml
-      - name: Run sandbox preprocessing/cache/telemetry/structured-output tests
-        env:
-          PYTHONPATH: sandbox
-        run: python -m pytest sandbox/tests/ -q
-
-  bridge:
-    runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: noc
-          POSTGRES_PASSWORD: noc
-          POSTGRES_DB: noc_report
-        ports: ["55432:5432"]
-        options: >-
-          --health-cmd="pg_isready -U noc"
-          --health-interval=5s --health-timeout=5s --health-retries=10
-      rabbitmq:
-        image: rabbitmq:3.13-management-alpine
-        env:
-          RABBITMQ_DEFAULT_USER: noc
-          RABBITMQ_DEFAULT_PASS: noc-rabbit-secret
-        ports: ["55672:5672", "55673:15672"]
-        options: >-
-          --health-cmd="rabbitmq-diagnostics -q ping"
-          --health-interval=5s --health-timeout=5s --health-retries=10
-      minio:
-        image: minio/minio:RELEASE.2024-11-07T00-52-20Z
-        env:
-          MINIO_ROOT_USER: noc-minio
-          MINIO_ROOT_PASSWORD: noc-minio-secret
-        ports: ["59000:9000", "59091:9091"]
-        options: >-
-          --health-cmd="curl -f http://localhost:9000/minio/health/live || exit 1"
-          --health-interval=5s --health-timeout=5s --health-retries=10
-    env:
-      DATABASE_URL: postgresql+psycopg2://noc:noc@localhost:55432/noc_report
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Apply DB migrations
-        working-directory: apps/api
+      - name: Install deterministic test dependencies
         run: |
-          pip install -r requirements.txt -c constraints.txt
-          alembic upgrade head
-      - name: Install bridge dependencies
-        working-directory: bridge
-        run: pip install -r requirements.txt -c constraints.txt pytest
-      - name: Run bridge test suite
-        working-directory: bridge
-        run: python -m pytest tests/ -q
-        # NOC_BRIDGE_LIVE_CLAUDE_TESTS is deliberately left unset here:
-        # the one test gated behind it invokes the real Claude Code CLI
-        # against a real OAuth-authenticated subscription and spends real
-        # usage — never run automatically in CI (see the skip reason in
-        # bridge/tests/test_bridge.py).
+          pip install pytest
+          pip install -r bridge/requirements.txt -c bridge/constraints.txt
+      - name: Run preprocessing and report-support tests
+        env:
+          PYTHONPATH: sandbox:bridge
+        run: python -m pytest sandbox/tests/ bridge/tests/ -q

@@ -19,7 +19,7 @@ import { ApiError } from "@/lib/http";
  * app/api/v1/routers/incidents.py's get_incident_timeline), not a static
  * guess based on incident.status/hasLog. It's polled lightly so it
  * reflects an analysis job completing (written directly to Postgres by
- * the bridge) without requiring a page reload.
+ * a runtime worker) without requiring a page reload.
  */
 export function IncidentDetail() {
   const { id } = useParams<{ id: string }>();
@@ -295,7 +295,11 @@ export function IncidentDetail() {
         </Card>
       </div>
 
-      <LogAnalysisPanel incidentId={incident.id} hasLog={incident.hasLog} />
+      <LogAnalysisPanel
+        incidentId={incident.id}
+        hasLog={incident.hasLog}
+        logFilename={evidence.find((item) => item.evidenceType === "LOG" && item.lifecycleState === "ACTIVE")?.originalFilename}
+      />
 
       <Card>
         <CardTitle>Timeline</CardTitle>

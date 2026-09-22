@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://noc-report.internal/contracts/job_message.schema.json",
   "title": "Job Message",
-  "description": "Skill Runtime mission Phase 14: the canonical wire shape of a job message published to RabbitMQ by apps/api (app/core/queue.py::build_job_message, persisted verbatim into an OutboxEvent.payload by app/jobs.py::enqueue_job) and consumed by the bridge (bridge/noc_bridge/service.py::BridgeService._handle_delivery). Both producer and consumer are Python in this monorepo, so this is a JSON Schema rather than a TypeScript type (packages/contracts/src/index.ts stays the placeholder for apps/web-facing contracts) — each side loads and validates against this same file rather than re-deriving the shape by hand. Changing the protocol means editing this file plus both validating call sites; it is the single source of truth for what a job message contains.",
+  "description": "Canonical wire shape of a job message published to RabbitMQ by apps/api and consumed by the Phase 1 AI Worker. Both producer and consumer are Python in this monorepo, so this is a JSON Schema rather than a TypeScript type. Each side loads and validates against this same file rather than re-deriving the shape by hand. Changing the protocol means editing this file plus both validating call sites.",
   "type": "object",
   "required": [
     "protocol_version",

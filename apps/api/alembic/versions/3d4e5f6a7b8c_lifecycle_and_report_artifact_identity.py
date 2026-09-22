@@ -36,9 +36,13 @@ def upgrade() -> None:
         "lifecycle_state IN ('ACTIVE', 'PURGE_PENDING', 'PURGED')",
     )
 
-    op.add_column("reports", sa.Column("report_version_id", sa.String(length=200), nullable=True))
-    op.add_column("reports", sa.Column("report_byte_size", sa.Integer(), nullable=True))
-    op.add_column("reports", sa.Column("report_content_type", sa.String(length=200), nullable=True))
+    # This revision predates the report table on one historical migration
+    # branch. Defer these additive columns to the current forward head when
+    # upgrading a fresh database; deployed databases already have the table.
+    if sa.inspect(op.get_bind()).has_table("reports"):
+        op.add_column("reports", sa.Column("report_version_id", sa.String(length=200), nullable=True))
+        op.add_column("reports", sa.Column("report_byte_size", sa.Integer(), nullable=True))
+        op.add_column("reports", sa.Column("report_content_type", sa.String(length=200), nullable=True))
 
     op.create_check_constraint(
         "ck_system_config_job_timeout_positive",

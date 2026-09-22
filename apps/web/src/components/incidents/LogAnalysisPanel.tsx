@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Card, CardTitle } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
-import { Select } from "@/components/ui/Form";
 import { StatusPill } from "@/components/ui/StatusPill";
 import { analysisService } from "@/services";
 import { hasPermission } from "@/lib/session";
@@ -26,22 +25,16 @@ const statusPill: Record<
   FAILED: { label: "Failed", status: "critical" },
 };
 
-/**
- * Milestone 13 (Real Log Triage): replaces the old client-only jobSimulator
- * with the real pipeline — POST /incidents/{id}/analysis-runs enqueues a
- * real job, then this polls GET .../analysis-runs/{jobId} until the bridge
- * (a separate process) marks it COMPLETED/FAILED. No fallback analyzer: if
- * nothing ever picks the job up, this just stays QUEUED, truthfully.
- */
+/** The UI exposes application analysis states; Hermes remains an infrastructure detail. */
 export function LogAnalysisPanel({
   incidentId,
   hasLog,
+  logFilename,
 }: {
   incidentId?: string;
   hasLog: boolean;
+  logFilename?: string;
 }) {
-  const [model, setModel] = useState<string | undefined>(undefined);
-  const [effort, setEffort] = useState<"low" | "medium" | "high" | undefined>(undefined);
   const [runs, setRuns] = useState<AnalysisRun[]>([]);
   const [historyState, setHistoryState] = useState<"loading" | "loaded" | "failed">("loading");
   const [historyError, setHistoryError] = useState<string | null>(null);
@@ -135,10 +128,7 @@ export function LogAnalysisPanel({
     if (!incidentId) return;
     setRequestError(null);
     try {
-      const run = await analysisService.requestAnalysis(incidentId, {
-        model,
-        effort,
-      });
+      const run = await analysisService.requestAnalysis(incidentId, {});
       setRuns((prev) => [
         run,
         ...prev.map((r) => ({ ...r, isCurrent: false })),
@@ -196,36 +186,12 @@ export function LogAnalysisPanel({
 
       {hasLog && canAnalyze && (
         <>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="mb-1.5 block text-sm font-medium">Model</label>
-              <Select
-                value={model ?? ""}
-                onChange={(e) => setModel(e.target.value || undefined)}
-                disabled={isBusy}
-              >
-                <option value="">System default / Auto</option>
-                <option value="claude-sonnet-5">Claude Sonnet 5</option>
-                <option value="claude-opus-5">Claude Opus 5</option>
-              </Select>
-            </div>
-            <div>
-              <label className="mb-1.5 block text-sm font-medium">Effort</label>
-              <Select
-                value={effort ?? ""}
-                onChange={(e) => setEffort((e.target.value || undefined) as typeof effort)}
-                disabled={isBusy}
-              >
-                <option value="">System default / Auto</option>
-                <option value="low">Low</option>
-                <option value="medium">Medium</option>
-                <option value="high">High</option>
-              </Select>
-            </div>
-          </div>
+          <p className="text-sm text-muted">
+            Analysis engine is not currently configured. Historical results remain available below.
+          </p>
 
           <Button onClick={requestAnalysis} disabled={isBusy}>
-            {isBusy ? "Analyzing..." : "Analyze log"}
+            {isBusy ? "Analyzing..." : "Request analysis"}
           </Button>
 
           {requestError && (
@@ -234,57 +200,30 @@ export function LogAnalysisPanel({
 
           {currentRun?.status === "COMPLETED" && currentRun.result && (
             <div className="rounded-lg bg-ground p-4 text-sm">
-              {typeof currentRun.result.totalEntries === "number" && (
-                <FindingCoverage result={currentRun.result} />
-              )}
-              <p className="flex items-center gap-2 font-medium">
-                Severity
-                <StatusPill
-                  status={
-                    currentRun.result.severitySignal === "critical" ||
-                    currentRun.result.severitySignal === "high"
-                      ? "critical"
-                      : currentRun.result.severitySignal === "medium"
-                        ? "warning"
-                        : "good"
-                  }
-                  label={currentRun.result.severitySignal}
-                />
-              </p>
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-line pb-3 text-xs text-muted">
+                {logFilename && <span>Log File: {logFilename}</span>}
+                {typeof currentRun.result.totalEntries === "number" && (
+                  <span>Log entries: {currentRun.result.totalEntries.toLocaleString()}</span>
+                )}
+                <span className="flex items-center gap-2">
+                  Severity
+                  <StatusPill
+                    status={
+                      currentRun.result.severitySignal === "critical" ||
+                      currentRun.result.severitySignal === "high"
+                        ? "critical"
+                        : currentRun.result.severitySignal === "medium"
+                          ? "warning"
+                          : "good"
+                    }
+                    label={currentRun.result.severitySignal}
+                  />
+                </span>
+              </div>
 
-              <div className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2">
-                <div>
-                  <p className="font-medium">English</p>
-                  <p className="mt-1 text-muted">
-                    {currentRun.result.summaryEn}
-                  </p>
-                  <FindList
-                    title="Key Finds"
-                    finds={currentRun.result.keyFinds}
-                    lang="en"
-                  />
-                  <FindList
-                    title="Secondary Finds"
-                    finds={currentRun.result.secondaryFinds}
-                    lang="en"
-                  />
-                </div>
-                <div>
-                  <p className="font-medium">中文 (Chinese)</p>
-                  <p className="mt-1 text-muted">
-                    {currentRun.result.summaryZh}
-                  </p>
-                  <FindList
-                    title="重点发现 (Key Finds)"
-                    finds={currentRun.result.keyFinds}
-                    lang="zh"
-                  />
-                  <FindList
-                    title="次要发现 (Secondary Finds)"
-                    finds={currentRun.result.secondaryFinds}
-                    lang="zh"
-                  />
-                </div>
+              <div className="mt-4 flex flex-col gap-5">
+                <AnalysisLanguageSection result={currentRun.result} language="zh" />
+                <AnalysisLanguageSection result={currentRun.result} language="en" />
               </div>
             </div>
           )}
@@ -327,59 +266,24 @@ export function LogAnalysisPanel({
   );
 }
 
-function FindingCoverage({ result }: { result: AnalysisRun["result"] }) {
-  if (!result || typeof result.totalEntries !== "number") return null;
-
-  const findings = [...result.keyFinds, ...result.secondaryFinds];
-  const accounted = findings.reduce(
-    (sum, find) => sum + (typeof find.count === "number" ? find.count : 0),
-    0,
-  );
-  const deterministicTemplates = findings.reduce(
-    (sum, find) =>
-      sum +
-      (find.labelEn.startsWith("Deterministic log template:") &&
-      typeof find.count === "number"
-        ? find.count
-        : 0),
-    0,
-  );
-  const unquantified = findings.reduce(
-    (sum, find) =>
-      sum +
-      ((find.patternIds?.includes("other") || find.patternIds?.includes("unquantified")) &&
-      typeof find.count === "number"
-        ? find.count
-        : 0),
-    0,
-  );
-  const named = Math.max(0, accounted - deterministicTemplates - unquantified);
-  const coverage = result.totalEntries
-    ? Math.min(100, (accounted / result.totalEntries) * 100)
-    : 100;
-  const coverageLabel = `${accounted.toLocaleString()} / ${result.totalEntries.toLocaleString()} (${coverage.toFixed(2)}%)`;
-
+function AnalysisLanguageSection({
+  result,
+  language,
+}: {
+  result: NonNullable<AnalysisRun["result"]>;
+  language: "en" | "zh";
+}) {
+  const isChinese = language === "zh";
   return (
-    <div className="mb-3 rounded-md border border-line bg-surface px-3 py-2 text-xs text-muted">
-      <p>Exact log entries analyzed: {result.totalEntries.toLocaleString()}</p>
-      <p>Finding coverage: {coverageLabel}</p>
-      {deterministicTemplates > 0 && (
-        <p className="mt-1 text-muted">
-          Named findings: {named.toLocaleString()} ({((named / result.totalEntries) * 100).toFixed(2)}%);{" "}
-          deterministic templates: {deterministicTemplates.toLocaleString()} ({((deterministicTemplates / result.totalEntries) * 100).toFixed(2)}%).
-        </p>
-      )}
-      {unquantified > 0 && (
-        <p className="mt-1 text-warning">
-          Unquantified findings: {unquantified.toLocaleString()} ({((unquantified / result.totalEntries) * 100).toFixed(2)}%).
-        </p>
-      )}
-      {unquantified === 0 && accounted !== result.totalEntries && (
-        <p className="mt-1 text-warning">
-          {Math.max(0, result.totalEntries - accounted).toLocaleString()} entries have no validated finding count.
-        </p>
-      )}
-    </div>
+    <section className="flex flex-col gap-2" aria-labelledby={`analysis-${language}`}>
+      <h3 id={`analysis-${language}`} className="text-base font-semibold text-accent">
+        {isChinese ? "Chinese" : "English"}
+      </h3>
+      <h4 className="font-medium">Short Summary</h4>
+      <p className="text-muted">{isChinese ? result.summaryZh : result.summaryEn}</p>
+      <FindList title="Key Finds" finds={result.keyFinds} lang={language} />
+      <FindList title="Secondary Finds" finds={result.secondaryFinds} lang={language} />
+    </section>
   );
 }
 
@@ -392,31 +296,39 @@ function FindList({
   finds: AnalysisFind[];
   lang: "en" | "zh";
 }) {
-  if (finds.length === 0) return null;
+  const ordered = title === "Key Finds";
   return (
     <div className="mt-3">
       <p className="font-medium">{title}</p>
-      <ol className="mt-1 list-decimal space-y-1.5 pl-5">
-        {finds.map((find, i) => {
-          const label = lang === "en" ? find.labelEn : find.labelZh;
-          const detail = lang === "en" ? find.detailEn : find.detailZh;
-          const stats =
-            find.count !== null && find.percentage !== null
-              ? ` (${find.count.toLocaleString()} / ${find.percentage}%)`
-              : find.count !== null
-                ? ` (${find.count.toLocaleString()})`
-                : "";
-          return (
-            <li key={i} className="text-muted">
-              <span className="font-medium text-ink">
-                {label}
-                {stats}
-              </span>
-              {detail && <span> — {detail}</span>}
-            </li>
-          );
-        })}
-      </ol>
+      {finds.length > 0 && (ordered ? (
+        <ol className="mt-1 list-decimal space-y-1.5 pl-5">
+          {finds.map((find, i) => <FindingItem key={i} find={find} lang={lang} />)}
+        </ol>
+      ) : (
+        <ul className="mt-1 list-disc space-y-1.5 pl-5">
+          {finds.map((find, i) => <FindingItem key={i} find={find} lang={lang} compact />)}
+        </ul>
+      ))}
     </div>
+  );
+}
+
+function FindingItem({ find, lang, compact = false }: { find: AnalysisFind; lang: "en" | "zh"; compact?: boolean }) {
+  const label = lang === "en" ? find.labelEn : find.labelZh;
+  const detail = lang === "en" ? find.detailEn : find.detailZh;
+  const stats =
+    find.count !== null && find.percentage !== null
+      ? ` (${find.count.toLocaleString()} / ${find.percentage}%)`
+      : find.count !== null
+        ? ` (${find.count.toLocaleString()})`
+        : "";
+  return (
+    <li className={compact ? "text-xs leading-5 text-muted" : "text-sm leading-6 text-muted"}>
+      <span className="font-medium text-ink">
+        {label}
+        {stats}
+      </span>
+      {detail && <span> — {detail}</span>}
+    </li>
   );
 }

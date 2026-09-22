@@ -33,3 +33,17 @@ def test_materially_different_analysis_schema_can_export_same_contract():
     })
     assert fragment["contract"] == "report-fragment-v1"
     assert fragment["summary"]["en"] == "Payment worker failed"
+
+
+def test_canonical_analysis_does_not_export_legacy_cause_action_slots():
+    fragment = build_report_fragment({
+        "total_entries": 2,
+        "summary_en": "The log contains two entries. The patterns are separate.",
+        "summary_zh": "日志包含两条记录。两个模式彼此独立。",
+        "key_finds": [],
+        "secondary_finds": [],
+        "severity_signal": "low",
+        "confidence": 0.9,
+    })
+    assert "likely_cause" not in fragment
+    assert "recommended_action" not in fragment

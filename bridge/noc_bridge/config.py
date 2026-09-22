@@ -1,8 +1,9 @@
-"""Bridge configuration (master plan §27).
+"""Provider-neutral runtime support configuration.
 
-The bridge is a separate host-side deployable and deliberately does not
-import the FastAPI package. Shared job wire/topology definitions live in
-``packages/contracts``; process-local configuration remains here.
+This package contains the provider-neutral protocol, storage, validation, and
+runtime settings used by the separately deployed Phase 1 AI Worker. Provider
+credentials remain inside Hermes; this package only holds the worker's
+application and internal-runtime connection settings.
 """
 from __future__ import annotations
 
@@ -11,90 +12,32 @@ import pathlib
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class BridgeSettings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="BRIDGE_")
+class RuntimeSettings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="RUNTIME_", env_file=".env", extra="ignore")
 
     environment: str = "development"
-
     rabbitmq_url: str = "amqp://noc:noc-rabbit-secret@localhost:55672/"
     database_url: str = "postgresql://noc:noc@localhost:55432/noc_report"
-
     minio_endpoint_url: str = "http://localhost:59000"
     minio_access_key: str = "noc-minio"
     minio_secret_key: str = "noc-minio-secret"
     minio_bucket_evidence: str = "noc-evidence"
     minio_bucket_reports: str = "noc-reports"
     minio_bucket_job_artifacts: str = "noc-job-artifacts"
-
-    # Sandbox Security Requirements (master plan §28) — conceptual limits.
-    sandbox_cpu_nano_cpus: int = 2_000_000_000  # 2 CPUs
-    sandbox_mem_limit: str = "4g"
-    sandbox_pid_limit: int = 128
-    sandbox_timeout_seconds: int = 300
-
     max_concurrency: int = 1
-    health_bind_host: str = "127.0.0.1"
-    health_bind_port: int = 8091
-
     skills_dir: pathlib.Path = pathlib.Path(__file__).resolve().parents[2] / "skills"
-
-    # Real Claude Code CLI invocation (ADR 0003) — the sandbox authenticates
-    # via the operator's own Claude Code subscription login (OAuth token in
-    # `claude_credentials_path`), never a separate ANTHROPIC_API_KEY. Only
-    # `.credentials.json` is copied into the sandbox mount, not the rest of
-    # ~/.claude (§28: "use minimum required credentials/config").
-    claude_binary_path: pathlib.Path = pathlib.Path.home() / ".local/bin/claude"
-    claude_credentials_path: pathlib.Path = pathlib.Path.home() / ".claude/.credentials.json"
-    # Claude Code may refresh its OAuth access token during a sandbox run.
-    # Keep that refreshed copy across jobs and bridge restarts without
-    # mounting the operator's full ~/.claude directory.
-    claude_credentials_cache_path: pathlib.Path = pathlib.Path.home() / ".cache/noc-report/claude"
-    claude_model_default: str = "claude-sonnet-5"
-    claude_max_budget_usd: float = 0.50
-    claude_cli_timeout_seconds: int = 280
-
-    # Cost-optimization mission Phase 4: escalation policy for the
-    # low-effort default. A log-triage-summary result that fails structural
-    # checks, comes back with confidence below this threshold, or reports
-    # `severity_signal: critical` with borderline confidence, is retried
-    # once at `claude_effort_escalation` (see sandbox/entrypoint.py's
-    # `_escalation_reason` / `_EFFORT_RANK` for the exact rule).
-    claude_effort_escalation: str = "medium"
-    claude_escalation_confidence_threshold: float = 0.55
-
-    # Cost follow-up (~/claude-cli-bridge-notes): entrypoint.py's
-    # compaction defaults, made tunable here rather than baked into the
-    # sandbox image. Lowered from 300000/60 — a smaller prompt is the
-    # actual cost lever; model tier barely moves cost/latency at small
-    # prompt sizes, per that doc's measurements.
-    skill_max_log_chars: int = 80_000
-    skill_max_pattern_groups: int = 40
-
-    version: str = "0.1.0"
+    worker_id: str = "noc-ai-worker"
+    lease_seconds: int = 900
+    max_attempts: int = 3
+    hermes_base_url: str = "http://hermes:8642"
+    hermes_api_key: str = ""
+    hermes_profile: str = "noc-log-analysis"
+    hermes_version: str = "unknown"
+    hermes_timeout_seconds: float = 900.0
+    hermes_max_output_attempts: int = 2
+    health_host: str = "0.0.0.0"
+    health_port: int = 8092
+    version: str = "0.2.0"
 
 
-settings = BridgeSettings()
-
-
-def assert_production_config_is_safe(config: BridgeSettings = settings) -> None:
-    """Fail closed before starting privileged host-side infrastructure."""
-    if config.environment != "production":
-        return
-    insecure = []
-    if config.rabbitmq_url == "amqp://noc:noc-rabbit-secret@localhost:55672/":
-        insecure.append("rabbitmq_url")
-    if config.database_url == "postgresql://noc:noc@localhost:55432/noc_report":
-        insecure.append("database_url")
-    if config.minio_access_key == "noc-minio" or config.minio_secret_key == "noc-minio-secret":
-        insecure.append("minio_credentials")
-    if config.max_concurrency != 1:
-        insecure.append("max_concurrency must be 1 for the serial bridge")
-    if not config.claude_binary_path.is_file():
-        insecure.append("claude_binary_path")
-    if not config.claude_credentials_path.is_file():
-        insecure.append("claude_credentials_path")
-    if insecure:
-        raise RuntimeError(
-            "Refusing to start bridge in production with unsafe configuration: "
-            + ", ".join(insecure)
-        )
+settings = RuntimeSettings()

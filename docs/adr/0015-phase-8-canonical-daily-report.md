@@ -15,7 +15,7 @@ deterministic composition model.
 ## Decision
 
 The active Daily Report uses composition profile `noc-daily-report-v1`.
-ReportPlan is narrative-only: Claude supplies a required non-empty Chinese and
+ReportPlan is narrative-only: retired provider supplies a required non-empty Chinese and
 English General Summary. Cross-incident Findings is not part of the active
 ReportPlan or newly composed ReportDocument. The application derives mandatory
 Alert and Log Analysis coverage from the immutable
@@ -34,11 +34,11 @@ evidence block, and Log Analysis remains the final main section.
 
 ## Evidence and analysis
 
-Claude receives compact `ReportFragment` reasoning exports only. Full stored
+retired provider receives compact `ReportFragment` reasoning exports only. Full stored
 AnalysisRun output is adapted through the analysis presentation contract for
 human-facing rendering. This preserves all supported Key Finds, Secondary
 Finds, counts, percentages, details, and technical identifiers without a new
-Claude call. Trusted screenshots and exact frozen log filenames remain part of
+retired provider call. Trusted screenshots and exact frozen log filenames remain part of
 the supported evidence contract. The DOCX adapter scales screenshots within
 compact width and height bounds while preserving aspect ratio and avoiding
 unnecessary upscaling. Trigger/recovery pairs use a compact side-by-side layout
@@ -58,10 +58,10 @@ terminal integrity failures.
 
 ## Reliability and cost
 
-RabbitMQ/infrastructure retries are separate from the persisted paid Claude
+RabbitMQ/infrastructure retries are separate from the persisted paid retired provider
 budget. Jobs keep both a conservative reservation fence and actual
 `paid_ai_calls_used` accounting. A durable ReportPlan is reused when
-composition, rendering, or artifact upload fails after Claude has completed.
+composition, rendering, or artifact upload fails after retired provider has completed.
 
 ## Historical compatibility
 
@@ -72,7 +72,7 @@ Cross-incident Findings remain viewable/downloadable exactly as generated.
 
 ## Consequences
 
-The Daily Report is operationally complete because Claude cannot omit required
+The Daily Report is operationally complete because retired provider cannot omit required
 evidence through a reference list. Missing bilingual narrative fails bounded
 plan validation rather than becoming an empty summary. Future report types can
 use other composition profiles without adding NOC-specific policy to generic

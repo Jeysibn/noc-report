@@ -33,10 +33,8 @@ def _find(value: dict, *, zh: bool) -> Find:
 def _find_list(result: dict, key: str, *, zh: bool):
     values = result.get(key) or []
     if not isinstance(values, list):
-        return None
+        values = []
     values = [value for value in values if isinstance(value, dict)]
-    if not values:
-        return None
     return FindList(
         heading="Key Finds" if key == "key_finds" else "Secondary Finds",
         finds=tuple(_find(value, zh=zh) for value in values),
@@ -49,12 +47,9 @@ def _language_section(result: dict, *, zh: bool) -> list[Block]:
     language = "Chinese" if zh else "English"
     blocks: list[Block] = [Heading(language, level=3)]
     summary = str(result.get(f"summary{suffix}") or "")
-    if summary:
-        blocks.extend((Heading("Short Summary", level=4), Paragraph(summary)))
+    blocks.extend((Heading("Short Summary", level=4), Paragraph(summary)))
     for key in ("key_finds", "secondary_finds"):
-        finding_list = _find_list(result, key, zh=zh)
-        if finding_list:
-            blocks.append(finding_list)
+        blocks.append(_find_list(result, key, zh=zh))
     return blocks
 
 

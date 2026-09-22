@@ -98,11 +98,8 @@ const MOCK_STORAGE_STATUS: StorageBucketStatus[] = [
 ];
 
 const MOCK_SYSTEM_CONFIG: SystemConfig = {
-  defaultModel: "claude-sonnet-5",
-  defaultEffort: "medium",
   jobTimeoutSeconds: 300,
   maxConcurrentJobs: 1,
-  claudeMaxBudgetUsd: 0.5,
   updatedAt: new Date().toISOString(),
 };
 

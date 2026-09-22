@@ -6,7 +6,7 @@ but not for writes: the publish itself happened before the Job — and, in
 the caller, before the AnalysisRun/Report/ReportSnapshot the message
 implicitly depends on — was durable). That left a real crash window: if
 the process died after the Job commit but before the caller's own commit
-of the AnalysisRun/Report, the bridge could receive and complete a job
+of the AnalysisRun/Report, a runtime worker could receive and complete a job
 for domain state that didn't exist yet.
 
 `enqueue_job()` now only ever writes to Postgres: it creates the Job row

@@ -33,7 +33,7 @@ Every field has `value`, exact `source_text`, quality, method, and OCR
 confidence. Missing environment and unsupported service output remain empty.
 The resolver does not trust syntactically valid JSON by itself. OCR and
 deterministic fields remain usable when Ollama is unavailable, times out, or
-returns invalid JSON. The path performs zero Claude calls.
+returns invalid JSON. The path performs zero retired provider calls.
 
 The shared strict contract is
 `packages/contracts/incident_prefill.schema.json`; backend and TypeScript

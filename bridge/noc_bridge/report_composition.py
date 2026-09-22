@@ -369,7 +369,7 @@ def compose_report(plan: dict, snapshot: dict) -> ReportDocument:
             raise OutputValidationError(f"ReportPlan omitted required analyses: {sorted(missing)}")
 
     # Canonical profiles number and order from the frozen report, never from
-    # Claude's arbitrary reference order. Optional legacy profiles retain the
+    # semantic runtime's arbitrary reference order. Optional legacy profiles retain the
     # plan's selected order for historical snapshots.
     if incident_policy == "all":
         alert_incidents = unique_incidents

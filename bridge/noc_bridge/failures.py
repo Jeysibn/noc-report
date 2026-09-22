@@ -1,11 +1,9 @@
 """Failure classification — Reliability mission Batch A / Phase 3.
 
 Not every job failure should be retried: retrying a permanently-invalid
-schema, an unsupported skill, or a credential problem just burns another
-attempt (and, for a Claude-invoking job, another dollar) reproducing the
-exact same failure. `classify_failure` gives `service.py` one place to
-decide "is this worth trying again" instead of a bare `except` that
-retries everything indiscriminately (the previous behavior).
+schema or an unsupported skill just reproduces the
+same failure. `classify_failure` gives runtime consumers one place to decide
+whether a failure is worth trying again.
 """
 from __future__ import annotations
 
@@ -25,7 +23,6 @@ class EvidenceIntegrityError(RuntimeError):
 # classify_failure's RuntimeError branch below). Matches the reliability
 # mission's own "Terminal" examples.
 _TERMINAL_MESSAGE_MARKERS = (
-    "invalid credentials",
     "unauthorized",
     "unsupported skill",
     "invalid schema",
@@ -33,17 +30,10 @@ _TERMINAL_MESSAGE_MARKERS = (
     "prompt too large",
     "security violation",
     "missing required immutable snapshot",
-    "paid ai retry budget exhausted",
 )
 
-# A structured_output_retry_exhausted failure is explicitly called out as
-# retryable-with-one-bounded-escalation by the reliability mission (Phase
-# 13) — not a reason to give up immediately, but also not something to
-# retry indefinitely at the same effort tier. Produced by
-# sandbox/entrypoint.py's `_invoke_claude`, which already retries a
-# malformed/unparseable structured result once at the CLI level before
-# raising this — so a job-level retry (this classification) gets its own
-# fresh pair of CLI attempts rather than looping on the same bad output.
+# A structured output retry exhaustion remains retryable only for the bounded
+# worker path that can make a second inference attempt.
 _RETRYABLE_MESSAGE_MARKERS = (
     "structured_output_retry_exhausted",
 )
@@ -51,19 +41,18 @@ _RETRYABLE_MESSAGE_MARKERS = (
 
 def classify_failure(exc: BaseException) -> str:
     """Returns RETRYABLE or TERMINAL for a job failure raised from
-    `BridgeService._process_job`."""
+    a runtime worker's job-processing callback."""
     from noc_bridge.skill_registry import SkillHashMismatch, SkillSnapshotMissing
     from noc_bridge.storage import ChecksumMismatch
     from noc_bridge.validation import OutputValidationError
 
-    # Import locally (not at module scope) to avoid a circular import
-    # with service.py, which imports this module.
-    from noc_bridge.service import UnsupportedJobType  # noqa: PLC0415
-    from noc_bridge.ai_governance import InvalidExecutionPolicy  # noqa: PLC0415
+    # Hermes adapter errors carry an explicit retry policy. This keeps
+    # provider/runtime classification at the worker boundary and lets the
+    # existing RabbitMQ retry/DLQ path remain the only retry system.
+    if hasattr(exc, "retryable"):
+        return RETRYABLE if bool(getattr(exc, "retryable")) else TERMINAL
 
-    if isinstance(exc, UnsupportedJobType):
-        return TERMINAL
-    if isinstance(exc, InvalidExecutionPolicy):
+    if isinstance(exc, ValueError) and "unsupported" in str(exc).lower():
         return TERMINAL
     if isinstance(exc, EvidenceIntegrityError):
         return TERMINAL
@@ -96,9 +85,7 @@ def classify_failure(exc: BaseException) -> str:
     if any(marker in message for marker in _RETRYABLE_MESSAGE_MARKERS):
         return RETRYABLE
 
-    # Default: an otherwise-unclassified RuntimeError (sandbox exit
-    # failure, transient Claude CLI invocation failure, transient
-    # RabbitMQ/MinIO error surfaced as a plain RuntimeError, etc.) is
+    # Default: an otherwise-unclassified runtime/storage error is
     # retryable up to MAX_ATTEMPTS — the safer default for failures whose
     # cause isn't explicitly known to be permanent.
     return RETRYABLE

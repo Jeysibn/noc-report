@@ -6,7 +6,7 @@
 ## Context
 
 After ADR 0007 shipped, the operator ran the full stack locally against
-real Postgres/RabbitMQ/MinIO/Docker and a real Claude Code CLI
+real Postgres/RabbitMQ/MinIO/Docker and a real retired provider runtime CLI
 invocation, rather than only the test suites, to personally verify the
 Skill Runtime mission end-to-end. That surfaced four real defects the
 test suites had not caught — three because they only occur against
@@ -15,7 +15,7 @@ and one because it's an operational footgun in the local dev workflow
 itself rather than application code. Each is a genuine bug, not a
 misunderstanding of intended behavior; the "budget_exhausted" case
 encountered in the same session was investigated and found to be the
-opposite — the Claude CLI's own cost-safety mechanism working as
+opposite — the retired provider CLI's own cost-safety mechanism working as
 designed — so it is not listed here as a fix.
 
 ## Decision

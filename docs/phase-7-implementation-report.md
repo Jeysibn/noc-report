@@ -31,7 +31,7 @@ does not know section names. A missing required entity raises
 `OutputValidationError` and no DOCX is finalized.
 
 The compact `report-fragment-v1` remains the only analysis projection sent to
-Claude. Final rendering uses:
+retired provider. Final rendering uses:
 
 ```text
 full AnalysisRun result
@@ -54,9 +54,9 @@ An empty frozen screenshot list is valid. A declared screenshot is mandatory:
 - no fetcher or arbitrary storage reference is a terminal integrity/security failure.
 
 The bridge stores a validated Daily Report `result.json` before DOCX
-composition. If evidence retrieval or DOCX upload fails after Claude has
+composition. If evidence retrieval or DOCX upload fails after retired provider has
 returned successfully, a retry reuses that durable ReportPlan and does not
-buy another Claude call.
+buy another retired provider call.
 
 ## Paid AI retry policy
 
@@ -75,7 +75,7 @@ are reconciled before reservation.
 ## Live benchmark
 
 The benchmark was run with `NOC_LIVE_REPORT_BENCHMARK=1` against the installed
-Claude CLI and wrote `scripts/benchmark_report_generation_results.json`.
+retired provider CLI and wrote `scripts/benchmark_report_generation_results.json`.
 The token total is explicitly:
 
 ```text
@@ -102,7 +102,7 @@ lower output than the full-document strategy for the 5-incident fixture but
 not lower total model input in every row. It does prove the intended
 architecture: ReportPlan output is small, references are valid, screenshots
 resolve through trusted application data, and the final DOCX remains
-complete without asking Claude to reproduce the stored analysis/evidence.
+complete without asking retired provider to reproduce the stored analysis/evidence.
 
 ## Database and migration changes
 

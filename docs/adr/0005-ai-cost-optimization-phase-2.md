@@ -11,23 +11,23 @@ scoping" at the end. Supersedes/corrects two claims in ADR 0004 (see the
 correction note at the top of that file).
 
 Guiding principle carried over from the mission brief and unchanged:
-**"Deterministic code computes facts. Claude interprets evidence."**
+**"Deterministic code computes facts. retired provider interprets evidence."**
 Preserves the existing architecture (React → FastAPI → Postgres/MinIO →
-RabbitMQ → Host Bridge → Docker Sandbox → Claude Code CLI), Claude
+RabbitMQ → Host Bridge → Docker Sandbox → retired provider runtime CLI), retired provider
 subscription OAuth auth (never `--bare`, never API-key billing), RabbitMQ,
 MinIO, Postgres provenance, Docker sandbox isolation, RBAC, bilingual
 analysis, independent per-log analysis, report snapshots, structured JSON
 validation.
 
-## Issue 1 — minimize Claude Code agent overhead
+## Issue 1 — minimize retired provider runtime agent overhead
 
-`sandbox/entrypoint.py`'s `_invoke_claude` now passes `--system-prompt`
+`sandbox/entrypoint.py`'s `_invoke_retired-runtime` now passes `--system-prompt`
 (a short, skill-agnostic NOC-analyst identity string, `_NOC_SYSTEM_PROMPT`
 — replacing the CLI's default coding-agent system prompt, which this
 one-shot structured-output call never needed) and `--no-session-
 persistence` (no transcript is ever resumed for a one-shot analysis job).
 
-Both were verified as real, supported flags via `claude --help` and live
+Both were verified as real, supported flags via `retired-runtime --help` and live
 test calls before use. Two flags considered and deliberately **not**
 added, with reasoning kept as inline comments in `entrypoint.py`:
 - `--disallowed-tools "*"` — empirically breaks the CLI's own internal
@@ -37,17 +37,17 @@ added, with reasoning kept as inline comments in `entrypoint.py`:
   `--permission-mode dontAsk` + `--permission-prompts none` (already in
   place pre-mission) already strip every *other* tool.
 - `--max-turns` — does not exist on this CLI build (confirmed via
-  `claude --help`); nothing to add.
+  `retired-runtime --help`); nothing to add.
 
-Net effect: strictly less overhead sent to/kept by Claude per call, with
+Net effect: strictly less overhead sent to/kept by retired provider per call, with
 no loosening of the sandbox's own isolation (network/cap-drop/read-only-
-rootfs/resource-limits are unchanged) — reducing Claude's own tool
+rootfs/resource-limits are unchanged) — reducing retired provider's own tool
 surface here *is* the security improvement the mission required, not a
 tradeoff against it.
 
 ## Issue 2 — structured-output parsing
 
-`_parse_claude_result(envelope, *, schema)` now prefers, in order:
+`_parse_retired-runtime_result(envelope, *, schema)` now prefers, in order:
 1. `envelope["structured_output"]` if it's a dict (the CLI's own already-
    schema-validated field);
 2. `envelope["result"]`, parsed as JSON if it's a string, or used directly
@@ -55,7 +55,7 @@ tradeoff against it.
 3. otherwise raises `ValueError` — no silent fallback to a malformed or
    empty result.
 
-Verified against all real envelope shapes seen from live `claude -p
+Verified against all real envelope shapes seen from live `retired-runtime -p
 --output-format json --json-schema ...` calls (both fields present
 together in practice) — see `sandbox/tests/test_structured_output.py`,
 8 cases including malformed/missing-field variants.
@@ -129,10 +129,10 @@ wrong here. Now:
   report structure `docx_render.py` and the (unchanged) full-shape
   `_validate_daily_report` expect, carrying every per-incident field
   through from the frozen snapshot verbatim and computing the title
-  itself — none of it round-tripped through Claude.
+  itself — none of it round-tripped through retired provider.
 - The historical compatibility profile keeps two-stage validation —
   `bridge/noc_bridge/validation.py`'s
-  `_validate_daily_report_ai_output` checks Claude's raw compact output
+  `_validate_daily_report_ai_output` checks retired provider's raw compact output
   (wired as the `daily_report` entry in `_VALIDATORS`/`validate_output`);
   `validate_merged_daily_report` checks the final assembled report before
   rendering.
@@ -140,7 +140,7 @@ wrong here. Now:
   historical adapter renders the old "Cross-Incident Findings" section.
 
 Tests: `sandbox/tests/test_daily_report_compaction.py` (compact-summary
-extraction; proof the prompt actually sent to Claude excludes screenshots/
+extraction; proof the prompt actually sent to retired provider excludes screenshots/
 links/full analysis) and `bridge/tests/test_daily_report_merge.py`
 (merge correctness, verbatim per-incident carry-through, two-stage
 validation).
@@ -174,7 +174,7 @@ threshold. See "Deliberate scoping" below for why.
 
 `scripts/benchmark_preprocessing.py` (pre-existing) measures deterministic
 compaction byte-size effects with no live calls. `scripts/
-benchmark_live_ab.py` (new) runs the real `claude` CLI directly through
+benchmark_live_ab.py` (new) runs the real `retired-runtime` CLI directly through
 `sandbox/entrypoint.py`'s own `run_skill` — the exact prompt/schema/CLI
 flags a real job uses — against synthetic fixture logs covering every
 error type in the mission brief (NullPointerException,
@@ -184,7 +184,7 @@ Elasticsearch failure, JVM OOM, a repetitive-error log, multiple unrelated
 errors, and a rare critical error hidden in noise), recording real
 cost/tokens/duration/confidence/severity per fixture. Gated behind
 `NOC_LIVE_BENCHMARK=1` (spends real subscription usage, same convention as
-`bridge/tests/test_bridge.py`'s `NOC_BRIDGE_LIVE_CLAUDE_TESTS`). Results
+`bridge/tests/test_bridge.py`'s `NOC_BRIDGE_LIVE_RETIRED_RUNTIME_TESTS`). Results
 from the run performed during this mission are recorded in
 `scripts/benchmark_live_ab_results.json` and summarized below.
 
@@ -196,8 +196,8 @@ frontend-only `web` job: `api` (Postgres/RabbitMQ/MinIO services matching
 `apps/api/tests`), `sandbox` (no services needed, runs
 `sandbox/tests` — preprocessing/escalation/telemetry/structured-output/
 cache-version/daily-report-compaction), and `bridge` (same three services
-+ `alembic upgrade head` + `bridge/tests`, with the one real-Claude-CLI
-end-to-end test still gated off via an unset `NOC_BRIDGE_LIVE_CLAUDE_
++ `alembic upgrade head` + `bridge/tests`, with the one real-retired provider-CLI
+end-to-end test still gated off via an unset `NOC_BRIDGE_LIVE_RETIRED_RUNTIME_
 TESTS`).
 
 ## Deliberate scoping
@@ -218,7 +218,7 @@ narrowed:
   called out (distinct errors collapsing to one signature) without
   rebuilding a pipeline that, for most real logs, would never engage.
 - **Issue 8** — the benchmark covers every fixture type requested with
-  real Claude invocations and real measured numbers, but is a single
+  real retired provider invocations and real measured numbers, but is a single
   representative run rather than a large statistical sample (each fixture
   run once, not N times per model/effort combination) — real subscription
   usage is spent per invocation, and the mission's own cost-minimization

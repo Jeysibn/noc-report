@@ -197,7 +197,7 @@ def test_canonical_profile_numbers_from_frozen_order_and_repeats_alert_evidence(
         "incidents": "all", "analyses": "all_available",
         "allow_duplicate_incidents": False, "allow_duplicate_analyses": False,
     }
-    # Claude returns narrative only; coverage and order come from the frozen
+    # The semantic runtime returns narrative only; coverage and order come from the frozen
     # snapshot and profile.
     plan = {"general_summary": {"zh": "班次摘要", "en": "Shift summary"}}
     document = compose_report(plan, snapshot)

@@ -1,11 +1,7 @@
-"""Renders a `ReportDocument` (see noc_bridge.report_document) into a DOCX
-file (master plan §29 Daily Report Job Contract: "... -> daily-alert-
-report -> DOCX -> MinIO -> UI download"). This runs in the bridge process
-itself, not inside the sandbox — the sandbox's only job is to produce the
-structured JSON via the Claude CLI; keeping DOCX rendering out of the
-sandbox image means that image doesn't need python-docx or any of its
-dependencies baked in, and a rendering bug can be fixed/redeployed
-without touching the sandbox image at all.
+"""Render a `ReportDocument` into a DOCX file.
+
+Report composition and document rendering stay deterministic and independent
+of any semantic runtime or execution environment.
 
 Skill Runtime mission Phase 9: `render_document` knows only
 `report_document`'s block types. Translation from a skill-owned result to
@@ -303,26 +299,22 @@ def _add_alert_navigation(doc: Document, block: AlertNavigation) -> None:
 
 
 def _add_log_file(doc: Document, log_file: LogFileReference) -> None:
-    heading = doc.add_paragraph()
-    heading.paragraph_format.keep_with_next = True
-    heading.paragraph_format.space_before = Pt(4)
-    heading.paragraph_format.space_after = Pt(2)
-    run = heading.add_run("Log File")
+    paragraph = doc.add_paragraph()
+    paragraph.paragraph_format.keep_with_next = True
+    paragraph.paragraph_format.space_before = Pt(4)
+    paragraph.paragraph_format.space_after = Pt(4)
+    run = paragraph.add_run("Log File: ")
     run.bold = True
     run.italic = True
     run.font.size = Pt(10.5)
-    filename = doc.add_paragraph()
-    filename.paragraph_format.space_after = Pt(4)
-    filename.add_run("File Name: ").bold = True
     if log_file.url:
-        _add_hyperlink(filename, log_file.url, log_file.filename)
+        _add_hyperlink(paragraph, log_file.url, log_file.filename)
     else:
-        filename.add_run(log_file.filename)
+        paragraph.add_run(log_file.filename)
 
 
 def _add_finds(doc: Document, heading: str, finds, *, zh: bool) -> None:
-    if not finds:
-        return
+    compact = heading == "Secondary Finds"
     heading_paragraph = doc.add_paragraph(heading, style="Intense Quote")
     heading_paragraph.paragraph_format.keep_with_next = True
     for i, find in enumerate(finds, start=1):
@@ -330,10 +322,15 @@ def _add_finds(doc: Document, heading: str, finds, *, zh: bool) -> None:
         p = doc.add_paragraph()
         p.paragraph_format.left_indent = Inches(0.1)
         p.paragraph_format.right_indent = Inches(0.1)
-        p.paragraph_format.space_after = Pt(4)
-        p.add_run(f"{i}. {find.label}{stats}").bold = True
+        p.paragraph_format.space_after = Pt(2 if compact else 4)
+        label_run = p.add_run(f"{i}. {find.label}{stats}")
+        label_run.bold = True
+        if compact:
+            label_run.font.size = Pt(9.5)
         if find.detail:
-            p.add_run(f" - {find.detail}")
+            detail_run = p.add_run(f" - {find.detail}")
+            if compact:
+                detail_run.font.size = Pt(9.5)
 
 
 def _add_bilingual_find_list(doc: Document, find_list: BilingualFindList) -> None:

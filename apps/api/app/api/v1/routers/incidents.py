@@ -199,7 +199,7 @@ def get_incident_timeline(
 ) -> list[IncidentTimelineEventOut]:
     """Real timeline, derived from existing timestamped rows rather than a
     separate event log — so it always reflects the true current state of
-    the incident (including analysis jobs the bridge updates directly in
+    the incident (including analysis jobs a runtime worker updates directly in
     Postgres) with no chance of a forgotten instrumentation point leaving
     a step permanently stuck."""
     incident = db.get(Incident, incident_id)

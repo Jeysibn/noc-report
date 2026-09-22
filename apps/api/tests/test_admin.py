@@ -249,11 +249,8 @@ def test_get_system_config_seeded_defaults(client, db_session, seeded):
     resp = client.get("/api/v1/admin/system-config", headers=headers)
     assert resp.status_code == 200
     body = resp.json()
-    assert body["default_model"] == "claude-sonnet-5"
-    assert body["default_effort"] == "low"
     assert body["job_timeout_seconds"] == 300
     assert body["max_concurrent_jobs"] == 1
-    assert body["claude_max_budget_usd"] == 0.5
 
 
 def test_update_system_config_requires_permission(client, db_session, seeded):
@@ -261,7 +258,7 @@ def test_update_system_config_requires_permission(client, db_session, seeded):
     headers = auth_headers(client, "operator1")
 
     resp = client.patch(
-        "/api/v1/admin/system-config", json={"default_effort": "high"}, headers=headers
+        "/api/v1/admin/system-config", json={"max_concurrent_jobs": 1}, headers=headers
     )
     assert resp.status_code == 403
 
@@ -279,34 +276,16 @@ def test_update_system_config(client, db_session, seeded):
 
     resp = client.patch(
         "/api/v1/admin/system-config",
-        json={"default_effort": "high", "max_concurrent_jobs": 1, "claude_max_budget_usd": 1.25},
+        json={"job_timeout_seconds": 420, "max_concurrent_jobs": 1},
         headers=headers,
     )
     assert resp.status_code == 200
     body = resp.json()
-    assert body["default_effort"] == "high"
+    assert body["job_timeout_seconds"] == 420
     assert body["max_concurrent_jobs"] == 1
-    assert body["claude_max_budget_usd"] == 1.25
-    assert body["default_model"] == "claude-sonnet-5"  # unset fields untouched
 
     audit = client.get("/api/v1/admin/audit", headers=headers).json()
     assert any(e["action"] == "system_config.update" for e in audit)
-
-
-def test_update_system_config_rejects_unsafe_claude_budget(client, db_session, seeded):
-    make_user(db_session, "root", "Admin")
-    headers = auth_headers(client, "root")
-
-    assert client.patch(
-        "/api/v1/admin/system-config",
-        json={"claude_max_budget_usd": 0},
-        headers=headers,
-    ).status_code == 422
-    assert client.patch(
-        "/api/v1/admin/system-config",
-        json={"claude_max_budget_usd": 10.01},
-        headers=headers,
-    ).status_code == 422
 
 
 def test_list_skills_requires_permission(client, db_session, seeded):

@@ -92,22 +92,14 @@ export interface StorageBucketStatus {
   totalBytes: number;
 }
 
-/** Milestone 17 gap follow-up (AI Configuration, "real config, live-wired
- * to the bridge" — operator's explicit scope choice). */
+/** Generic worker configuration retained outside provider selection. */
 export interface SystemConfig {
-  defaultModel: string;
-  defaultEffort: string;
   jobTimeoutSeconds: number;
   maxConcurrentJobs: number;
-  /** Claude CLI --max-budget-usd cap for one invocation. */
-  claudeMaxBudgetUsd: number;
   updatedAt: string;
 }
 
 export interface SystemConfigUpdate {
-  defaultModel?: string;
-  defaultEffort?: string;
   jobTimeoutSeconds?: number;
   maxConcurrentJobs?: number;
-  claudeMaxBudgetUsd?: number;
 }

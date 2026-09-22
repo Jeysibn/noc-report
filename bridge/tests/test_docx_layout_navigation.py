@@ -200,8 +200,7 @@ def test_daily_report_uses_reference_inspired_typography_and_evidence_lines(tmp_
     assert "Alerts" in texts
     assert "General Summary" in texts
     assert "Log Analysis" in texts
-    assert "Log File" in texts
-    assert any(text.startswith("File Name: alert-1.json") for text in texts)
+    assert any(text.startswith("Log File: alert-1.json") for text in texts)
     assert any(text.startswith("Triggered: ") for text in texts)
 
 

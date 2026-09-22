@@ -13,8 +13,8 @@ Incident screenshot handling remains a text OCR pipeline:
 Ollama is an optional, local-only adapter behind `IncidentPrefill` and the
 `LocalInference` interface. The production profile targets a Q4 3B instruct
 model, CPU inference, context 2048, five-minute keep-alive, one concurrent
-request, and a bounded queue. It is isolated from the Claude Code bridge and
-therefore performs zero paid Claude calls.
+request, and a bounded queue. It is isolated from the retired provider runtime bridge and
+therefore performs zero paid retired provider calls.
 
 Every suggested field carries `value`, exact `source_text`, quality, method,
 and OCR confidence. The resolver accepts values only when the source line is
@@ -30,7 +30,7 @@ future rule and prompt improvements, without automatic training.
 
 ## Consequences
 
-The local model improves semantic mapping without using Claude for a cheap
+The local model improves semantic mapping without using retired provider for a cheap
 form-filling task. The feature has a measurable resource cost, so real-model
 accuracy and 16 GB VM memory benchmarks are an operational rollout gate rather
 than a CI dependency. The fake adapter keeps normal CI deterministic.

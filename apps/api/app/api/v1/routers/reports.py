@@ -1,14 +1,8 @@
-"""Milestone 14 — Real Daily Report (master plan pipeline):
+"""Daily report API with immutable snapshots and a provider-neutral runtime.
 
-    Generate Report -> freeze snapshot -> RabbitMQ -> Bridge -> Docker
-    -> Claude Code -> daily-alert-report -> DOCX -> MinIO -> UI download
-
-Mirrors Milestone 13's analysis.py pattern closely: no fallback report
-generator — if the bridge/sandbox pipeline isn't running, a Report just
-stays QUEUED (visible truthfully as such). The one real difference is
-the freeze step: report generation reads from a `ReportSnapshot` row
-created at request time, not from live incident/analysis state, so a
-Report's content never drifts even if incidents are edited afterward.
+Report generation freezes incident, evidence, and analysis provenance before
+dispatch. With no semantic runtime configured, new requests fail before a
+job is created; historical reports remain readable and downloadable.
 """
 import json
 import mimetypes
@@ -21,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.audit import record_audit
+from app.ai_runtime import require_ai_runtime
 from app.core.config import settings
 from app.core.storage import (
     get_client,
@@ -210,7 +205,7 @@ def _build_snapshot(db: Session, shift: Shift, report_skill_snapshot) -> dict:
         "report_skill_snapshot_id": str(report_skill_snapshot.id),
         "report_skill_execution_hash": compute_execution_hash(db, report_skill_snapshot),
         # Coverage is part of the immutable report-skill contract. The
-        # bridge must validate against this frozen policy, never the current
+        # runtime worker must validate against this frozen policy, never the current
         # checkout or a later activation.
         "composition_profile": report_manifest.get("composition_profile"),
         "coverage": report_manifest.get("coverage") or {},
@@ -258,11 +253,11 @@ def _to_out(report: Report, job: Job) -> ReportOut:
 def _sync_completed_report(db: Session, report: Report, job: Job) -> None:
     """Sync a completed report's immutable DOCX artifact once,
     but the artifact here is a DOCX in noc-reports (not a JSON result in
-    noc-job-artifacts) — the bridge writes it to a deterministic key this
+    noc-job-artifacts) — the runtime worker writes it to a deterministic key this
     function re-derives rather than being told."""
     if job.status != "COMPLETED":
         return
-    # All artifact identities are write-once. The bridge records preview
+    # All artifact identities are write-once. The runtime worker records preview
     # versions before marking the Job complete; once the DOCX has been
     # pinned, never HEAD the deterministic key again or a later overwrite
     # could silently change this historical Report row.
@@ -280,7 +275,7 @@ def _sync_completed_report(db: Session, report: Report, job: Job) -> None:
             version_id=version_id,
         )
     except ClientError:
-        # Bridge marked the Job COMPLETED but the DOCX isn't visible yet
+        # The runtime worker marked the Job COMPLETED but the DOCX isn't visible yet
         # (or was never written) — leave the report unfilled, try again
         # next poll, never fabricate a download.
         return
@@ -312,6 +307,10 @@ def generate_report(
 ) -> ReportOut:
     shift = _lock_shift_or_404(db, shift_id)
 
+    # Do not freeze, upload, or enqueue anything while the semantic runtime
+    # is absent. This keeps the outbox free of unserviceable work.
+    require_ai_runtime()
+
     next_version = _allocate_report_version(db, shift)
 
     # Resolve before freezing the snapshot so report composition and the Job
@@ -334,7 +333,7 @@ def generate_report(
     db.flush()
 
     # The snapshot has to live in MinIO (not just Postgres JSON) so the
-    # bridge can download+checksum-verify it into the sandbox through the
+    # runtime support can download+checksum-verify it through the
     # same object_refs path Milestone 13 already built — no separate
     # "small JSON inline in the queue message" code path to maintain.
     snapshot_key = f"snapshots/{shift.id}/{snapshot.id}.json"
@@ -366,8 +365,8 @@ def generate_report(
         object_refs=[
             {"bucket": settings.minio_bucket_reports, "key": snapshot_key, "sha256": snapshot_sha256}
         ],
-        model=body.model,
-        effort=body.effort,
+        model=None,
+        effort=None,
         skill_name=SKILL_NAME,
         skill_version=declared_skill_version(skill_snapshot),
         skill_hash=skill_snapshot.content_hash,
@@ -513,7 +512,7 @@ def get_report_document(
 ) -> Response:
     """The web Report Builder preview's data source: the exact same
     composed `ReportDocument` the DOCX was rendered from (see
-    `bridge/noc_bridge/report_document_json.py`), as browser-safe JSON —
+    report document adapter), as browser-safe JSON —
     screenshots are referenced by index only, never by MinIO bucket/key.
     Not every report was produced by the report-document-v1 renderer
     profile (older frozen snapshots may have used the legacy assembler),

@@ -21,7 +21,7 @@ Return JSON with:
 non-empty strings. It may concisely mention supported recurring themes, but
 must not create a separate cross-incident findings section.
 
-Claude owns only semantic reasoning: the Chinese and English shift summary
+The semantic runtime owns only the Chinese and English shift summary
 and operational assessment. Do not emit incident IDs, AnalysisRun IDs,
 screenshots, bucket/object keys, URLs, log filenames, timestamps, or copied
 incident metadata.

@@ -16,7 +16,7 @@ import { ApiError } from "@/lib/http";
 /**
  * Web Report Builder preview (per the canonical Daily Report layout):
  * renders the exact same composed ReportDocument the DOCX was rendered
- * from (see bridge/noc_bridge/report_document_json.py) as continuous,
+ * from the report document adapter as continuous,
  * scrollable HTML — Alerts -> General Summary -> Log Analysis, same
  * order, same evidence, same full bilingual analysis. It does not
  * simulate DOCX page breaks; that's the DOCX adapter's job, not this
@@ -238,7 +238,7 @@ function LinkView({ block }: { block: ReportLink }) {
 function LogFileView({ block }: { block: ReportLogFileReference }) {
   return (
     <p className="text-sm">
-      <span className="font-medium">Log File  File Name: </span>
+      <span className="font-medium">Log File: </span>
       {block.url ? (
         <a href={block.url} target="_blank" rel="noreferrer" className="text-accent underline">
           {block.filename}

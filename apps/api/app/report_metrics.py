@@ -20,7 +20,7 @@ def generated_report_predicate():
 def generated_report_time():
     """Return the durable completion time used by time-window metrics.
 
-    Job.completed_at is written by the bridge in the same completion path as
+    Job.completed_at is written by the runtime worker in the same completion path as
     the artifact identity.  Report.generated_at is retained as a compatibility
     fallback for rows completed before that field was populated by polling.
     """

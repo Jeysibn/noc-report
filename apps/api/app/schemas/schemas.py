@@ -3,16 +3,7 @@ from datetime import datetime, time
 from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from app.ai_policy import (
-    BUDGET_MAX,
-    BUDGET_MIN,
-    CONCURRENCY_MAX,
-    CONCURRENCY_MIN,
-    SUPPORTED_EFFORTS,
-    SUPPORTED_MODELS,
-    TIMEOUT_MAX,
-    TIMEOUT_MIN,
-)
+from app.ai_policy import CONCURRENCY_MAX, CONCURRENCY_MIN, TIMEOUT_MAX, TIMEOUT_MIN
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -323,15 +314,7 @@ class DlqActionResult(BaseModel):
 
 
 class AnalysisRequest(BaseModel):
-    # Cost follow-up: these must default to None, not a hardcoded model/
-    # effort — a non-None default here always wins over system_config's
-    # default_model/default_effort in the bridge (service.py: "a job's own
-    # requested model/effort always wins"), which silently defeated AI
-    # Configuration's cheaper defaults for every request that didn't
-    # explicitly override them (i.e. nearly all of them, since the web
-    # client doesn't send these fields).
-    model: Literal[tuple(SUPPORTED_MODELS)] | None = None
-    effort: Literal[tuple(SUPPORTED_EFFORTS)] | None = None
+    model_config = ConfigDict(extra="forbid")
 
 
 class AnalysisRunOut(BaseModel):
@@ -346,6 +329,11 @@ class AnalysisRunOut(BaseModel):
     status: str
     model: str | None
     effort: str | None
+    runtime_name: str | None = None
+    runtime_version: str | None = None
+    runtime_profile: str | None = None
+    provider: str | None = None
+    runtime_model: str | None = None
     skill_name: str | None
     skill_version: str | None
     # Skill Runtime mission Phase 6: the exact SkillSnapshot row's id, not
@@ -410,11 +398,7 @@ class AnalysisRunOut(BaseModel):
 
 
 class ReportGenerateRequest(BaseModel):
-    # Same fix as AnalysisRequest above: None, not a hardcoded model/
-    # effort, so system_config's default_model/default_effort actually
-    # takes effect instead of being silently overridden every time.
-    model: Literal[tuple(SUPPORTED_MODELS)] | None = None
-    effort: Literal[tuple(SUPPORTED_EFFORTS)] | None = None
+    model_config = ConfigDict(extra="forbid")
 
 
 class ReportOut(BaseModel):
@@ -507,11 +491,8 @@ class AnalyticsSummaryOut(BaseModel):
 class SystemConfigOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    default_model: str
-    default_effort: str
     job_timeout_seconds: int
     max_concurrent_jobs: int
-    claude_max_budget_usd: float
     updated_at: datetime
 
 
@@ -519,13 +500,10 @@ class SystemConfigUpdate(BaseModel):
     """Milestone 17 gap follow-up (AI Configuration). All fields optional —
     partial-update semantics via `exclude_unset`, same as ShiftDefinitionUpdate."""
 
-    default_model: Literal[tuple(SUPPORTED_MODELS)] | None = None
-    default_effort: Literal[tuple(SUPPORTED_EFFORTS)] | None = None
     job_timeout_seconds: int | None = Field(default=None, ge=TIMEOUT_MIN, le=TIMEOUT_MAX)
     max_concurrent_jobs: int | None = Field(
         default=None, ge=CONCURRENCY_MIN, le=CONCURRENCY_MAX
     )
-    claude_max_budget_usd: float | None = Field(default=None, ge=BUDGET_MIN, le=BUDGET_MAX)
 
 
 class StorageBucketStatusOut(BaseModel):

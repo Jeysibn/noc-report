@@ -35,9 +35,9 @@ still needs attention, either now or as accepted debt.
 
 ## Deviations from the plan (documented, not silently dropped)
 
-- **Milestone 0.5 (Claude Bridge Spike)** was inserted ahead of Milestone 1
+- **Milestone 0.5 (retired provider Bridge Spike)** was inserted ahead of Milestone 1
   (Decision Log #2) to de-risk the sandbox lifecycle early; it uses a
-  deterministic stand-in for the real Claude CLI call rather than a live
+  deterministic stand-in for the real retired provider CLI call rather than a live
   credentialed invocation (ADR-0001), scoped to `bridge/`/`sandbox/` only.
 - **Analytics** is scoped to V1 metrics only, exactly as the plan
   specifies; V2 metrics (MTBA, semantic clusters, heatmaps, operator
@@ -80,7 +80,7 @@ still needs attention, either now or as accepted debt.
   never remediated. Flagged repeatedly, never blocking, still open.
 - **Skill versioning scheme** (git hash vs. semver vs. content hash,
   Decision Log #3) remains undecided; needs resolution before Milestone
-  12 (Claude Bridge), not before Phase 2 starts generally.
+  12 (retired provider Bridge), not before Phase 2 starts generally.
 
 ## Stakeholder sign-off
 

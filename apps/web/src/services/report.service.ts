@@ -1,9 +1,6 @@
 import type { ReportDocument, ReportRun } from "@/types/report";
 
-export interface ReportGenerateInput {
-  model?: string;
-  effort?: "low" | "medium";
-}
+export type ReportGenerateInput = Record<string, never>
 
 /** Report generation and immutable artifact retrieval contract. */
 export interface ReportService {
@@ -20,7 +17,7 @@ export interface ReportService {
   download(reportId: string): Promise<Blob>;
   /**
    * The same composed ReportDocument the DOCX was rendered from (see
-   * bridge/noc_bridge/report_document_json.py), as browser-safe JSON —
+   * the report composition module), as browser-safe JSON —
    * Alerts -> General Summary -> Log Analysis, screenshots referenced by
    * index only. Not every report has one (older frozen snapshots may
    * have used the legacy renderer profile), so callers should treat a

@@ -23,7 +23,7 @@ row per logical skill.
 ## Skill-owned behavior
 
 The sandbox loads `SKILL.md`, `skill.yaml`, and `output.schema.json` from the
-mounted snapshot. Claude receives that exact schema and the bridge performs a
+mounted snapshot. retired provider receives that exact schema and the bridge performs a
 second generic JSON Schema validation. Analysis field names are not declared
 in the generic validator. Cache compatibility uses the evidence checksum,
 snapshot content hash, requested model/effort, and the explicit preprocessor
@@ -65,7 +65,7 @@ means the API does not start a dispatcher and an operator must run
 by application settings.
 
 The bridge lease is the configured sandbox job timeout plus a safety margin,
-and a separate database connection renews it during preprocessing, Claude,
+and a separate database connection renews it during preprocessing, retired provider,
 and artifact upload. A duplicate delivery cannot reclaim a live job; a worker
 crash leaves an expired lease that can be recovered.
 
@@ -76,7 +76,7 @@ rollback, source mutation isolation, dynamic analysis schemas, generic report
 layouts, report provenance, cache invalidation, outbox ownership, lease
 renewal policy, protocol validation, recursive dependency materialization,
 legacy-job provenance migration, permission hardening, and pinned CI
-infrastructure. The live Claude end-to-end tests remain opt-in because they
+infrastructure. The live retired provider end-to-end tests remain opt-in because they
 consume the operator's subscription usage.
 
 Migration `f1a2b3c4d5e6` backfills legacy Jobs by immutable hash or exact

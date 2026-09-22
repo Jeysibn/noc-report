@@ -1,4 +1,4 @@
-// Mirrors the bridge's real job.status values (bridge/noc_bridge/db.py) —
+// Mirrors the runtime job.status values —
 // there is no STARTING/RUNNING state, only QUEUED/PROCESSING/COMPLETED/FAILED.
 export type ReportJobStatus = "QUEUED" | "PROCESSING" | "COMPLETED" | "FAILED";
 
@@ -22,11 +22,11 @@ export interface ReportRun {
   reportVersionId: string | null;
 }
 
-// Mirrors bridge/noc_bridge/report_document_json.py's browser-safe
+// Mirrors the report document adapter's browser-safe
 // serialization of the same ReportDocument the DOCX adapter renders from
-// (bridge/noc_bridge/report_document.py) — one semantic model, two
+// — one semantic model, two
 // adapters. Every block carries a "type" discriminator matching the
-// bridge's own block-type names.
+// runtime support's own block-type names.
 
 export interface ReportMetadataItem {
   type: "metadata";

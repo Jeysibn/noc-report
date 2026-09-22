@@ -9,7 +9,7 @@ export interface JobSimulatorOptions {
 /**
  * Reusable async job simulator — Queued ~800ms -> Starting ~500ms ->
  * Running 3-8s -> Completed, per the UI Phase Plan's Mock job simulator
- * spec. Lets job/loading/error UX be built before RabbitMQ/Claude Bridge
+ * spec. Lets generic job/loading/error UX be built before RabbitMQ/runtime workers
  * exist (Milestones 11/12).
  */
 export function runMockJob<T>(
@@ -29,7 +29,7 @@ export function runMockJob<T>(
           setTimeout(() => {
             if (outcome === "failure") {
               emit("FAILED");
-              resolve({ state: "FAILED", error: "Claude Bridge job failed: sandbox exited non-zero." });
+              resolve({ state: "FAILED", error: "Runtime worker job failed." });
             } else {
               emit("COMPLETED");
               resolve({ state: "COMPLETED", result: produceResult() });
@@ -48,7 +48,7 @@ export const JOB_TEST_CASES = [
   "failed_log_analysis",
   "successful_report_generation",
   "failed_report_generation",
-  "bridge_offline",
+  "runtime_unavailable",
   "rabbitmq_unavailable",
   "minio_unavailable",
 ] as const;

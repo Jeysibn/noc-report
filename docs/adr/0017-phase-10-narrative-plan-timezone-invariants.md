@@ -6,7 +6,7 @@ Accepted
 
 ## Decision
 
-For `noc-daily-report-v1`, Claude returns only narrative data: a required,
+For `noc-daily-report-v1`, retired provider returns only narrative data: a required,
 non-empty bilingual `general_summary` and optional bilingual
 `cross_incident_findings`. Frozen Incident and current AnalysisRun coverage,
 ordering, numbering, evidence, and full presentation are deterministic

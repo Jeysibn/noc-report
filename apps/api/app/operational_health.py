@@ -62,7 +62,7 @@ def _check_http_dependency(url: str, *, name: str) -> dict:
         with urllib.request.urlopen(url, timeout=settings.health_timeout_seconds) as response:
             payload = json.loads(response.read().decode("utf-8"))
         status = payload.get("status")
-        if status == "healthy":
+        if status in {"healthy", "ok"}:
             return {"status": "healthy", "detail": payload}
         if status in {"degraded", "unavailable"}:
             return {"status": status, "detail": payload}
@@ -90,6 +90,19 @@ def _check_ollama() -> dict:
         return {"status": "unavailable", "detail": f"ollama: {type(exc).__name__}"}
 
 
+def _check_hermes() -> dict:
+    """Hermes liveness is intentionally separate from API readiness.
+
+    `/health` is unauthenticated and returns `{"status":"ok"}`. The worker
+    remains responsible for authenticated capability/provider checks.
+    """
+    # Secondary Hermes profiles are served below /p/<profile>/v1 on the
+    # default listener. Liveness is intentionally checked at the listener
+    # root, not through the profile's OpenAI path.
+    listener_url = settings.hermes_base_url.rstrip("/").split("/p/", 1)[0]
+    return _check_http_dependency(f"{listener_url}/health", name="hermes")
+
+
 def _overall_status(dependencies: dict[str, dict]) -> str:
     # Disabled/not-applicable optional services do not make an otherwise
     # healthy installation unknown. Unknown still remains visible when a
@@ -109,7 +122,9 @@ def dependency_health() -> dict:
         "postgresql": _check_database,
         "rabbitmq": _check_rabbitmq,
         "minio": _check_minio,
-        "claude_bridge": lambda: _check_http_dependency(settings.bridge_health_url, name="bridge"),
+        "ai_runtime": _check_hermes if settings.ai_runtime == "hermes" else lambda: {
+            "status": "disabled", "detail": "no external AI runtime is configured"
+        },
     }
     if settings.local_prefill_ai_enabled:
         checks["ollama"] = _check_ollama

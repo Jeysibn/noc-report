@@ -1,0 +1,59 @@
+# Hermes Agent profile configuration for NOC log analysis.
+# Provider credentials stay in Hermes' own .env/auth store, never in the NOC
+# API configuration. This file is mounted read-only by the development stack.
+
+# The API-server platform otherwise starts from Hermes' broad default surface.
+# Pin an empty allow-list explicitly, then keep the deny-list below as a
+# defense-in-depth guard against future profile/config changes.
+platform_toolsets:
+  api_server: []
+
+toolsets: []
+
+agent:
+  max_turns: 4
+  api_max_retries: 1
+  auto_recovery_cycles: 0
+  disabled_toolsets:
+    - terminal
+    - process
+    - file
+    - browser
+    - web
+    - search
+    - vision
+    - image_gen
+    - tts
+    - todo
+    - memory
+    - session_search
+    - cronjob
+    - code_execution
+    - delegation
+    - clarify
+    - homeassistant
+    - messaging
+    - connections
+    - skills
+    - coding
+    - debugging
+    - safe
+    - computer_use
+
+skills:
+  external_dirs:
+    - /opt/noc-report/skills
+  auto_load:
+    - log-triage-summary
+  create_dir: /opt/data/skills
+  write_approval: true
+
+memory:
+  memory_enabled: false
+  user_profile_enabled: false
+
+gateway:
+  multiplex_profiles: true
+  api_server:
+    max_concurrent_runs: 1
+    history_tool_output_max_chars: 20000

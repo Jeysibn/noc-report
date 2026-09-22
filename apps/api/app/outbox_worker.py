@@ -2,7 +2,7 @@
 
 Runs `app.outbox.dispatch_pending_events` on a short interval, either as
 its own standalone process (`python -m app.outbox_worker`, the intended
-production shape — same precedent as `noc-claude-bridge.service` being
+production shape — the dispatcher remains independent of any runtime worker
 its own systemd unit rather than living inside the FastAPI process) or as
 an in-process background thread started from `app.main`'s lifespan (dev
 convenience, so `uvicorn app.main:app` alone is enough to see a job

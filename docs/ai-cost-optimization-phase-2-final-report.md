@@ -3,7 +3,7 @@
 Mission: reduce AI usage per NOC analysis while preserving or improving
 incident-analysis quality, rare-critical-error detection, bilingual
 output, auditability, determinism, reliability, and security. Guiding
-principle: **"Deterministic code computes facts. Claude interprets
+principle: **"Deterministic code computes facts. retired provider interprets
 evidence."** Full change log/reasoning lives in ADR 0005; this report is
 the required 10-section summary.
 
@@ -11,14 +11,14 @@ the required 10-section summary.
 
 Ten issues were scoped from the mission brief. Nine (1-6, 9, plus a
 correction to 10's target doc) are fully implemented and tested against
-real infrastructure (Postgres/RabbitMQ/MinIO/Docker, and a real `claude`
+real infrastructure (Postgres/RabbitMQ/MinIO/Docker, and a real `retired-runtime`
 CLI benchmark). Issue 7 is intentionally scoped to the specific
 correctness bug it named rather than a full pipeline rebuild, and Issue 8
 is a real but single-pass (not statistically large) benchmark — both
 scoping decisions are stated explicitly in ADR 0005 rather than left
 implicit. No architectural component was removed or replaced: the
 React → FastAPI → Postgres/MinIO → RabbitMQ → Bridge → Docker Sandbox →
-Claude Code CLI pipeline, OAuth subscription billing, and RBAC are all
+retired provider runtime CLI pipeline, OAuth subscription billing, and RBAC are all
 unchanged.
 
 ## 2. What was inspected (ground truth, not prior docs)
@@ -41,7 +41,7 @@ React UI -> FastAPI (apps/api) -> Postgres (jobs/analysis_runs/reports)
     -> RabbitMQ -> bridge/noc_bridge/service.py (host process)
       -> Docker sandbox (non-root, cap-drop ALL, no-new-privileges,
          read-only rootfs, tmpfs-only, resource/pid/time limits)
-        -> sandbox/entrypoint.py -> `claude` CLI (OAuth subscription
+        -> sandbox/entrypoint.py -> `retired-runtime` CLI (OAuth subscription
            credential bind-mounted, never --bare, never API-key billing)
       -> MinIO (artifacts/reports) + Postgres (provenance)
 ```
@@ -52,7 +52,7 @@ React UI -> FastAPI (apps/api) -> Postgres (jobs/analysis_runs/reports)
 ```
 log.txt -> compact if > 80,000 chars (frequency+severity aware, but
   \d+ blanket-normalized -- HTTP 403 and 500 could collapse together)
-  -> SKILL.md + log text -> `claude -p ... --restricted --permission-mode
+  -> SKILL.md + log text -> `retired-runtime -p ... --restricted --permission-mode
   dontAsk` (no --system-prompt override, no --no-session-persistence)
   -> result/telemetry parsed by hoping `result` field is a JSON string
   -> escalation telemetry OVERWRITES initial attempt's numbers
@@ -62,21 +62,21 @@ log.txt -> compact if > 80,000 chars (frequency+severity aware, but
 ```
 log.txt -> compact if > 80,000 chars (field-aware: dynamic ids/timestamps
   normalized, HTTP/business/error codes preserved distinctly)
-  -> SKILL.md + log text -> `claude -p ... --system-prompt <minimal NOC
+  -> SKILL.md + log text -> `retired-runtime -p ... --system-prompt <minimal NOC
   identity> --no-session-persistence --restricted --permission-mode
   dontAsk --permission-prompts none`
-  -> _parse_claude_result prefers structured_output, falls back to result
+  -> _parse_retired-runtime_result prefers structured_output, falls back to result
   -> telemetry: initial_* and escalation_* both kept; totals are true sums
 ```
 
 ## 5. Daily report pipeline — before / after
 
-**Before:** Claude received the entire shift snapshot (every incident's
+**Before:** retired provider received the entire shift snapshot (every incident's
 full analysis object, screenshots, MinIO/Grafana references) and was
 asked to reproduce/echo most of it back inside `sections[]`, alongside
 the shift-level overview — real token cost for zero reasoning value.
 
-**After (Issue 6):** Claude receives only compact per-incident summaries
+**After (Issue 6):** retired provider receives only compact per-incident summaries
 (`display_id/title/status/severity_signal/main_error/impact/starts_at/
 ends_at`) and returns only `{overview_en, overview_zh,
 cross_incident_findings_en, cross_incident_findings_zh}`.
@@ -96,7 +96,7 @@ rendering.
 | 5 | Cache versioning + overrides | Done — `CACHE_CONTRACT_VERSION`, explicit-override respected |
 | 6 | Daily report deterministic assembly | Done — compact I/O + bridge-side merge |
 | 7 | Structured evidence engine | **Partial** — field-aware normalization bug fixed; full always-on pipeline not built (scoped, see ADR 0005) |
-| 8 | Real A/B benchmark | Done — real `claude` CLI, 12 fixture types, single-pass (scoped, see ADR 0005) |
+| 8 | Real A/B benchmark | Done — real `retired-runtime` CLI, 12 fixture types, single-pass (scoped, see ADR 0005) |
 | 9 | CI expansion | Done — `api`/`sandbox`/`bridge` jobs added alongside `web` |
 | 10 | ADR/docs update | Done — ADR 0004 corrected, ADR 0005 added, this report |
 
@@ -116,7 +116,7 @@ rendering.
 ## 8. Real benchmark results (Issue 8)
 
 Produced via `NOC_LIVE_BENCHMARK=1 python3 scripts/benchmark_live_ab.py`
-against the real `claude` CLI (`claude-sonnet-5`, effort `low`, escalating
+against the real `retired-runtime` CLI (`retired-runtime-sonnet-5`, effort `low`, escalating
 to `medium` only when the low-effort result is genuinely uncertain), one
 fixture per error type named in the mission brief, run on 2026-09-13. Full
 per-fixture telemetry is in `scripts/benchmark_live_ab_results.json`.
@@ -175,7 +175,7 @@ request.
   prompt`/`--json-schema` values contain no secrets; CI's Postgres/
   RabbitMQ/MinIO credentials are throwaway dev-only values matching
   `docker-compose.dev.yml`, scoped to ephemeral CI service containers.
-- Reducing Claude's tool surface (Issue 1) tightens, not loosens,
+- Reducing retired provider's tool surface (Issue 1) tightens, not loosens,
   security: no new tool was granted; `--system-prompt` replaces (not
   extends) the default identity, and `--no-session-persistence` removes a
   stray on-disk transcript artifact.

@@ -1,11 +1,8 @@
-"""Milestone 13 — Real Log Triage (master plan pipeline):
+"""Log analysis API and provider-neutral AI runtime boundary.
 
-    Analyze Log -> API -> PostgreSQL Job -> RabbitMQ -> Bridge -> Docker
-    -> Claude Code -> log-triage-summary -> MinIO/PostgreSQL -> UI
-
-No fallback analyzer in the API — if the bridge/sandbox pipeline isn't
-running, a request just stays QUEUED (visible truthfully as such), it
-never fabricates a result.
+The API owns evidence, snapshots, jobs, and historical results. A semantic
+runtime is enabled only when `AI_RUNTIME=hermes`; the safe default rejects new
+execution requests before creating unserviceable queue entries.
 """
 import json
 import hashlib
@@ -21,6 +18,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.audit import record_audit
+from app.ai_runtime import require_ai_runtime
 from app.core.config import settings
 from app.core.storage import get_object_bytes, sha256_of_bytes
 from app.db.session import get_db
@@ -51,9 +49,9 @@ SKILL_VERSION = str((yaml.safe_load(_SOURCE_MANIFEST.read_text()) or {}).get("ve
 # these constants cover only application-owned preprocessing and AI policy.
 # They are stored separately on AnalysisRun and combined for the cache query.
 # Bump the specific constant that actually changed:
-#   PREPROCESSOR_VERSION     — sandbox/entrypoint.py's log-compaction/
+#   PREPROCESSOR_VERSION     — sandbox/preprocessing.py's log-compaction/
 #                              structured-evidence-extraction behavior
-#                              changes what evidence Claude actually sees
+#                              changes what evidence the runtime sees
 #                              for the same raw input.
 #   AI_POLICY_VERSION        — the model/effort/escalation policy changes
 #                              (e.g. a new escalation trigger, a changed
@@ -63,7 +61,7 @@ SKILL_VERSION = str((yaml.safe_load(_SOURCE_MANIFEST.read_text()) or {}).get("ve
 #                              schema and preprocessor.
 # SKILL_VERSION remains a compatibility display alias for older API clients;
 # the immutable snapshot hash, not this label, selects execution or cache data.
-PREPROCESSOR_VERSION = "4"
+PREPROCESSOR_VERSION = "6"
 AI_POLICY_VERSION = "1"
 CACHE_CONTRACT_VERSION = f"{PREPROCESSOR_VERSION}.{AI_POLICY_VERSION}"
 
@@ -96,7 +94,7 @@ def _find_cached_analysis_run(
     against the same evidence checksum, produced under the same skill
     version AND the same cache contract version (schema/preprocessor/AI
     policy all unchanged since), is reusable verbatim — this is the same
-    log, analyzed the same way, so re-running Claude on it would just
+    log, analyzed the same way, so re-running the runtime would just
     reproduce the same result at full cost. Never reuses a run that hasn't
     completed yet (result_json is only set once a job actually finishes —
     see `_sync_completed_job`).
@@ -170,6 +168,11 @@ def _to_out(job: Job, run: AnalysisRun | None) -> AnalysisRunOut:
         status=job.status,
         model=job.model,
         effort=job.effort,
+        runtime_name=run.runtime_name if run else None,
+        runtime_version=run.runtime_version if run else None,
+        runtime_profile=run.runtime_profile if run else None,
+        provider=run.provider if run else None,
+        runtime_model=run.runtime_model if run else None,
         skill_name=job.skill_name,
         skill_version=job.skill_version,
         skill_snapshot_id=run.skill_snapshot_id if run else None,
@@ -227,8 +230,8 @@ def _to_out(job: Job, run: AnalysisRun | None) -> AnalysisRunOut:
 
 def _sync_completed_job(db: Session, job: Job) -> AnalysisRun | None:
     """A completed `log_triage` Job has its result sitting in
-    `noc-job-artifacts` (the bridge never writes into Postgres directly —
-    see bridge/noc_bridge/service.py). The first poll to observe
+    `noc-job-artifacts` (the runtime worker never writes into Postgres
+    directly). The first poll to observe
     status=="COMPLETED" pulls that result down and fills in the
     AnalysisRun row created at enqueue time; every later poll is a no-op
     since `result_json` is only ever set once (§22.9: "never overwrite
@@ -243,7 +246,7 @@ def _sync_completed_job(db: Session, job: Job) -> AnalysisRun | None:
     try:
         body = get_object_bytes(settings.minio_bucket_job_artifacts, key)
     except ClientError:
-        # Bridge marked the Job COMPLETED but the artifact isn't visible
+        # The worker marked the Job COMPLETED but the artifact isn't visible
         # yet (or was never written) — leave the run unfilled rather than
         # fabricate a result; the next poll tries again.
         return run
@@ -252,8 +255,8 @@ def _sync_completed_job(db: Session, job: Job) -> AnalysisRun | None:
     run.result_text = body.decode("utf-8", errors="replace")
     run.output_sha256 = sha256_of_bytes(body)
 
-    # Phase 1 (AI usage telemetry): best-effort — an older run or a run
-    # where the bridge couldn't upload telemetry.json simply leaves these
+    # Phase 1 (runtime telemetry): best-effort — an older run or a run
+    # where the worker couldn't upload telemetry.json simply leaves these
     # fields null, same as any other missing telemetry field.
     try:
         telemetry_body = get_object_bytes(settings.minio_bucket_job_artifacts, f"jobs/{job.id}/telemetry.json")
@@ -265,7 +268,7 @@ def _sync_completed_job(db: Session, job: Job) -> AnalysisRun | None:
         "duration_ms", "num_turns", "confidence", "escalation_reason",
         "raw_input_bytes", "evidence_bytes", "preprocessing_ratio",
         # AI cost-optimization mission Phase 2, Issue 4: cumulative
-        # escalation telemetry — see sandbox/entrypoint.py's run_skill.
+        # Runtime telemetry is provider-neutral and may be absent in historical runs.
         "attempt_count",
         "initial_model", "initial_effort", "initial_input_tokens", "initial_output_tokens",
         "initial_cache_read_tokens", "initial_cache_creation_tokens", "initial_duration_ms",
@@ -273,6 +276,7 @@ def _sync_completed_job(db: Session, job: Job) -> AnalysisRun | None:
         "escalation_model", "escalation_effort", "escalation_input_tokens", "escalation_output_tokens",
         "escalation_cache_read_tokens", "escalation_cache_creation_tokens", "escalation_duration_ms",
         "escalation_estimated_cost_usd",
+        "runtime_name", "runtime_version", "runtime_profile", "provider", "runtime_model",
     ):
         if field in telemetry:
             setattr(run, field, telemetry[field])
@@ -313,6 +317,11 @@ def request_analysis(
             "Incident has no LOG evidence attached — upload a log before requesting analysis.",
         )
 
+    # Stop before skill resolution, cache reuse, artifact creation, and job
+    # enqueue. There must be no durable work item while the runtime boundary
+    # has no implementation behind it.
+    require_ai_runtime()
+
     object_refs = [
         {
             "bucket": log_evidence.bucket,
@@ -326,7 +335,7 @@ def request_analysis(
     # the immutable SkillSnapshot for the skill's *current* on-disk
     # content — this is the tamper-evident identity threaded through the
     # cache lookup, the Job/AnalysisRun rows, and the job message the
-    # bridge re-verifies before executing.
+    # runtime support re-verifies before executing.
     # Skill Runtime mission Phase 2: resolve the *active* snapshot, not
     # necessarily whatever is on disk right now — activation genuinely
     # controls what new jobs run.
@@ -334,15 +343,15 @@ def request_analysis(
     skill_execution_hash = compute_execution_hash(db, skill_snapshot)
 
     # AI cost-optimization mission Phase 6: an exact-match cache hit skips
-    # RabbitMQ/the bridge/Claude entirely — the Job row is created already
+    # RabbitMQ/runtime entirely — the Job row is created already
     # COMPLETED and the AnalysisRun copies the cached result verbatim, so
     # the rest of this endpoint's contract (a Job + current AnalysisRun,
     # pollable exactly like a real run) is unchanged for callers.
     cached_run = _find_cached_analysis_run(
         db,
         log_evidence=log_evidence,
-        requested_model=body.model,
-        requested_effort=body.effort,
+        requested_model=None,
+        requested_effort=None,
         skill_hash=skill_snapshot.content_hash,
         skill_execution_hash=skill_execution_hash,
         skill_snapshot_id=skill_snapshot.id,
@@ -413,7 +422,7 @@ def request_analysis(
     # row + an OutboxEvent describing the RabbitMQ message) — nothing is
     # published to RabbitMQ here. The outbox dispatcher publishes it only
     # after this whole transaction (Job + AnalysisRun + audit, below)
-    # commits, so a message can never reach the bridge for a job whose
+    # commits, so a message can never reach a runtime worker for a job whose
     # AnalysisRun doesn't durably exist yet.
     job = enqueue_job(
         db,
@@ -421,8 +430,8 @@ def request_analysis(
         requested_by=current_user.id,
         incident_id=str(incident.id),
         object_refs=object_refs,
-        model=body.model,
-        effort=body.effort,
+        model=None,
+        effort=None,
         skill_name=SKILL_NAME,
         skill_version=declared_skill_version(skill_snapshot),
         skill_hash=skill_snapshot.content_hash,

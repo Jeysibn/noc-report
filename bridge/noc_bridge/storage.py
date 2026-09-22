@@ -1,6 +1,4 @@
-"""MinIO download/upload + checksum validation (master plan §27 steps
-5-6, 14; ADR-004 — the bridge is where object references from a job
-message actually turn into bytes).
+"""MinIO download/upload and checksum validation for runtime artifacts.
 """
 from __future__ import annotations
 
@@ -11,10 +9,10 @@ import boto3
 from botocore.client import Config as BotoConfig
 from botocore.exceptions import ClientError
 
-from noc_bridge.config import BridgeSettings
+from noc_bridge.config import RuntimeSettings
 
 
-def get_client(settings: BridgeSettings):
+def get_client(settings: RuntimeSettings):
     return boto3.client(
         "s3",
         endpoint_url=settings.minio_endpoint_url,
@@ -59,12 +57,12 @@ def download_object(
 
 
 def object_exists(client, *, bucket: str, object_key: str) -> bool:
-    """Idempotent job lifecycle (Reliability mission Batch A): before
-    re-running Claude on a redelivered message, the bridge checks whether
+    """Idempotent job lifecycle: before re-running a redelivered message, the
+    runtime worker checks whether
     the job's deterministic artifact key was already written by a prior
     attempt (e.g. the process died after upload but before the Job row
     was marked COMPLETED/acked) — reconciling from here rather than
-    invoking Claude a second time."""
+    invoking semantic processing a second time."""
     try:
         client.head_object(Bucket=bucket, Key=object_key)
         return True
@@ -104,7 +102,7 @@ def read_artifact_metadata(client, *, bucket: str, object_key: str) -> dict[str,
     """Read an artifact's exact current version and checksum.
 
     This is used by crash reconciliation.  A successful ``HEAD`` alone is
-    not enough: the bridge must persist the version that was actually
+    not enough: the worker must persist the version that was actually
     recovered and verify the bytes before declaring the job complete.
     """
     metadata = client.head_object(Bucket=bucket, Key=object_key)

@@ -29,11 +29,11 @@ profile: Alert and Log Analysis numbering/order come from the frozen snapshot,
 Alerts flow across any number of pages, and each analysis block repeats its
 trusted screenshot and exact frozen log filename.
 
-Each Job has a persisted paid Claude-call budget separate from infrastructure
+Each Job has a persisted paid retired provider-call budget separate from infrastructure
 attempts. The bridge atomically reserves the budget before sandbox launch,
 passes it into the sandbox, persists actual calls separately from the
 reservation fence, and the sandbox counts structured-output and escalation
-calls in one bounded context. Artifact reconciliation avoids a new Claude call
+calls in one bounded context. Artifact reconciliation avoids a new retired provider call
 after a downstream finalization failure whenever the durable ReportPlan or
 final artifact is already available.
 

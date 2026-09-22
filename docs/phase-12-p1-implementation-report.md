@@ -30,7 +30,7 @@ The model returns `{value, source_index}`. The resolver maps that index to the
 original OCR line and emits the public `{value, source_text, quality, method,
 ocr_confidence}` field. Unsupported values, invalid indexes, invalid enums,
 and values not supported by the cited line are rejected. OCR prefill remains
-outside the Claude bridge and consumes zero Claude calls.
+outside the retired provider bridge and consumes zero retired provider calls.
 
 ## Stack resource validation
 

@@ -15,9 +15,9 @@ natural page-break behavior.
 | Finding | Classification | Evidence |
 | --- | --- | --- |
 | Frozen ReportSnapshot is authoritative | ALREADY FIXED | `reports.py` freezes incident facts, evidence references, analysis output, and provenance. |
-| Compact reasoning export exists | ALREADY FIXED | `report_fragments.py` and the Daily Report input projection expose only compact context to Claude. |
+| Compact reasoning export exists | ALREADY FIXED | `report_fragments.py` and the Daily Report input projection expose only compact context to retired provider. |
 | Full analysis presentation export exists | PARTIALLY CONFIRMED | The adapter preserved all findings, but the final document did not repeat screenshots or log filenames in Log Analysis. |
-| Coverage validation exists | PARTIALLY CONFIRMED | Coverage errors were rejected, but Claude reference order still controlled alert numbering. |
+| Coverage validation exists | PARTIALLY CONFIRMED | Coverage errors were rejected, but retired provider reference order still controlled alert numbering. |
 | Canonical section order exists | ALREADY FIXED | Composition inserted Alerts, General Summary, and Log Analysis boundaries. |
 | Alerts natural pagination | ALREADY FIXED | Composition inserted no page breaks between alert blocks. |
 | Alert evidence block order | CONFIRMED | DOCX rendering placed metadata/links before screenshots. |
@@ -25,7 +25,7 @@ natural page-break behavior.
 | Frozen human-readable shift | CONFIRMED | Snapshots stored shift timestamps but not the mutable ShiftDefinition display name. |
 | Expected screenshot retrieval failure | ALREADY FIXED | Retrieval and integrity errors were classified separately and retried/terminated accordingly. |
 | Shared Web/DOCX semantic document | ALREADY FIXED | Both adapters consume the composed `ReportDocument`. |
-| Persisted actual paid Claude calls | PARTIALLY CONFIRMED | The Job tracked conservative reservations, but not actual calls completed by a sandbox. |
+| Persisted actual paid retired provider calls | PARTIALLY CONFIRMED | The Job tracked conservative reservations, but not actual calls completed by a sandbox. |
 | Canonical reference artifact | NOT PRESENT | The named DOCX is not in the repository or checkout. |
 
 ## Implementation
@@ -41,9 +41,9 @@ The data flow is:
 
 ```text
 Full AnalysisRun result ──> AnalysisPresentation (all findings)
-                         └─> ReportFragment (compact Claude context)
+                         └─> ReportFragment (compact retired provider context)
 
-Frozen ReportSnapshot + compact Claude ReportPlan + AnalysisPresentation
+Frozen ReportSnapshot + compact retired provider ReportPlan + AnalysisPresentation
                          -> canonical Report Composition
                          -> ReportDocument
                             /          \
@@ -71,14 +71,14 @@ Paid AI accounting now distinguishes the reservation crash fence from
 `paid_ai_calls_used`. Sandbox telemetry is returned with the job result and
 recorded after sandbox completion; unused reservations are released while a
 crashed worker remains fenced. A downstream retry can reuse the durable
-ReportPlan and does not invoke Claude again.
+ReportPlan and does not invoke retired provider again.
 
 ## Verification
 
 Added/updated tests cover:
 
 - three-or-more Alert section order and deterministic numbering despite a
-  reversed Claude reference order;
+  reversed retired provider reference order;
 - missing and duplicate incident/analysis coverage;
 - eight-plus natural multi-page Alert fixtures with only the two explicit
   section boundaries;
@@ -100,7 +100,7 @@ web TypeScript check passed
 Python compileall passed
 ```
 
-The live Claude benchmark remains explicitly gated because it spends
+The live retired provider benchmark remains explicitly gated because it spends
 subscription usage. `scripts/benchmark_report_generation.py` compares:
 
 ```text
@@ -110,7 +110,7 @@ C compact ReportPlan plus deterministic composition
 ```
 
 Each row records uncached input, cache creation/read input, total model input
-(`uncached + cache creation + cache read`), output tokens, Claude calls,
+(`uncached + cache creation + cache read`), output tokens, retired provider calls,
 duration, cost, plan/DOCX size, incident completeness, analysis completeness,
 and screenshot completeness. The existing checked-in live result is from the
 previous Phase 7 run; no unsupported universal savings claim is made.

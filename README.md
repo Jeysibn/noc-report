@@ -9,9 +9,9 @@ context.
 - `apps/web/` — React + TypeScript frontend (Vite, Tailwind, Vitest)
 - `apps/api/` — FastAPI backend (auth/RBAC, incidents, evidence, OCR, jobs,
   reports, search, analytics, and administration)
-- `bridge/noc_bridge/` — host-side Claude Code Bridge
-- `skills/` — Claude Code skills (`log-triage-summary/`, `daily-alert-report/`)
-- `sandbox/` — Docker sandbox for AI skill execution
+- `bridge/noc_bridge/` — provider-neutral queue/storage helpers plus the thin Hermes AI Worker
+- `skills/` — provider-neutral NOC skills (`log-triage-summary/`, `daily-alert-report/`)
+- `sandbox/` — deterministic log preprocessing utilities
 - `packages/contracts/` — shared schemas/types used by frontend and backend
 - `infrastructure/` — docker/caddy/rabbitmq/minio/postgres/systemd/backup configs
 - `docs/adr/` — architecture decision records
@@ -43,8 +43,25 @@ text extraction, deterministic rules first, and Ollama only for unresolved
 field mapping. Suggestions require operator review before an Incident is
 created. See [`docs/phase-12-local-ai.md`](docs/phase-12-local-ai.md).
 
+The semantic runtime is provider-neutral. Local API development defaults to
+`AI_RUNTIME=disabled`; the Phase 1 Compose stack enables the separate Hermes
+service and `ai-worker` for log analysis only. The worker owns evidence
+verification, deterministic preprocessing, RabbitMQ settlement, and result
+validation; Hermes owns model/provider execution. Historical analyses and
+reports remain readable regardless of runtime availability.
+
+```bash
+HERMES_API_KEY='replace-with-a-long-random-value' \
+docker compose -f infrastructure/docker-compose.dev.yml up -d postgres minio rabbitmq hermes ai-worker
+```
+
+Configure the provider inside the dedicated Hermes profile before submitting a
+real analysis. See [`docs/architecture/provider-neutral-ai-runtime.md`](docs/architecture/provider-neutral-ai-runtime.md),
+[`docs/adr/0029-hermes-runtime-integration.md`](docs/adr/0029-hermes-runtime-integration.md),
+and [`docs/runbooks/hermes-log-analysis.md`](docs/runbooks/hermes-log-analysis.md).
+
 The release checks are intentionally component-scoped because the API fixture
-recreates its database and the bridge uses the same infrastructure:
+recreates its database and the runtime-support tests use the same infrastructure:
 
 ```bash
 npm run check:coherence
@@ -55,7 +72,7 @@ PYTHONPATH=sandbox python3 -m pytest sandbox/tests/ -q
 (cd bridge && PYTHONPATH=. pytest tests/ -q)
 ```
 
-Run the API and bridge suites sequentially against separate test database
+Run the API and runtime-support suites sequentially against separate test database
 lifecycles; do not run them concurrently against the same local Postgres.
 
 The API exposes `/health` for liveness and `/health/dependencies` plus
@@ -79,7 +96,7 @@ Log Analysis
 The Alerts navigation entries and eligible evidence headings link to their
 corresponding Log Analysis bookmark in the generated DOCX. Screenshot sizing,
 pair layout, section order, bookmarks, and hyperlinks are renderer-owned; they
-are not delegated to Claude. The DOCX and Web Preview continue to consume the
+are not delegated to an AI runtime. The DOCX and Web Preview continue to consume the
 same `ReportDocument` semantic structure.
 
 Cross-incident Findings is not part of the contract for newly generated
@@ -87,7 +104,7 @@ reports. Historical report artifacts and legacy renderer profiles remain
 frozen: they are displayed and downloaded exactly as originally generated and
 are not rewritten to match the current contract.
 
-RabbitMQ redelivery and the bridge's PostgreSQL Job lease are deliberately
+RabbitMQ redelivery and the runtime support package's PostgreSQL Job lease are deliberately
 settled together: a live lease sends a duplicate through the delayed retry
 queue, an expired lease is reclaimable, and a completed duplicate is ACKed
 without another paid-AI execution. The Dashboard and Log Analysis UI also

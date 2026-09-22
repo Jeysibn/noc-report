@@ -2,7 +2,7 @@
 
 > Historical decision. For the active canonical Daily Report, the
 > reference-heavy ReportPlan described here was superseded by ADR 0017:
-> Claude emits narrative only, while Report Composition derives mandatory
+> retired provider emits narrative only, while Report Composition derives mandatory
 > coverage and section order from the frozen ReportSnapshot. The generic
 > ReportDocument/parser and historical-profile compatibility remain valid.
 
@@ -11,7 +11,7 @@ Status: implemented
 ## Context
 
 Phase 5 made `SkillSnapshot` the execution contract and introduced a generic
-`ReportDocument`.  The active Daily Report skill still asked Claude to emit
+`ReportDocument`.  The active Daily Report skill still asked retired provider to emit
 deterministic evidence blocks, URLs, filenames, screenshots, and private Log
 Triage fields.  That increased output cost and made model output a storage
 authority.
@@ -87,7 +87,7 @@ and provenance data.  Composition never reads mutable incident state.
 ## Benchmark evidence
 
 `scripts/benchmark_report_generation.py` compares compact legacy narrative,
-full ReportDocument, and ReportPlan strategies using the real Claude CLI when
+full ReportDocument, and ReportPlan strategies using the real retired provider CLI when
 `NOC_LIVE_REPORT_BENCHMARK=1` is set.  The recorded run in
 `scripts/benchmark_report_generation_results.json` measured:
 
@@ -104,12 +104,12 @@ representative run, not a pricing guarantee; cache state affects them.
 
 ## Paid AI retry budget and token accounting
 
-RabbitMQ/MinIO infrastructure retries and paid Claude calls are separate.
+RabbitMQ/MinIO infrastructure retries and paid retired provider calls are separate.
 Each Job persists a four-call paid budget and the bridge reserves it once
 before launching the sandbox. The sandbox enforces the same limit across
 structured-output retries and LOW-to-MEDIUM escalation; a redelivery cannot
 reset it. If a deterministic artifact already exists, reconciliation bypasses
-the budget and Claude entirely.
+the budget and retired provider entirely.
 
 All benchmark and sandbox telemetry reports uncached input, cache creation,
 cache read, and `total_model_input_tokens`, where the total is the sum of all

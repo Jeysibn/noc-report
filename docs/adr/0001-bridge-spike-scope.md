@@ -1,4 +1,4 @@
-# ADR 0001: Milestone 0.5 Claude Bridge Spike — scope and stand-in boundary
+# ADR 0001: Milestone 0.5 retired provider Bridge Spike — scope and stand-in boundary
 
 - Status: accepted
 - Date: 2026-09-09
@@ -7,11 +7,11 @@
 
 Per Decision Log #2, Milestone 0.5 exists to de-risk the Docker sandbox
 lifecycle (spawn, mount, limits, force-remove) before 11 milestones of UI
-work are sunk, without pulling forward the full Claude Bridge (Milestone 12):
+work are sunk, without pulling forward the full retired provider Bridge (Milestone 12):
 RabbitMQ consumption, MinIO transfer, and Postgres job records are explicitly
 out of scope here.
 
-A real `claude` CLI invocation inside the sandbox additionally requires
+A real `retired-runtime` CLI invocation inside the sandbox additionally requires
 mounting live account credentials into an ephemeral container — a decision
 about credential scoping that the master plan defers to Milestone 12's
 design (§27 Bridge Responsibilities, §28 secrets guidance: "use minimum
@@ -21,7 +21,7 @@ the sandbox").
 ## Decision
 
 The spike's sandbox entrypoint (`sandbox/entrypoint.py`) is a deterministic
-stand-in for the real Claude Code CLI call: it reads the mounted input log
+stand-in for the real retired provider runtime CLI call: it reads the mounted input log
 and skill file, and returns a structured JSON result matching the
 `log-triage-summary` skill's real output contract. It proves every mechanical
 piece of the sandbox lifecycle (non-root user, `cap-drop=ALL`,
@@ -29,7 +29,7 @@ piece of the sandbox lifecycle (non-root user, `cap-drop=ALL`,
 PID limits, read-only input/skills mounts, writable output mount, force
 removal) with a real Docker Engine, not the model call itself.
 
-Wiring a live, credentialed `claude` CLI call replaces only
+Wiring a live, credentialed `retired-runtime` CLI call replaces only
 `run_skill()`'s body in Milestone 12, once credential scoping for the bridge
 service is deliberately designed — not bolted onto this spike.
 

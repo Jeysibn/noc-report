@@ -2,7 +2,6 @@
 # environment. API and bridge share the same protocol files but remain
 # separately deployable processes.
 boto3==1.43.89
-docker==7.1.0
 jsonschema==4.10.3
 pika==1.4.4
 psycopg2-binary==2.9.10

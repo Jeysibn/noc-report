@@ -27,7 +27,7 @@ deliberately behind narrow interfaces rather than leaking storage details to
 orchestration.
 
 The output schema is skill-owned: the exact snapshot's `output.schema.json` is
-mounted into `/skills/<skill>/` and drives Claude `--json-schema`, followed by
+mounted into `/skills/<skill>/` and drives retired provider `--json-schema`, followed by
 generic JSON Schema validation. Skill-specific result fields remain in the
 skill-owned report assembly layer, never in generic validation or sandbox
 schema constants.
@@ -60,7 +60,7 @@ flowchart TD
   J --> Q[Outbox dispatcher -> RabbitMQ]
   Q --> W[Idempotent worker claim]
   W --> R[Skill Runtime loads exact snapshot]
-  R --> C[Claude with exact instructions + schema]
+  R --> C[retired provider with exact instructions + schema]
   C --> V[Generic validation]
   V --> P[Analysis persistence / Report assembly]
   P --> D[ReportDocument]

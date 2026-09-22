@@ -1,0 +1,208 @@
+{
+  "shift_starts_at": "2026-09-20T08:00:00+00:00",
+  "shift_ends_at": "2026-09-20T16:00:00+00:00",
+  "shift_timezone": "Asia/Manila",
+  "shift_display_name": "Sanitized Evening Shift",
+  "composition_profile": "noc-daily-report-v1",
+  "coverage": {
+    "incidents": "all",
+    "analyses": "all_available",
+    "allow_duplicate_incidents": false,
+    "allow_duplicate_analyses": false
+  },
+  "incidents": [
+    {
+      "id": "sanitized-incident-001",
+      "display_id": "INC-SAN-001",
+      "title": "Ranking cache and partner API errors",
+      "status": "RECOVERED",
+      "service": "sanitized-game-api",
+      "environment": "production",
+      "triggered_at": "2026-09-20T09:10:00+00:00",
+      "recovered_at": "2026-09-20T10:12:00+00:00",
+      "trigger_value": "sanitized",
+      "grafana_url": "https://grafana.example/sanitized/inc-s001",
+      "log_filename": "sanitized-ranking-cache-2026-09-20.json",
+      "screenshots": [
+        {
+          "bucket": "noc-evidence",
+          "object_key": "sanitized/inc-s001-alert-card.png",
+          "filename": "sanitized-alert-card.png",
+          "version_id": "sanitized-version-001",
+          "sha256": "sanitized-sha256-001",
+          "content_type": "image/png",
+          "byte_size": 2048
+        }
+      ],
+      "analysis_run_id": "sanitized-analysis-run-001",
+      "analysis_presentation_contract": "analysis-presentation-v1",
+      "analysis_skill_snapshot_id": "sanitized-skill-snapshot-001",
+      "analysis_skill_execution_hash": "sanitized-execution-hash-001",
+      "analysis_skill_version": "3",
+      "analysis_output_sha256": "sanitized-result-sha256-001",
+      "analysis_model": "sanitized-model",
+      "analysis_effort": "low",
+      "analysis": {
+        "total_entries": 581,
+        "summary_zh": "该日志包含581条记录，覆盖约1小时。主要异常是排行榜缓存重载期间的查询超时，以及合作方接口的解析失败和服务不可用；其余异常量较低且相互独立。",
+        "summary_en": "The log contains 581 entries across roughly one hour. The dominant patterns are ranking-cache query timeouts and partner-interface parsing or availability failures; lower-volume anomalies are separate patterns.",
+        "key_finds": [
+          {
+            "id": "ranking_query_timeout",
+            "label_zh": "排行榜查询超时",
+            "label_en": "Ranking query timeout",
+            "count": 215,
+            "percentage": 37.01,
+            "pattern_ids": ["p001"],
+            "detail_zh": "排行榜缓存重载期间，查询操作多次达到超时阈值。日志显示这是该导出中的主导模式，但未提供与其他故障直接关联的下游异常链。",
+            "detail_en": "Ranking queries repeatedly reached the timeout threshold during cache reloads. This is the dominant pattern in the export, but the file does not provide a direct downstream exception chain linking it to the other failures."
+          },
+          {
+            "id": "partner_response_parse_failure",
+            "label_zh": "合作方响应解析失败",
+            "label_en": "Partner response parsing failure",
+            "count": 144,
+            "percentage": 24.78,
+            "pattern_ids": ["p002"],
+            "detail_zh": "合作方接口返回内容未能按当前响应格式解析。日志显示失败发生在响应解析点，但未确认上游返回内容为何不符合预期格式。",
+            "detail_en": "Partner responses could not be parsed with the expected response format. The immediate failure is at response parsing; this file does not confirm why the upstream payload differed from the expected format."
+          },
+          {
+            "id": "partner_http_503",
+            "label_zh": "合作方接口 HTTP 503",
+            "label_en": "Partner API HTTP 503",
+            "count": 86,
+            "percentage": 14.8,
+            "pattern_ids": ["p003"],
+            "detail_zh": "合作方接口返回 HTTP 503，表示该请求在接口层面不可用。日志未提供更深层的依赖原因，也不能仅凭时间共现推断其与查询超时共享根因。",
+            "detail_en": "The partner API returned HTTP 503, confirming an unavailable response at that interface. The file does not confirm a deeper dependency cause, and temporal coexistence alone does not link it to the query timeouts."
+          },
+          {
+            "id": "cache_reload_failure",
+            "label_zh": "缓存重载失败",
+            "label_en": "Cache reload failure",
+            "count": 52,
+            "percentage": 8.95,
+            "pattern_ids": ["p004"],
+            "detail_zh": "缓存重载流程报告失败，涉及缓存刷新路径中的错误记录。日志未显示与其他异常的直接调用链，因此只能确认该流程的即时失败。",
+            "detail_en": "The cache reload flow reported failures in the cache-refresh path. No direct call-chain link to the other patterns is present, so the logs support only the immediate failure point."
+          }
+        ],
+        "secondary_finds": [
+          {
+            "id": "maya_status_query_failure",
+            "label_zh": "支付状态查询失败",
+            "label_en": "Payment status query failure",
+            "count": 17,
+            "percentage": 2.93,
+            "pattern_ids": ["p005"],
+            "detail_zh": "支付状态查询出现少量失败记录。",
+            "detail_en": "A lower-volume set of payment status queries failed."
+          },
+          {
+            "id": "auth_token_rejected",
+            "label_zh": "认证令牌被拒绝",
+            "label_en": "Authentication token rejected",
+            "count": 13,
+            "percentage": 2.24,
+            "pattern_ids": ["p006"],
+            "detail_zh": "记录显示认证令牌被拒绝。",
+            "detail_en": "The records show rejected authentication tokens."
+          },
+          {
+            "id": "sms_delivery_failure",
+            "label_zh": "短信发送失败",
+            "label_en": "SMS delivery failure",
+            "count": 11,
+            "percentage": 1.89,
+            "pattern_ids": ["p007"],
+            "detail_zh": "短信发送流程出现少量失败。",
+            "detail_en": "The SMS delivery flow has a small number of failures."
+          },
+          {
+            "id": "game_partner_timeout",
+            "label_zh": "游戏合作方调用超时",
+            "label_en": "Game partner call timeout",
+            "count": 9,
+            "percentage": 1.55,
+            "pattern_ids": ["p008"],
+            "detail_zh": "游戏合作方调用出现超时。",
+            "detail_en": "A game-partner call timed out."
+          },
+          {
+            "id": "export_cleanup_failure",
+            "label_zh": "导出清理失败",
+            "label_en": "Export cleanup failure",
+            "count": 8,
+            "percentage": 1.38,
+            "pattern_ids": ["p009"],
+            "detail_zh": "导出临时文件清理失败。",
+            "detail_en": "Temporary export-file cleanup failed."
+          },
+          {
+            "id": "export_output_missing",
+            "label_zh": "导出输出缺失",
+            "label_en": "Export output missing",
+            "count": 7,
+            "percentage": 1.2,
+            "pattern_ids": ["p010"],
+            "detail_zh": "导出流程未找到预期输出。",
+            "detail_en": "The export flow did not find its expected output."
+          },
+          {
+            "id": "archive_empty_input",
+            "label_zh": "归档无输入文件",
+            "label_en": "Archive input missing",
+            "count": 6,
+            "percentage": 1.03,
+            "pattern_ids": ["p011"],
+            "detail_zh": "归档任务没有可处理的输入文件。",
+            "detail_en": "The archive task had no input file to process."
+          },
+          {
+            "id": "database_deadlock",
+            "label_zh": "数据库死锁",
+            "label_en": "Database deadlock",
+            "count": 5,
+            "percentage": 0.86,
+            "pattern_ids": ["p012"],
+            "detail_zh": "记录到少量数据库死锁异常。",
+            "detail_en": "A small number of database deadlocks were logged."
+          },
+          {
+            "id": "cache_key_missing",
+            "label_zh": "缓存键缺失",
+            "label_en": "Cache key missing",
+            "count": 4,
+            "percentage": 0.69,
+            "pattern_ids": ["p013"],
+            "detail_zh": "少量请求缺少预期缓存键。",
+            "detail_en": "A few requests lacked the expected cache key."
+          },
+          {
+            "id": "invalid_request_payload",
+            "label_zh": "请求载荷无效",
+            "label_en": "Invalid request payload",
+            "count": 3,
+            "percentage": 0.52,
+            "pattern_ids": ["p014"],
+            "detail_zh": "少量请求载荷未通过校验。",
+            "detail_en": "A few request payloads failed validation."
+          },
+          {
+            "id": "health_check_warning",
+            "label_zh": "健康检查告警",
+            "label_en": "Health-check warning",
+            "count": 1,
+            "percentage": 0.17,
+            "pattern_ids": ["p015"],
+            "detail_zh": "记录到一条健康检查告警。",
+            "detail_en": "One health-check warning was logged."
+          }
+        ],
+        "severity_signal": "high",
+        "confidence": 0.91
+      }
+    }
+  ]
+}

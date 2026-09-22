@@ -17,7 +17,7 @@ label. Editing any of the three files produces a new hash; advancing a
 name-only dependency produces a new execution identity and pinned snapshot.
 Either change creates a new audit trail entry and cache identity.
 
-The bridge retrieves the same immutable row by snapshot ID and verifies its
+The runtime support package retrieves the same immutable row by snapshot ID and verifies its
 captured bytes before materializing it. The current checkout is not part of
 the execution path for snapshot-backed jobs.
 """
@@ -301,9 +301,8 @@ def set_active_snapshot(db: Session, skill_name: str, version_label: int) -> Ski
 
     This now genuinely controls what *new* jobs execute: job-creation
     endpoints resolve the skill to run via `resolve_active_snapshot`, which
-    reads `is_active`, and the bridge materializes and executes that exact
-    snapshot's frozen content (`bridge/noc_bridge/skill_registry.
-    materialize_snapshot`) — never the live on-disk files. Activating an
+    reads `is_active`; a runtime worker consumes that exact snapshot's frozen
+    content — never the live on-disk files. Activating an
     older version_label is therefore a real, working rollback: the very
     next job created for this skill_name runs that snapshot's exact
     content, with no need to revert any files on disk. Jobs already

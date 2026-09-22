@@ -20,7 +20,7 @@ found four concrete gaps:
    `output.schema.json` contract behind a given "version" from silently
    drifting, invisibly poisoning the cache and the audit trail.
 3. `bridge/noc_bridge/service.py` retried every job failure identically
-   (a bare `except`), burning attempts (and, for a Claude-invoking job,
+   (a bare `except`), burning attempts (and, for a retired provider-invoking job,
    real dollars) reproducing permanent failures like an unsupported skill
    or an invalid schema.
 4. Every credential in `apps/api/app/core/config.py` ships a convenient,
@@ -61,7 +61,7 @@ follow-up.**
   retryable up to `MAX_ATTEMPTS`.
 - `_RETRYABLE_MESSAGE_MARKERS` had referenced a
   `structured_output_retry_exhausted` message that nothing in
-  `sandbox/entrypoint.py` actually produced. `_invoke_claude` now retries
+  `sandbox/entrypoint.py` actually produced. `_invoke_retired-runtime` now retries
   a malformed/unparseable structured CLI result once at the same
   model/effort before raising that exact `RuntimeError` message — a single
   bad JSON parse no longer fails the whole job, but it also isn't retried
@@ -103,7 +103,7 @@ follow-up.**
 **Easier:** a dropped job after a crash is now a replayable outbox row,
 not silent data loss. A skill edit can no longer silently poison the
 cache or the audit trail. Job failures stop wasting retry budget (and, for
-Claude-invoking jobs, real dollars) on permanent failures. A production
+retired provider-invoking jobs, real dollars) on permanent failures. A production
 deployment can no longer boot on the dev JWT secret by accident. Skill
 version history is queryable and one version can be flagged as endorsed
 without touching what already ran.

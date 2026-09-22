@@ -6,7 +6,7 @@ import { useOperationalHealth } from "@/lib/operationalHealth";
 
 /**
  * Top bar: search (Ctrl K), notification bell, theme toggle, user menu.
- * Mock health states (Claude Bridge / RabbitMQ / MinIO) shown compact here;
+ * Runtime health is shown compact here;
  * full status detail lives on the Admin pages (Milestone 7). Milestone 13
  * frontend wiring replaced the mock role switcher with the real signed-in
  * user (from GET /api/v1/auth/me) and a real sign-out.
@@ -14,10 +14,10 @@ import { useOperationalHealth } from "@/lib/operationalHealth";
 export function Topbar() {
   const user = useCurrentUser();
   const health = useOperationalHealth();
-  const bridgeStatus = health.data?.dependencies.claude_bridge?.status ?? "unknown";
-  const bridgePill = {
-    status: bridgeStatus === "healthy" ? "good" : bridgeStatus === "degraded" ? "warning" : bridgeStatus === "unavailable" ? "critical" : "neutral",
-    label: bridgeStatus === "healthy" ? "Bridge healthy" : bridgeStatus === "degraded" ? "Bridge degraded" : bridgeStatus === "unavailable" ? "Bridge unavailable" : "Bridge unknown",
+  const runtimeStatus = health.data?.dependencies.ai_runtime?.status ?? "unknown";
+  const runtimePill = {
+    status: runtimeStatus === "healthy" ? "good" : runtimeStatus === "degraded" ? "warning" : runtimeStatus === "unavailable" ? "critical" : "neutral",
+    label: runtimeStatus === "healthy" ? "AI runtime ready" : runtimeStatus === "disabled" ? "AI analysis unavailable" : runtimeStatus === "degraded" ? "AI runtime degraded" : runtimeStatus === "unavailable" ? "AI runtime unavailable" : "AI runtime unknown",
   } as const;
   const initials = user
     ? user.displayName
@@ -42,7 +42,7 @@ export function Topbar() {
       </div>
 
       <div className="flex items-center gap-4">
-        <StatusPill status={bridgePill.status} label={bridgePill.label} />
+        <StatusPill status={runtimePill.status} label={runtimePill.label} />
         <button
           type="button"
           aria-label="Notifications"

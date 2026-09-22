@@ -1,27 +1,23 @@
-"""AI cost-optimization mission, Phase 12: benchmark harness.
+"""Deterministic preprocessing benchmark harness.
 
-Measures what is actually measurable without live Claude invocations (no
+Measures what is actually measurable without live external-runtime invocations (no
 API-key billing path exists in this architecture, and burning real
 subscription usage just to produce a benchmark number would be wasteful):
 the deterministic, code-level effect of Phase 5's log compaction on input
 size, across representative synthetic incident logs. Token/cost-per-call
 numbers are read back from real `telemetry.json` files once this has run
-in the actual sandbox against live jobs (see docs/adr/0004 "Benchmark").
+in a live worker against queued jobs.
 
 Run: python3 scripts/benchmark_preprocessing.py
 """
 from __future__ import annotations
 
-import importlib.util
 import pathlib
 import random
 import sys
 
-ROOT = pathlib.Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location("entrypoint", ROOT / "sandbox" / "entrypoint.py")
-entrypoint = importlib.util.module_from_spec(spec)
-sys.modules["entrypoint"] = entrypoint
-spec.loader.exec_module(entrypoint)  # type: ignore[union-attr]
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+from sandbox.preprocessing import compact_log
 
 random.seed(7)
 
@@ -48,7 +44,7 @@ def main() -> None:
     print(f"{'scenario':<40} {'raw bytes':>12} {'evidence bytes':>16} {'reduction':>10} {'severe kept':>12}")
     for name, raw in scenarios.items():
         raw_bytes = len(raw.encode("utf-8"))
-        compacted = entrypoint._compact_log_if_oversized(raw)
+        compacted = compact_log(raw)
         evidence_bytes = len(compacted.encode("utf-8"))
         reduction = 1 - (evidence_bytes / raw_bytes) if raw_bytes else 0
         severe_kept = "OOM" in compacted or "OutOfMemoryError" in compacted

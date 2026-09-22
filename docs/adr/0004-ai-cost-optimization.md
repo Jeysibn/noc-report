@@ -42,8 +42,8 @@ committed to the repo) so work can resume without re-deriving the plan.
       dropping rare critical errors like a single OOM buried in 80k WARNs)
 - [x] Phase 1 — AI usage telemetry persisted to Postgres (previously only
       printed to stderr from `sandbox/entrypoint.py`'s `run_skill`)
-- [x] Phase 2/3 — trim Claude Code agent overhead / minimal system prompt.
-      Re-inspected `_invoke_claude` (sandbox/entrypoint.py): no tools are
+- [x] Phase 2/3 — trim retired provider runtime agent overhead / minimal system prompt.
+      Re-inspected `_invoke_retired-runtime` (sandbox/entrypoint.py): no tools are
       requested, `--restricted` + `--permission-mode dontAsk` +
       `--permission-prompts none` already strip any agentic tool-use
       overhead, and the prompt sent is just the skill's own SKILL.md
@@ -67,7 +67,7 @@ committed to the repo) so work can resume without re-deriving the plan.
       `skill_name` + `skill_version` before ever enqueuing a job; on a hit
       it creates the `Job` already `COMPLETED` (`used_cache=true,
       cache_type="exact"`) and copies the cached `result_json` into a new
-      `AnalysisRun` — zero RabbitMQ message, zero bridge/sandbox/Claude
+      `AnalysisRun` — zero RabbitMQ message, zero bridge/sandbox/retired provider
       invocation
 - [x] Phase 7 — evaluated a near-duplicate pattern/signature cache;
       **deliberately deferred** as optional future work, see below (Phase 6's
@@ -97,13 +97,13 @@ FastAPI (apps/api) -> jobs table (Postgres) -> RabbitMQ
   -> bridge/noc_bridge/service.py (consumer)
     -> bridge/noc_bridge/sandbox_runner.py (Docker SDK, non-root, cap-drop
        ALL, no-new-privileges, read-only rootfs, tmpfs /tmp, network
-       disabled except for the Claude-invoking job type, CPU/mem/pid
+       disabled except for the retired provider-invoking job type, CPU/mem/pid
        limits, force-remove)
       -> sandbox/entrypoint.py (in-container)
         -> compacts log.txt if > SKILL_MAX_LOG_CHARS (80,000 by default)
         -> builds prompt = SKILL.md + input text (no extra system prompt,
            no tools, no MCP, no subagents)
-        -> shells out to `claude -p --output-format json --model ...
+        -> shells out to `retired-runtime -p --output-format json --model ...
            --effort ... --permission-mode dontAsk --permission-prompts none
            --restricted --max-budget-usd ... --json-schema ...`, prompt via
            stdin (not argv, to avoid E2BIG on large logs)
@@ -124,14 +124,14 @@ incident, so Phase 8 was effectively already done before this mission).
   and frequency as two independent selection axes. Any pattern matching
   `_SEVERITY_MARKERS` (FATAL, OOM, StackOverflowError, SecurityException,
   data loss, corruption, deadlock, panic) is always included in the
-  evidence sent to Claude, even if it wouldn't make the top
+  evidence sent to retired provider, even if it wouldn't make the top
   `MAX_PATTERN_GROUPS` by frequency alone. Previously a single rare
   critical error buried under high-volume noise (e.g. 80,000 WARN retries)
-  could be silently dropped before ever reaching Claude — a correctness
+  could be silently dropped before ever reaching retired provider — a correctness
   bug, not just a cost one, since it could cause a missed root cause.
 - `sandbox/tests/test_preprocessing.py`: regression tests, including the
   exact "one OOM among 80k WARNs" scenario from the mission brief.
-- `sandbox/entrypoint.py`: extracted `_invoke_claude` (single CLI call) out
+- `sandbox/entrypoint.py`: extracted `_invoke_retired-runtime` (single CLI call) out
   of `run_skill`, added `_escalation_reason`/`_EFFORT_RANK`, default
   `SKILL_EFFORT` fallback changed `medium` -> `low`. `run_skill` now makes
   one low-effort call and, only for log-triage-summary and only when
@@ -140,8 +140,8 @@ incident, so Phase 8 was effectively already done before this mission).
   `bridge/noc_bridge/db.py` (`_SYSTEM_CONFIG_DEFAULTS`): default value
   `medium` -> `low` (no migration needed — no DB-level `server_default`
   existed, this only changes the value used when seeding a fresh row).
-- `bridge/noc_bridge/config.py`: added `claude_effort_escalation` (default
-  `medium`) and `claude_escalation_confidence_threshold` (default `0.55`)
+- `bridge/noc_bridge/config.py`: added `retired-runtime_effort_escalation` (default
+  `medium`) and `retired-runtime_escalation_confidence_threshold` (default `0.55`)
   to `BridgeSettings`, centralizing the escalation policy alongside the
   existing model/budget/compaction settings.
 - `bridge/noc_bridge/service.py`: passes `SKILL_EFFORT_ESCALATION` /
@@ -151,7 +151,7 @@ incident, so Phase 8 was effectively already done before this mission).
   (`default_effort == "medium"` -> `"low"`).
 - `sandbox/tests/test_escalation.py`: unit tests for `_escalation_reason`/
   `_EFFORT_RANK`, plus two `run_skill`-level tests (via a monkeypatched
-  `_invoke_claude`) proving escalation fires exactly once for an uncertain
+  `_invoke_retired-runtime`) proving escalation fires exactly once for an uncertain
   low-effort result and not at all for a confident one.
 - Verified: `apps/api/tests` (64 passed) and `sandbox/tests` (14 passed)
   still green after these changes.
@@ -201,7 +201,7 @@ incident, so Phase 8 was effectively already done before this mission).
 
 - `sandbox/entrypoint.py`: added `_envelope_telemetry(envelope)` extracting
   `cost_usd`/`duration_ms`/`num_turns`/`input_tokens`/`output_tokens`/
-  `cache_creation_tokens`/`cache_read_tokens` from the Claude CLI's JSON
+  `cache_creation_tokens`/`cache_read_tokens` from the retired provider CLI's JSON
   envelope's `usage` block. `run_skill` now returns `tuple[dict, dict]`
   (result, telemetry) instead of a bare `dict`: telemetry also carries
   `model`, `effort` (updated to the escalated value if escalation fired),
@@ -253,7 +253,7 @@ incident, so Phase 8 was effectively already done before this mission).
 ## Benchmark
 
 `scripts/benchmark_preprocessing.py` measures the one thing reliably
-measurable without spending real Claude subscription usage just to
+measurable without spending real retired provider subscription usage just to
 produce a number: Phase 5's deterministic log-compaction effect on input
 size, across synthetic logs shaped like real incident logs (repeating
 WARN-retry noise plus one rare FATAL/OOM). Actual run, 2026-09-12:
@@ -269,7 +269,7 @@ Reading this: below `MAX_LOG_CHARS` (80,000 chars) nothing is compacted —
 by design, see "not worth implementing" below. Once a log crosses that
 threshold, compaction collapses repeated-pattern noise to ~1-2
 representative lines + an exact count per pattern, typically a >99%
-reduction in bytes actually sent to Claude, while the rare severe event
+reduction in bytes actually sent to retired provider, while the rare severe event
 (the OOM) is always still present in the output (`severe kept: True` in
 every scenario) — this is the Phase 5 bug-fix regression-tested in
 `sandbox/tests/test_preprocessing.py`.
@@ -279,7 +279,7 @@ Fewer input bytes at a fixed effort tier directly lowers `input_tokens`
 default-to-low-effort-with-escalation policy (most runs never need the
 medium-effort retry — only `_escalation_reason` failures do) and the
 Phase 6 exact-match cache (repeat analysis of byte-identical evidence
-costs literally zero Claude invocations), the three phases compound: a
+costs literally zero retired provider invocations), the three phases compound: a
 large, recurring, mostly-noise incident log now (a) frequently costs
 nothing at all on a re-analysis, and (b) even on a fresh analysis, sends
 under 1% of its raw bytes at the cheapest effort tier by default.
@@ -295,7 +295,7 @@ benchmark run that would itself cost real subscription usage.
 
 - Phase 5's bug fix is a strict quality *improvement*, not a tradeoff — it
   fixes a case where a critical error could previously be silently
-  dropped from what Claude sees.
+  dropped from what retired provider sees.
 - Phase 4's escalation path is designed so effort tier is a cost lever,
   not a quality lever: low effort is attempted first, but any output
   that's structurally invalid, has no key finds, or reports low/borderline
@@ -307,7 +307,7 @@ benchmark run that would itself cost real subscription usage.
   for a log that has actually changed, and bumping `SKILL_VERSION`
   invalidates it wholesale if the schema/preprocessing/policy changes.
 - No change in this mission alters the bilingual output, independent
-  per-log analysis, or the structured JSON schema Claude must satisfy —
+  per-log analysis, or the structured JSON schema retired provider must satisfy —
   quality-relevant behavior is unchanged except where explicitly improved
   (Phase 5).
 
@@ -344,10 +344,10 @@ benchmark run that would itself cost real subscription usage.
   the benchmark above shows 0% reduction is expected and correct at that
   size; there's nothing to compact. Compaction is deliberately a "kicks
   in only when it has to" mechanism, not a default transform.
-- Trimming the Claude Code CLI invocation further (Phase 2/3 remainder) —
+- Trimming the retired provider runtime CLI invocation further (Phase 2/3 remainder) —
   already verified minimal (see Phase 2/3 above); there is no more
   overhead to remove without dropping something the skill schema needs.
-- Moving off subscription/OAuth billing to `ANTHROPIC_API_KEY` — out of
+- Moving off subscription/OAuth billing to `RETIRED_PROVIDER_API_KEY` — out of
   scope per the mission's own constraints, and not recommended even as an
   option: the existing architecture (bridge + sandboxed CLI + OAuth
   credentials bind-mount) is the one being optimized, not replaced.
