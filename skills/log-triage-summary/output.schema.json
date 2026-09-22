@@ -14,17 +14,12 @@
       "type": "array",
       "items": {"$ref": "#/$defs/find"}
     },
-    "likely_cause_en": {"type": "string"},
-    "likely_cause_zh": {"type": "string"},
     "severity_signal": {"type": "string", "enum": ["low", "medium", "high", "critical"]},
-    "recommended_action_en": {"type": "string"},
-    "recommended_action_zh": {"type": "string"},
     "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0}
   },
   "required": [
     "total_entries", "summary_en", "summary_zh", "key_finds", "secondary_finds",
-    "likely_cause_en", "likely_cause_zh", "severity_signal",
-    "recommended_action_en", "recommended_action_zh", "confidence"
+    "severity_signal", "confidence"
   ],
   "additionalProperties": false,
   "$defs": {

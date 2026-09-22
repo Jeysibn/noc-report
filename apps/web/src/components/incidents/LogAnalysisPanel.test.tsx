@@ -83,11 +83,7 @@ describe("LogAnalysisPanel", () => {
             detailZh: "精确剩余。",
           },
         ],
-        likelyCauseEn: "unhandled exception in request path",
-        likelyCauseZh: "请求路径中存在未处理的异常",
         severitySignal: "high",
-        recommendedActionEn: "escalate to on-call engineer",
-        recommendedActionZh: "升级至值班工程师",
         confidence: 0.87,
       },
     });

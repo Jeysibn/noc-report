@@ -55,10 +55,6 @@ def _language_section(result: dict, *, zh: bool) -> list[Block]:
         finding_list = _find_list(result, key, zh=zh)
         if finding_list:
             blocks.append(finding_list)
-    for key, heading in (("likely_cause", "Likely Cause"), ("recommended_action", "Recommended Action")):
-        value = str(result.get(f"{key}{suffix}") or "")
-        if value:
-            blocks.extend((Heading(heading, level=4), Paragraph(value)))
     return blocks
 
 

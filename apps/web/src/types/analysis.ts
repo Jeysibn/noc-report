@@ -1,9 +1,7 @@
 /**
  * Shapes mirror apps/api's real AnalysisRunOut/log-triage-summary skill
  * contract. Bilingual (Chinese/English) with a Key Finds/Secondary Finds
- * breakdown — restores the richer shape the NOC team's real reports need
- * (a plain summary/likelyCause/recommendedAction shape was a Milestone 13
- * simplification that undershot the real skill contract).
+ * breakdown used by the log-triage-summary skill.
  */
 /**
  * Mirrors the bridge's actual job.status values (bridge/noc_bridge/db.py:
@@ -34,11 +32,7 @@ export interface AnalysisResult {
   summaryZh: string;
   keyFinds: AnalysisFind[];
   secondaryFinds: AnalysisFind[];
-  likelyCauseEn: string;
-  likelyCauseZh: string;
   severitySignal: SeveritySignal;
-  recommendedActionEn: string;
-  recommendedActionZh: string;
   confidence: number;
 }
 

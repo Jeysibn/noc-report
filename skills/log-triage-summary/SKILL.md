@@ -1,6 +1,6 @@
 ---
 name: log-triage-summary
-description: Summarize a NOC incident's attached log excerpt into a structured, bilingual (Chinese/English) triage summary with a Key Finds/Secondary Finds breakdown (likely cause, severity signal, recommended next action).
+description: Summarize a NOC incident's attached log excerpt into a structured, bilingual (Chinese/English) triage summary with a Key Finds/Secondary Finds breakdown and severity signal.
 ---
 
 # Log Triage Summary
@@ -8,6 +8,11 @@ description: Summarize a NOC incident's attached log excerpt into a structured, 
 Given a log excerpt attached to an incident, produce a structured JSON triage
 summary. The NOC team here is bilingual — every human-readable field must be
 given in **both** Chinese and English, not one or the other.
+
+The runtime may append a deterministic log profile containing level, service,
+logger, time-range, and Caused by root-cause counters computed over the full
+input. Use that profile to ground the overall summary and prioritize findings;
+do not invent metadata or repeat raw stack traces.
 
 Output shape:
 
@@ -32,18 +37,18 @@ Output shape:
   - `detail_en` / `detail_zh` — one or two sentences: which class/method/
     endpoint is involved, what the underlying exception/condition is, and
     any other context worth a NOC operator's attention.
+  - When a lower-volume variant is clearly part of the dominant failure,
+    group it with that finding by using multiple `pattern_ids`; do not create
+    a separate finding only because wording, endpoint, or request context is
+    slightly different.
   A log dominated by a single request/error still gets exactly one
   `key_finds` entry — don't pad with invented patterns.
 - `secondary_finds` — same shape as `key_finds`, for lower-frequency or
   less-actionable patterns worth noting but not leading with. The runtime
-  appends every deterministic family that the model does not label, so this
-  list may be longer than the model-authored list. It must not collapse
-  omitted evidence into a generic "other" finding or split one template into
-  one finding per request.
-- `likely_cause_en` / `likely_cause_zh` — short phrase, the most probable
-  root cause overall (drawn from the leading key find).
-- `recommended_action_en` / `recommended_action_zh` — short phrase, what the
-  NOC operator should do next.
+  appends deterministic templates that the model does not label and may
+  consolidate clearly related low-volume variants under the dominant finding.
+  It must not collapse omitted evidence into a generic "other" finding or
+  split one template into one finding per request.
 - `severity_signal` — one of `low`, `medium`, `high`, `critical`.
 - `confidence` — float 0.0–1.0.
 
@@ -51,9 +56,10 @@ Output shape:
   replaced by the runtime with the exact number of physical log entries.
 
 Numerical truth is deterministic. The runtime owns `total_entries`, every
-finding `count` and `percentage`, and expands every omitted deterministic
-error template into its own secondary finding. Claude owns grouping selection,
-labels, explanations, severity, and narrative for the templates it discusses.
+finding `count` and `percentage`, expands omitted deterministic templates, and
+consolidates clearly related low-volume variants without dropping their
+pattern IDs. Claude owns grouping selection, labels, explanations, severity,
+and narrative for the templates it discusses.
 Never estimate a number from the prose or repeat a total that is not present
 in the manifest. `other` is an internal compatibility marker and is removed
 from the persisted result; it must not be used to hide an identifiable

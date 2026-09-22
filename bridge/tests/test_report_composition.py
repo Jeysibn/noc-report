@@ -160,8 +160,6 @@ def test_full_analysis_presentation_keeps_all_findings_without_ai_echo(tmp_path)
             {"label_zh": f"次要{i}", "label_en": f"Secondary {i}", "count": i, "percentage": i * 5, "detail_zh": f"次要细节{i}", "detail_en": f"Secondary detail {i}"}
             for i in range(1, 5)
         ],
-        "likely_cause_zh": "根因", "likely_cause_en": "Root cause",
-        "recommended_action_zh": "修复", "recommended_action_en": "Remediate",
     }
     document = compose_report(
         {"blocks": [
@@ -173,15 +171,21 @@ def test_full_analysis_presentation_keeps_all_findings_without_ai_echo(tmp_path)
     destination = tmp_path / "phase7-analysis-fidelity.docx"
     render_document(document, destination, screenshot_fetcher=lambda *_: _PNG)
     text = "\n".join(paragraph.text for paragraph in Document(str(destination)).paragraphs)
-    for value in ("Finding 1", "Finding 7", "Secondary 1", "Secondary 4", "Root cause", "Remediate", "7 / 70%"):
+    for value in ("Finding 1", "Finding 7", "Secondary 1", "Secondary 4", "7 / 70%"):
         assert value in text
+    assert "Root cause" not in text
+    assert "Remediate" not in text
 
     from noc_bridge.report_document import FindList
     analysis_block = next(block for block in document.blocks if block.__class__.__name__ == "AnalysisReference")
     children = list(analysis_block.children)
-    headings = [child.text for child in children if hasattr(child, "text")]
-    assert headings.index("Chinese") < headings.index("English")
-    chinese_end = headings.index("English")
+    heading_indices = {
+        child.text: index
+        for index, child in enumerate(children)
+        if child.__class__.__name__ == "Heading"
+    }
+    assert heading_indices["Chinese"] < heading_indices["English"]
+    chinese_end = heading_indices["English"]
     assert all(getattr(child, "language", None) == "Chinese" for child in children[:chinese_end] if isinstance(child, FindList))
     assert all(getattr(child, "language", None) == "English" for child in children[chinese_end:] if isinstance(child, FindList))
 

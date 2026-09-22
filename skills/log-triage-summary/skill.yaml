@@ -47,3 +47,5 @@ description: >
   Summarize a NOC incident's attached log excerpt into a structured,
   bilingual (Chinese/English) triage summary with a Key Finds/Secondary
   Finds breakdown.
+  Finds breakdown. The runtime supplies deterministic level, service,
+  logger, time-range, and root-cause counters for grounding.

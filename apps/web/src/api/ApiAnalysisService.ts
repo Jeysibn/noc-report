@@ -30,11 +30,7 @@ interface RawAnalysisRunOut {
     summary_zh: string;
     key_finds: RawFind[];
     secondary_finds: RawFind[];
-    likely_cause_en: string;
-    likely_cause_zh: string;
     severity_signal: string;
-    recommended_action_en: string;
-    recommended_action_zh: string;
     confidence: number;
   } | null;
   current: boolean;
@@ -70,11 +66,7 @@ function toRun(raw: RawAnalysisRunOut): AnalysisRun {
           summaryZh: raw.result.summary_zh,
           keyFinds: (raw.result.key_finds ?? []).map(toFind),
           secondaryFinds: (raw.result.secondary_finds ?? []).map(toFind),
-          likelyCauseEn: raw.result.likely_cause_en,
-          likelyCauseZh: raw.result.likely_cause_zh,
           severitySignal: raw.result.severity_signal as SeveritySignal,
-          recommendedActionEn: raw.result.recommended_action_en,
-          recommendedActionZh: raw.result.recommended_action_zh,
           confidence: raw.result.confidence,
         }
       : undefined,

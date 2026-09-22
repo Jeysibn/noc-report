@@ -29,7 +29,9 @@ import pathlib
 import re
 import subprocess
 import sys
+from collections import Counter
 from contextvars import ContextVar
+from difflib import SequenceMatcher
 
 import yaml
 
@@ -77,13 +79,24 @@ def _compact_incident_summaries(snapshot: dict) -> list[dict]:
     compact = []
     for incident in snapshot.get("incidents", []):
         analysis = incident.get("analysis")
+        main_error = None
+        if analysis:
+            # New log-triage results intentionally omit cause/action prose;
+            # use the leading stable finding for the daily report's compact
+            # cross-incident context. Keep the old field as a compatibility
+            # fallback for frozen historical snapshots.
+            main_error = analysis.get("likely_cause_en")
+            if not main_error:
+                key_finds = analysis.get("key_finds") or []
+                if key_finds and isinstance(key_finds[0], dict):
+                    main_error = key_finds[0].get("label_en") or key_finds[0].get("label_zh")
         compact.append(
             {
                 "display_id": incident.get("display_id"),
                 "title": incident.get("title"),
                 "status": incident.get("status"),
                 "severity_signal": analysis.get("severity_signal") if analysis else None,
-                "main_error": analysis.get("likely_cause_en") if analysis else None,
+                "main_error": main_error,
                 "impact": analysis.get("summary_en") if analysis else None,
                 "starts_at": incident.get("triggered_at"),
                 "ends_at": incident.get("recovered_at"),
@@ -202,6 +215,14 @@ def _load_execution_policy(skill_name: str) -> dict:
 # smaller, on top of the model/effort tiering done in AI Configuration.
 MAX_LOG_CHARS = int(os.environ.get("SKILL_MAX_LOG_CHARS", "80000"))
 MAX_PATTERN_GROUPS = int(os.environ.get("SKILL_MAX_PATTERN_GROUPS", "40"))
+
+# Presentation compaction: a small variant of the dominant failure is useful
+# evidence, but it does not need its own numbered finding. Keep this separate
+# from MAX_PATTERN_GROUPS, which controls how much evidence is sent to Claude.
+# The IDs are still retained on the consolidated finding, so exact accounting
+# and auditability are unchanged.
+RELATED_TEMPLATE_MAX_SHARE = float(os.environ.get("SKILL_RELATED_TEMPLATE_MAX_SHARE", "0.20"))
+RELATED_TEMPLATE_MIN_COUNT = int(os.environ.get("SKILL_RELATED_TEMPLATE_MIN_COUNT", "3"))
 
 # AI cost-optimization mission Phase 2, Issue 7 fix: field-aware
 # normalization. Substituted out before grouping so lines that are "the
@@ -393,17 +414,33 @@ def _is_severe(line: str) -> bool:
     return bool(_SEVERITY_MARKERS.search(line))
 
 
-def _extract_lines(input_text: str) -> list[str]:
+def _extract_log_entries(input_text: str) -> list[tuple[str, dict, object]]:
     """log.txt is usually a JSON array of {"line": ...} evidence entries
     (per app.models.models.Evidence's LOG upload shape); fall back to
-    treating it as plain newline-delimited text for anything else."""
+    treating it as plain newline-delimited text for anything else.
+
+    The metadata tuple is used by the deterministic profile appendix inspired
+    by the supplied log-triage-summary skill: it preserves fields such as
+    detected level, service, and timestamp without sending a second copy of
+    the raw log to Claude.
+    """
     try:
         parsed = json.loads(input_text)
     except (json.JSONDecodeError, ValueError):
         parsed = None
     if isinstance(parsed, list) and parsed and isinstance(parsed[0], dict) and "line" in parsed[0]:
-        return [str(entry.get("line", "")) for entry in parsed]
-    return input_text.splitlines()
+        entries = []
+        for entry in parsed:
+            fields = entry.get("fields")
+            fields = fields if isinstance(fields, dict) else {}
+            timestamp = entry.get("date") or fields.get("timestamp")
+            entries.append((str(entry.get("line", "")), fields, timestamp))
+        return entries
+    return [(line, {}, None) for line in input_text.splitlines()]
+
+
+def _extract_lines(input_text: str) -> list[str]:
+    return [line for line, _fields, _timestamp in _extract_log_entries(input_text)]
 
 
 def _pattern_stats(
@@ -496,6 +533,245 @@ def _count_manifest_text(input_text: str) -> str | None:
         # healthy current run should not emit a generic remainder.
         parts.append(f"- id=other occurs {counts_by_id['other']:,} time(s): all remaining patterns")
     return "\n".join(parts)
+
+
+_LOG_LEVEL_RE = re.compile(r"\b(?:TRACE|DEBUG|INFO|WARN|ERROR|FATAL)\b", re.IGNORECASE)
+_LOGGER_RE = re.compile(
+    r"(?:TRACE|DEBUG|INFO|WARN|ERROR|FATAL)\s+(\S+)\s+--",
+    re.IGNORECASE,
+)
+_CAUSE_RE = re.compile(r"Caused by:\s+([^\n:]*(?:Exception|Error)[^\n:]*)", re.IGNORECASE)
+MAX_PROFILE_ITEMS = 15
+
+
+def _deterministic_log_profile(input_text: str) -> str | None:
+    """Build the compact metadata/root-cause profile from the full log.
+
+    This applies the supplied skill's first-pass analyzer to the Bridge
+    workflow. It is deterministic and bounded: only top counters and the
+    time range are appended, never giant raw examples or stack traces.
+    """
+    entries = _extract_log_entries(input_text)
+    if not entries:
+        return None
+
+    level_counts: Counter[str] = Counter()
+    service_counts: Counter[str] = Counter()
+    logger_counts: Counter[str] = Counter()
+    cause_counts: Counter[str] = Counter()
+    timestamps: list[str] = []
+    for line, fields, timestamp in entries:
+        level = fields.get("detected_level")
+        level = str(level) if level else None
+        if not level:
+            match = _LOG_LEVEL_RE.search(line)
+            level = match.group(0).upper() if match else "unknown"
+        level_counts[level] += 1
+
+        service = fields.get("app") or fields.get("service_name")
+        if service:
+            service_counts[str(service)] += 1
+
+        first_line = line.split("\n", 1)[0]
+        logger_match = _LOGGER_RE.search(first_line)
+        if logger_match:
+            logger_counts[logger_match.group(1)] += 1
+
+        for cause in _CAUSE_RE.findall(line):
+            cause_counts[cause.strip()[:100]] += 1
+
+        if timestamp:
+            timestamps.append(str(timestamp))
+
+    # For plain text with no extra metadata, the existing pattern manifest is
+    # the more compact and useful grounding seam. The supplied skill's
+    # metadata profile is most valuable for JSON aggregator exports.
+    if not (service_counts or logger_counts or timestamps or cause_counts):
+        return None
+
+    parts = [
+        f"[DETERMINISTIC LOG PROFILE: total_entries={len(entries):,}. "
+        "Computed over the full log; use this metadata to describe the "
+        "overall window and dominant components.]",
+        f"- levels: {dict(level_counts.most_common(MAX_PROFILE_ITEMS))}",
+    ]
+    if service_counts:
+        parts.append(f"- services: {dict(service_counts.most_common(MAX_PROFILE_ITEMS))}")
+    if logger_counts:
+        parts.append(f"- loggers: {dict(logger_counts.most_common(MAX_PROFILE_ITEMS))}")
+    if timestamps:
+        parts.append(f"- time_range: {min(timestamps)} -> {max(timestamps)}")
+    if cause_counts:
+        parts.append(
+            f"- root_causes_from_Caused_by: {dict(cause_counts.most_common(MAX_PROFILE_ITEMS))}"
+        )
+    return "\n".join(parts)
+
+
+_TEMPLATE_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "application",
+    "error",
+    "errors",
+    "failed",
+    "failure",
+    "for",
+    "log",
+    "operation",
+    "request",
+    "stable",
+    "template",
+    "the",
+}
+
+
+def _template_tokens(signature: str) -> set[str]:
+    """Return meaningful words used for conservative template similarity."""
+    tokens = set()
+    for token in re.findall(r"[a-z0-9][a-z0-9_-]*", signature.casefold()):
+        if token in _TEMPLATE_STOPWORDS or token == "#":
+            continue
+        # A small normalization keeps "file" and "files" comparable while
+        # avoiding a broad stemmer that could make unrelated error terms look
+        # alike.
+        tokens.add(token[:-1] if token.endswith("s") and len(token) > 3 else token)
+    return tokens
+
+
+def _templates_are_related(left: str, right: str) -> bool:
+    """Decide whether two stable templates are close enough to present together.
+
+    This intentionally requires more than one meaningful shared token. A
+    shared generic word such as ``error`` or ``timeout`` must not merge
+    unrelated services. Status codes and exception classes remain hard
+    boundaries because they often change the operator action.
+    """
+    if left == right:
+        return True
+
+    left_statuses = set(re.findall(r"\b(?:HTTP\s*)?([45]\d{2})\b", left, re.IGNORECASE))
+    right_statuses = set(re.findall(r"\b(?:HTTP\s*)?([45]\d{2})\b", right, re.IGNORECASE))
+    if left_statuses and right_statuses and left_statuses != right_statuses:
+        return False
+
+    left_exceptions = set(
+        re.findall(r"\b[A-Z][A-Za-z0-9_$]*(?:Exception|Error)\b", left)
+    )
+    right_exceptions = set(
+        re.findall(r"\b[A-Z][A-Za-z0-9_$]*(?:Exception|Error)\b", right)
+    )
+    if left_exceptions and right_exceptions and left_exceptions != right_exceptions:
+        return False
+
+    left_tokens = _template_tokens(left)
+    right_tokens = _template_tokens(right)
+    shared = left_tokens & right_tokens
+    union = left_tokens | right_tokens
+    if len(shared) >= 2 and union and len(shared) / len(union) >= 0.20:
+        return True
+
+    # Catch small wording changes in otherwise identical templates without
+    # allowing one-word matches to collapse unrelated findings.
+    return len(shared) >= 2 and SequenceMatcher(None, left.casefold(), right.casefold()).ratio() >= 0.72
+
+
+def _consolidate_related_findings(
+    normalized: dict,
+    all_ids: dict[str, str],
+    counts_by_id: dict[str, int],
+    severe: dict[str, bool],
+    total: int,
+) -> None:
+    """Fold low-volume near-duplicate findings into the dominant finding.
+
+    The model can still choose the narrative and labels. This pass only
+    reduces presentation noise after exact IDs have been validated. Every
+    merged pattern ID is kept on the dominant finding and its count is added,
+    so no entries disappear and no model arithmetic is trusted.
+    """
+    signature_by_id = {pattern_id: signature for signature, pattern_id in all_ids.items()}
+    order_by_id = {pattern_id: index for index, pattern_id in enumerate(all_ids.values())}
+
+    candidates: list[tuple[str, dict]] = []
+    for group_name in ("key_finds", "secondary_finds"):
+        findings = normalized.get(group_name)
+        if not isinstance(findings, list):
+            continue
+        for finding in findings:
+            if not isinstance(finding, dict):
+                continue
+            ids = [
+                pattern_id
+                for pattern_id in finding.get("pattern_ids", [])
+                if isinstance(pattern_id, str) and pattern_id in counts_by_id
+            ]
+            if ids:
+                candidates.append((group_name, finding))
+
+    if not candidates:
+        return
+
+    key_candidates = [finding for group, finding in candidates if group == "key_finds"]
+    anchor = max(
+        key_candidates or [finding for _group, finding in candidates],
+        key=lambda finding: sum(counts_by_id[pattern_id] for pattern_id in finding["pattern_ids"]),
+    )
+
+    def ids_for(finding: dict) -> list[str]:
+        return [
+            pattern_id
+            for pattern_id in finding.get("pattern_ids", [])
+            if isinstance(pattern_id, str) and pattern_id in counts_by_id
+        ]
+
+    def count_for(finding: dict) -> int:
+        return sum(counts_by_id[pattern_id] for pattern_id in ids_for(finding))
+
+    anchor_ids = ids_for(anchor)
+    anchor_signatures = [signature_by_id[pattern_id] for pattern_id in anchor_ids]
+    merged_any = False
+
+    for group_name, finding in list(candidates):
+        if finding is anchor:
+            continue
+        ids = ids_for(finding)
+        if not ids:
+            continue
+        source_count = count_for(finding)
+        anchor_count = count_for(anchor)
+        if source_count > max(RELATED_TEMPLATE_MIN_COUNT, anchor_count * RELATED_TEMPLATE_MAX_SHARE):
+            continue
+        source_signatures = [signature_by_id[pattern_id] for pattern_id in ids]
+        if any(severe.get(signature, False) for signature in source_signatures + anchor_signatures):
+            continue
+        if not all(
+            any(_templates_are_related(source, target) for target in anchor_signatures)
+            for source in source_signatures
+        ):
+            continue
+
+        anchor_ids.extend(ids)
+        anchor_signatures.extend(source_signatures)
+        normalized[group_name].remove(finding)
+        merged_any = True
+
+    if not merged_any:
+        return
+
+    anchor_ids.sort(key=lambda pattern_id: order_by_id[pattern_id])
+    anchor["pattern_ids"] = anchor_ids
+    merged_count = sum(counts_by_id[pattern_id] for pattern_id in anchor_ids)
+    anchor["count"] = merged_count
+    anchor["percentage"] = round((merged_count / total) * 100, 2) if total else 0.0
+    anchor["detail_en"] = (
+        f"{anchor.get('detail_en', '').strip()} Related lower-volume templates are grouped "
+        "under this dominant failure."
+    ).strip()
+    anchor["detail_zh"] = (
+        f"{anchor.get('detail_zh', '').strip()} 相关的低频模板已归并到该主要故障下。"
+    ).strip()
 
 
 def _reconcile_log_triage_counts(result: dict, input_text: str) -> dict:
@@ -596,6 +872,10 @@ def _reconcile_log_triage_counts(result: dict, input_text: str) -> dict:
             }
         )
         accounted += count
+
+    # Keep the exact pattern IDs/counts, but avoid producing one visible item
+    # for every small wording variation of the dominant failure.
+    _consolidate_related_findings(normalized, all_ids, counts_by_id, severe, total)
     if mentioned_other and not order:
         # Keep the result schema's non-empty finding invariant meaningful for
         # an empty/degenerate input without reviving the generic catch-all.
@@ -651,6 +931,9 @@ def _compact_log_if_oversized(input_text: str) -> str:
             f"--- {len(omitted):,} additional low-frequency, non-severe pattern(s) not shown "
             f"({omitted_lines:,} lines total) ---"
         )
+    profile = _deterministic_log_profile(input_text)
+    if profile:
+        parts.append(profile)
     manifest = _count_manifest_text(input_text)
     if manifest:
         parts.append(manifest)
@@ -680,10 +963,19 @@ def _deterministic_stats_appendix(input_text: str) -> str | None:
     stats` gives the oversized path, as a short appendix appended after
     the (still verbatim, untruncated) raw log — never a replacement for
     it. Returns None for an empty log (nothing to ground)."""
+    parts = []
+    profile = _deterministic_log_profile(input_text)
+    if profile:
+        parts.append(profile)
     manifest = _count_manifest_text(input_text)
     if manifest:
-        return manifest.replace("DETERMINISTIC COUNT MANIFEST", "DETERMINISTIC COUNT MANIFEST — exact, not estimates")
-    return None
+        parts.append(
+            manifest.replace(
+                "DETERMINISTIC COUNT MANIFEST",
+                "DETERMINISTIC COUNT MANIFEST — exact, not estimates",
+            )
+        )
+    return "\n\n".join(parts) if parts else None
 
 
 # Phase 4 (effort escalation): ordering used to decide whether escalating

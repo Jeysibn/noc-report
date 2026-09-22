@@ -296,6 +296,55 @@ def test_unmatched_narrative_finding_is_not_mislabeled_as_exact_other():
     assert normalized["secondary_finds"][-1]["count"] == 1
 
 
+def test_low_volume_related_template_is_grouped_under_dominant_finding():
+    log_text = "\n".join(
+        ["ERROR file does not exist"] * 100
+        + ["ERROR input file List is null or empty"] * 2
+        + ["ERROR payment authorization failed"]
+    )
+    normalized = entrypoint._reconcile_log_triage_counts(
+        {
+            "key_finds": [{
+                "label_en": "Export task output file missing", "label_zh": "导出任务输出文件缺失",
+                "count": 100, "percentage": 97.0, "pattern_ids": ["p001"],
+                "detail_en": "The export output file is missing.", "detail_zh": "导出输出文件缺失。",
+            }],
+            "secondary_finds": [],
+        },
+        log_text,
+    )
+
+    findings = normalized["key_finds"] + normalized["secondary_finds"]
+    assert len(findings) == 2
+    assert normalized["key_finds"][0]["pattern_ids"] == ["p001", "p002"]
+    assert normalized["key_finds"][0]["count"] == 102
+    assert normalized["key_finds"][0]["percentage"] == round(102 / 103 * 100, 2)
+    assert sum(finding["count"] or 0 for finding in findings) == 103
+    assert "Related lower-volume templates" in normalized["key_finds"][0]["detail_en"]
+
+
+def test_related_grouping_keeps_distinct_http_statuses_separate():
+    log_text = "\n".join(
+        ["ERROR NDRP API returned HTTP 400 invalid search string"] * 100
+        + ["ERROR NDRP API error HTTP 503 upstream unavailable"] * 2
+    )
+    normalized = entrypoint._reconcile_log_triage_counts(
+        {
+            "key_finds": [{
+                "label_en": "HTTP 400", "label_zh": "HTTP 400",
+                "count": 100, "percentage": 98.0, "pattern_ids": ["p001"],
+                "detail_en": "d", "detail_zh": "细节",
+            }],
+            "secondary_finds": [],
+        },
+        log_text,
+    )
+
+    assert len(normalized["key_finds"] + normalized["secondary_finds"]) == 2
+    assert normalized["key_finds"][0]["pattern_ids"] == ["p001"]
+    assert normalized["secondary_finds"][0]["pattern_ids"] == ["p002"]
+
+
 def test_run_skill_appends_deterministic_grounding_for_a_small_log(monkeypatch, tmp_path):
     """run_skill's log-triage-summary branch must append the grounding
     appendix (not just compact when oversized) so a small log's prompt
@@ -320,6 +369,43 @@ def test_run_skill_appends_deterministic_grounding_for_a_small_log(monkeypatch, 
 
     assert "exact, not estimates" in seen["prompt"]
     assert "occurs 5 time(s)" in seen["prompt"]
+
+
+def test_deterministic_profile_uses_json_log_metadata_and_causes():
+    log_text = json.dumps(
+        [
+            {
+                "date": "2026-09-22T10:00:00Z",
+                "fields": {
+                    "detected_level": "ERROR",
+                    "app": "cache-service",
+                    "timestamp": "2026-09-22T10:00:00Z",
+                },
+                "line": (
+                    "ERROR CacheService -- refresh failed\\n"
+                    "Caused by: java.util.concurrent.TimeoutException: waiting"
+                ),
+            },
+            {
+                "date": "2026-09-22T11:00:00Z",
+                "fields": {
+                    "detected_level": "WARN",
+                    "service_name": "ndrp-client",
+                    "timestamp": "2026-09-22T11:00:00Z",
+                },
+                "line": "WARN NdrpClient -- upstream unavailable",
+            },
+        ]
+    )
+
+    profile = entrypoint._deterministic_log_profile(log_text)
+
+    assert profile is not None
+    assert "total_entries=2" in profile
+    assert "cache-service" in profile
+    assert "ndrp-client" in profile
+    assert "time_range: 2026-09-22T10:00:00Z -> 2026-09-22T11:00:00Z" in profile
+    assert "TimeoutException" in profile
 
 
 # --- Skill Runtime mission Phase 20: prove a brand-new skill with a wholly

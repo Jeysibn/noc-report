@@ -268,14 +268,6 @@ export function LogAnalysisPanel({
                     finds={currentRun.result.secondaryFinds}
                     lang="en"
                   />
-                  <p className="mt-3 font-medium">Likely cause</p>
-                  <p className="mt-1 text-muted">
-                    {currentRun.result.likelyCauseEn}
-                  </p>
-                  <p className="mt-3 font-medium">Recommended action</p>
-                  <p className="mt-1 text-muted">
-                    {currentRun.result.recommendedActionEn}
-                  </p>
                 </div>
                 <div>
                   <p className="font-medium">中文 (Chinese)</p>
@@ -292,14 +284,6 @@ export function LogAnalysisPanel({
                     finds={currentRun.result.secondaryFinds}
                     lang="zh"
                   />
-                  <p className="mt-3 font-medium">最可能原因</p>
-                  <p className="mt-1 text-muted">
-                    {currentRun.result.likelyCauseZh}
-                  </p>
-                  <p className="mt-3 font-medium">建议措施</p>
-                  <p className="mt-1 text-muted">
-                    {currentRun.result.recommendedActionZh}
-                  </p>
                 </div>
               </div>
             </div>
