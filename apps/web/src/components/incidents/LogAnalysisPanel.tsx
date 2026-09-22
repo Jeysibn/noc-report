@@ -12,15 +12,16 @@ import type {
 } from "@/types/analysis";
 
 const POLL_INTERVAL_MS = 3000;
-const IN_FLIGHT: AnalysisJobStatus[] = ["QUEUED", "PROCESSING"];
+const IN_FLIGHT: AnalysisJobStatus[] = ["QUEUED", "PROCESSING", "RETRYING"];
 
 const statusPill: Record<
   AnalysisJobStatus,
-  { label: string; status: "neutral" | "info" | "good" | "critical" }
+  { label: string; status: "neutral" | "info" | "good" | "warning" | "critical" }
 > = {
   NOT_ANALYZED: { label: "Not analyzed", status: "neutral" },
   QUEUED: { label: "Queued", status: "info" },
   PROCESSING: { label: "Processing", status: "info" },
+  RETRYING: { label: "Retrying", status: "warning" },
   COMPLETED: { label: "Completed", status: "good" },
   FAILED: { label: "Failed", status: "critical" },
 };
@@ -187,7 +188,7 @@ export function LogAnalysisPanel({
       {hasLog && canAnalyze && (
         <>
           <p className="text-sm text-muted">
-            Analysis engine is not currently configured. Historical results remain available below.
+            Analyze the attached log with the configured AI analysis runtime. Historical results remain available below.
           </p>
 
           <Button onClick={requestAnalysis} disabled={isBusy}>

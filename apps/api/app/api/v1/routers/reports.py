@@ -310,6 +310,14 @@ def generate_report(
     # Do not freeze, upload, or enqueue anything while the semantic runtime
     # is absent. This keeps the outbox free of unserviceable work.
     require_ai_runtime()
+    if not settings.daily_report_ai_enabled:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "DAILY_REPORT_RUNTIME_UNAVAILABLE",
+                "message": "Daily Alert Report AI generation is not enabled yet; log analysis must pass its quality gate first.",
+            },
+        )
 
     next_version = _allocate_report_version(db, shift)
 

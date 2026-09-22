@@ -1,0 +1,104 @@
+import json
+import shutil
+from pathlib import Path
+from types import SimpleNamespace
+
+import noc_bridge.worker as worker_module
+from noc_bridge.hermes import HermesResult
+from noc_bridge.worker import WorkerMetrics, process_message
+
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+class _Connection:
+    def close(self):
+        return None
+
+
+def test_process_message_verifies_preprocesses_calls_fake_hermes_and_uploads(monkeypatch, tmp_path):
+    uploaded = []
+    evidence_text = "2026-09-23T01:00:00Z ERROR GET /payments ElasticsearchTimeoutException\n"
+
+    monkeypatch.setattr(worker_module, "get_db_connection", lambda _url: _Connection())
+    monkeypatch.setattr(
+        worker_module,
+        "_incident_and_evidence",
+        lambda _conn, _message: (
+            {"id": "incident-1", "title": "Payment timeout", "triggered_at": None, "recovered_at": None},
+            {"bucket": "noc-evidence", "key": "incident-1/log", "sha256": "a" * 64, "content_version": "v1", "filename": "payments.log"},
+        ),
+    )
+    monkeypatch.setattr(worker_module, "get_client", lambda _settings: object())
+
+    def fake_materialize(_conn, _skill_name, _skill_hash, *, snapshot_id, execution_hash, dest_root):
+        destination = Path(dest_root) / "log-triage-summary"
+        destination.mkdir(parents=True)
+        source = ROOT / "skills" / "log-triage-summary"
+        shutil.copy2(source / "SKILL.md", destination / "SKILL.md")
+        shutil.copy2(source / "output.schema.json", destination / "output.schema.json")
+
+    monkeypatch.setattr(worker_module, "materialize_snapshot", fake_materialize)
+
+    def fake_download(_client, *, bucket, object_key, dest_path, expected_sha256, version_id):
+        Path(dest_path).write_text(evidence_text, encoding="utf-8")
+
+    monkeypatch.setattr(worker_module, "download_object", fake_download)
+
+    def fake_upload(_client, *, bucket, object_key, src_path):
+        uploaded.append((bucket, object_key, json.loads(Path(src_path).read_text(encoding="utf-8"))))
+
+    monkeypatch.setattr(worker_module, "upload_artifact", fake_upload)
+
+    class FakeHermes:
+        def __init__(self, _settings):
+            pass
+
+        def analyze(self, *, payload, skill_md, output_schema):
+            pattern_id = payload["statistics"]["pattern_manifest"][0]["id"]
+            return HermesResult(
+                result={
+                    "total_entries": 999,
+                    "summary_zh": "日志显示重复错误。证据仅限于该日志。",
+                    "summary_en": "The log shows a repeated error. The evidence is limited to this file.",
+                    "key_finds": [{
+                        "id": "timeout",
+                        "label_en": "Timeout",
+                        "label_zh": "超时",
+                        "count": 999,
+                        "percentage": 99.9,
+                        "pattern_ids": [pattern_id],
+                        "detail_en": "The timeout pattern is repeated in the payment path.",
+                        "detail_zh": "支付路径中重复出现超时模式。",
+                    }],
+                    "secondary_finds": [],
+                    "severity_signal": "high",
+                    "confidence": 0.8,
+                },
+                telemetry={"provider": "fake", "model": "fake-model"},
+            )
+
+    settings = SimpleNamespace(
+        database_url="postgresql://test",
+        minio_bucket_job_artifacts="noc-job-artifacts",
+        hermes_max_output_attempts=1,
+        hermes_version="test-hermes",
+    )
+    result = process_message(
+        {
+            "job_id": "job-1",
+            "job_type": "log_triage",
+            "skill_name": "log-triage-summary",
+            "skill_hash": None,
+            "skill_snapshot_id": "snapshot-1",
+            "skill_execution_hash": "execution-1",
+        },
+        settings=settings,
+        metrics=WorkerMetrics(),
+        hermes_client_factory=FakeHermes,
+    )
+
+    assert result["output"]["total_entries"] == 1
+    assert result["output"]["key_finds"][0]["count"] == 1
+    assert result["telemetry"]["evidence_sha256"] == "a" * 64
+    assert [item[1] for item in uploaded] == ["jobs/job-1/result.json", "jobs/job-1/telemetry.json"]

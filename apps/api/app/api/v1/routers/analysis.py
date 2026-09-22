@@ -61,7 +61,7 @@ SKILL_VERSION = str((yaml.safe_load(_SOURCE_MANIFEST.read_text()) or {}).get("ve
 #                              schema and preprocessor.
 # SKILL_VERSION remains a compatibility display alias for older API clients;
 # the immutable snapshot hash, not this label, selects execution or cache data.
-PREPROCESSOR_VERSION = "6"
+PREPROCESSOR_VERSION = "7"
 AI_POLICY_VERSION = "1"
 CACHE_CONTRACT_VERSION = f"{PREPROCESSOR_VERSION}.{AI_POLICY_VERSION}"
 
@@ -126,6 +126,12 @@ def _find_cached_analysis_run(
         AnalysisRun.skill_name == SKILL_NAME,
         AnalysisRun.skill_hash == skill_hash,
         AnalysisRun.cache_contract_version == CACHE_CONTRACT_VERSION,
+        # The cache is only valid for the exact immutable evidence bytes that
+        # produced the prior run.  Checking merely that the requested
+        # evidence has *a* checksum is not sufficient: without this predicate
+        # a result from another incident/log could be reused when all skill
+        # axes happen to match.
+        AnalysisRun.input_manifest_sha256 == log_evidence.sha256,
         AnalysisRun.result_json.is_not(None),
     ]
     if skill_execution_hash is not None:

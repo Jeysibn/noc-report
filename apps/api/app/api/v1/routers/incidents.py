@@ -1,7 +1,7 @@
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import delete, exists, func, select
+from sqlalchemy import delete, exists, func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -15,6 +15,7 @@ from app.schemas.schemas import (
     IncidentCreate,
     IncidentOut,
     IncidentPage,
+    IncidentReadinessOut,
     IncidentTimelineEventOut,
     IncidentUpdate,
 )
@@ -42,6 +43,7 @@ _STATUS_TO_ANALYSIS_STATUS = {
     "COMPLETED": "completed",
     "FAILED": "failed",
     "QUEUED": "queued",
+    "RETRYING": "retrying",
 }
 
 
@@ -137,9 +139,16 @@ def create_incident(
 ) -> IncidentOut:
     current_shift = db.scalar(select(Shift).where(Shift.state == "active"))
 
-    # _next_display_id is a read-then-write with no locking, so two
-    # concurrent requests can still compute the same display_id; retry once
-    # with a freshly recomputed id rather than surface a 500 for that race.
+    if body.status == "recovered" and body.recovered_at is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Recovered incidents require recovered_at.")
+    if body.status != "recovered" and body.recovered_at is not None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Only recovered incidents may have recovered_at.")
+
+    # Serialize the read-then-write display-id allocation at the transaction
+    # level. The unique constraint remains the final guard, but advisory
+    # locking prevents concurrent requests from repeatedly selecting the same
+    # highest suffix and relying on collision retries.
+    db.execute(text("SELECT pg_advisory_xact_lock(48190217)"))
     for attempt in range(2):
         incident = Incident(
             display_id=_next_display_id(db),
@@ -177,6 +186,36 @@ def create_incident(
     db.commit()
     db.refresh(incident)
     return incident
+
+
+@router.get("/readiness", response_model=list[IncidentReadinessOut])
+def list_incident_readiness(
+    shift_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_permission("incident.read")),
+) -> list[IncidentReadinessOut]:
+    """Return only the fields needed by shift report polling.
+
+    The full incident list remains available for normal browsing, while this
+    narrow projection avoids repeatedly transferring notes, links, timestamps,
+    and other incident details every few seconds just to render readiness.
+    """
+    incidents = list(
+        db.scalars(
+            select(Incident)
+            .where(Incident.shift_id == shift_id)
+            .order_by(Incident.created_at)
+        )
+    )
+    return [
+        IncidentReadinessOut(
+            id=item.id,
+            title=item.title,
+            has_log=derived.has_log,
+            analysis_status=derived.analysis_status,
+        )
+        for item, derived in zip(incidents, _attach_derived(db, incidents), strict=True)
+    ]
 
 
 @router.get("/{incident_id}", response_model=IncidentOut)
@@ -256,7 +295,7 @@ def get_incident_timeline(
                     detail={"job_id": str(job.id), "job_type": job.job_type},
                 )
             )
-        if job.completed_at is not None:
+        if job.completed_at is not None or job.status == "RETRYING":
             if job.status == "COMPLETED":
                 events.append(
                     IncidentTimelineEventOut(
@@ -266,12 +305,12 @@ def get_incident_timeline(
                         detail={"job_id": str(job.id), "job_type": job.job_type},
                     )
                 )
-            elif job.status == "FAILED":
+            elif job.status in {"FAILED", "RETRYING"}:
                 events.append(
                     IncidentTimelineEventOut(
-                        event_type="job_failed",
-                        label=f"{kind.capitalize()} failed",
-                        occurred_at=job.completed_at,
+                        event_type="job_retrying" if job.status == "RETRYING" else "job_failed",
+                        label=f"{kind.capitalize()} retrying" if job.status == "RETRYING" else f"{kind.capitalize()} failed",
+                        occurred_at=job.completed_at or job.queued_at,
                         detail={
                             "job_id": str(job.id),
                             "job_type": job.job_type,
@@ -305,7 +344,15 @@ def update_incident(
     if incident is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Incident not found")
 
-    for field, value in body.model_dump(exclude_unset=True).items():
+    changes = body.model_dump(exclude_unset=True)
+    next_status = changes.get("status", incident.status)
+    next_recovered_at = changes.get("recovered_at", incident.recovered_at)
+    if next_status == "recovered" and next_recovered_at is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Recovered incidents require recovered_at.")
+    if next_status != "recovered" and next_recovered_at is not None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Only recovered incidents may have recovered_at.")
+
+    for field, value in changes.items():
         setattr(incident, field, value)
     incident.updated_by = current_user.id
 

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { incidentService, reportService, shiftService } from "@/services";
-import type { Incident, Shift } from "@/types/domain";
+import type { Shift } from "@/types/domain";
+import type { IncidentReadiness as IncidentReadinessRow } from "@/services/incident.service";
 import type { ReportJobStatus, ReportRun } from "@/types/report";
 import { Card, CardHeader, CardTitle } from "@/components/ui/Card";
 import { ReportPreview } from "@/components/ReportPreview";
@@ -24,18 +25,23 @@ const readinessPill: Record<
 
 const jobPill: Record<
   ReportJobStatus,
-  { label: string; status: "neutral" | "info" | "good" | "critical" }
+  { label: string; status: "neutral" | "info" | "good" | "warning" | "critical" }
 > = {
   QUEUED: { label: "Queued", status: "info" },
   PROCESSING: { label: "Generating", status: "info" },
+  RETRYING: { label: "Retrying", status: "warning" },
   COMPLETED: { label: "Completed", status: "good" },
   FAILED: { label: "Failed", status: "critical" },
 };
 
-const IN_FLIGHT: ReportJobStatus[] = ["QUEUED", "PROCESSING"];
+const IN_FLIGHT: ReportJobStatus[] = ["QUEUED", "PROCESSING", "RETRYING"];
 const POLL_INTERVAL_MS = 3000;
+// Phase 2 is intentionally not exposed until the Phase 1 Hermes log-quality
+// gate passes. The backend enforces the same gate; this prevents an operator
+// from submitting a job that the current worker cannot consume.
+const DAILY_REPORT_ENABLED = false;
 
-function readinessFor(incident: Incident): IncidentReadiness {
+function readinessFor(incident: IncidentReadinessRow): IncidentReadiness {
   if (!incident.hasLog) return "NO_LOG";
   return incident.analysisStatus === "completed"
     ? "READY"
@@ -52,7 +58,7 @@ function readinessFor(incident: Incident): IncidentReadiness {
  */
 export function ShiftReport() {
   const [shift, setShift] = useState<Shift | null>(null);
-  const [incidents, setIncidents] = useState<Incident[]>([]);
+  const [incidents, setIncidents] = useState<IncidentReadinessRow[]>([]);
   const [versions, setVersions] = useState<ReportRun[]>([]);
   const [versionsLoading, setVersionsLoading] = useState(false);
   const [versionsError, setVersionsError] = useState<string | null>(null);
@@ -120,9 +126,9 @@ export function ShiftReport() {
     let cancelled = false;
     const refreshReadiness = () => {
       incidentService
-        .list({ shiftId, limit: 0 })
-        .then((page) => {
-          if (!cancelled) setIncidents(page.items);
+        .listReadiness(shiftId)
+        .then((rows) => {
+          if (!cancelled) setIncidents(rows);
         })
         .catch((err) => {
           if (!cancelled) setRequestError(err instanceof ApiError ? err.message : "Could not load incidents.");
@@ -303,7 +309,7 @@ export function ShiftReport() {
           {canGenerateReport && (
             <>
               <p className="text-sm text-muted">
-                Analysis engine is not currently configured. Historical reports remain available below.
+                Daily Alert Report generation is not enabled until Hermes log-analysis quality has passed its Phase 1 gate.
               </p>
               <p className="text-sm text-muted">
                 Skill: Daily Alert Report (fixed)
@@ -315,7 +321,7 @@ export function ShiftReport() {
                 </p>
               )}
               <div className="flex items-center gap-3">
-                <Button onClick={generateReport} disabled={isBusy || !shift}>
+                <Button onClick={generateReport} disabled={isBusy || !shift || !DAILY_REPORT_ENABLED}>
                   {isBusy ? "Generating..." : "Generate report"}
                 </Button>
                 {current && (

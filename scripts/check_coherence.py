@@ -42,7 +42,7 @@ def main() -> int:
     require("localStorage" not in web_src, "frontend must not persist refresh credentials in localStorage")
 
     require("shift_incident_statement" in reports_router, "ReportSnapshot must use the shared shift scope")
-    require("shiftId, limit: 0" in shift_report, "Shift Report readiness must request the complete shift scope")
+    require("listReadiness(shiftId)" in shift_report, "Shift Report readiness must use the narrow readiness projection")
     require('"shift_timezone": shift_timezone' in reports_router, "ReportSnapshot must freeze shift_timezone")
     require("require_ai_runtime()" in analysis_router and "require_ai_runtime()" in reports_router, "AI actions must stop at the runtime boundary")
     require("AI_RUNTIME_UNAVAILABLE_CODE" in runtime, "runtime boundary must expose an intentional unavailable code")

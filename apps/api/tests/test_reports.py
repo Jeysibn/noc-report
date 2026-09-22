@@ -2,6 +2,7 @@
 from datetime import datetime, timezone
 
 from app.models.models import Job, OutboxEvent, Report, ReportSnapshot
+from app.core.config import settings
 from tests.conftest import auth_headers, make_user
 from tests.test_shifts import _create_active_shift
 
@@ -25,6 +26,20 @@ def test_report_generation_requires_permission(client, db_session):
     shift = _create_active_shift(db_session)
     response = client.post(f"/api/v1/shifts/{shift.id}/reports", json={})
     assert response.status_code == 401
+
+
+def test_daily_report_remains_gated_during_phase_one(client, db_session, monkeypatch):
+    make_user(db_session, "operator1", "NOC")
+    headers = auth_headers(client, "operator1")
+    shift = _create_active_shift(db_session)
+    monkeypatch.setattr(settings, "ai_runtime", "hermes")
+    monkeypatch.setattr(settings, "daily_report_ai_enabled", False)
+
+    response = client.post(f"/api/v1/shifts/{shift.id}/reports", json={}, headers=headers)
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "DAILY_REPORT_RUNTIME_UNAVAILABLE"
+    assert db_session.query(Job).count() == 0
 
 
 def test_historical_report_remains_readable(client, db_session):

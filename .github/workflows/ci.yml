@@ -26,6 +26,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: npm run check:coherence
+      - name: Validate the Hermes Compose contract
+        run: HERMES_API_KEY=ci-only-not-a-runtime-secret docker compose -f infrastructure/docker-compose.dev.yml config --quiet
 
   api:
     runs-on: ubuntu-latest

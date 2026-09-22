@@ -2,6 +2,7 @@ import type { Incident } from "@/types/domain";
 import type {
   IncidentCreateInput,
   IncidentPage,
+  IncidentReadiness,
   IncidentQuery,
   IncidentService,
   IncidentTimelineEvent,
@@ -25,6 +26,12 @@ export class MockIncidentService implements IncidentService {
 
   async get(id: string) {
     return mockIncidents.find((incident) => incident.id === id) ?? null;
+  }
+
+  async listReadiness(shiftId: string): Promise<IncidentReadiness[]> {
+    return mockIncidents
+      .filter((incident) => incident.shiftId === shiftId)
+      .map(({ id, title, hasLog, analysisStatus }) => ({ id, title, hasLog, analysisStatus }));
   }
 
   async create(input: IncidentCreateInput): Promise<Incident> {

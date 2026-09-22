@@ -199,6 +199,10 @@ as API keys in FastAPI or browser configuration. Pin `HERMES_IMAGE` and record
 the deployed image/version in the worker's `RUNTIME_HERMES_VERSION` for
 provenance.
 
+`DAILY_REPORT_AI_ENABLED` remains false until the Phase 1 log-analysis quality
+gate passes. The Phase 1 worker consumes `log_triage` only; enabling Hermes for
+log analysis must not create unserviceable `daily_report` jobs.
+
 The current profile disables terminal/process execution, filesystem mutation,
 browser/web/search, messaging, code execution, delegation, memory, image/TTS,
 and unrelated integrations. The read-only skill mount is the filesystem

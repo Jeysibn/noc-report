@@ -48,6 +48,10 @@ class Settings(BaseSettings):
     # queued. Keeping the default disabled preserves zero-config local tests.
     ai_runtime: Literal["disabled", "hermes"] = "disabled"
     hermes_base_url: str = "http://localhost:8642"
+    # Phase 2 remains explicitly gated. Enabling Hermes for log analysis must
+    # not make the existing Daily Report endpoint enqueue jobs that the Phase
+    # 1 worker cannot consume.
+    daily_report_ai_enabled: bool = False
 
     # Skill Runtime mission Phase 12: whether the outbox dispatcher runs as
     # a background thread embedded in this API process ("embedded", the

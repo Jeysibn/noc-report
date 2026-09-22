@@ -51,6 +51,11 @@ class HermesInvalidResponse(HermesError):
     error_code = "HERMES_INVALID_OUTPUT"
 
 
+class HermesPolicyError(HermesError):
+    retryable = False
+    error_code = "HERMES_TOOL_POLICY_VIOLATION"
+
+
 @dataclass(frozen=True)
 class HermesResult:
     result: dict
@@ -133,6 +138,16 @@ class HermesClient:
         except (json.JSONDecodeError, UnicodeDecodeError) as exc:
             raise HermesError("Hermes returned a non-JSON response") from exc
 
+    def verify_restricted_toolsets(self) -> None:
+        """Fail closed if the profile exposes a tool the NOC worker did not allow."""
+        response = self._request("/v1/toolsets")
+        toolsets = response.get("data")
+        if not isinstance(toolsets, list):
+            raise HermesPolicyError("Hermes toolset response is not a list")
+        enabled = [item.get("name", "unknown") for item in toolsets if isinstance(item, dict) and item.get("enabled") is True]
+        if enabled:
+            raise HermesPolicyError(f"Hermes NOC profile exposes disabled toolsets: {', '.join(enabled)}")
+
     def analyze(self, *, payload: dict, skill_md: str, output_schema: dict) -> HermesResult:
         started = time.monotonic()
         response = self._request(
@@ -155,8 +170,8 @@ class HermesClient:
                 or "invalid api key" in lowered
             ):
                 raise HermesProviderAuthenticationError("Hermes provider authentication failed")
-            if "rate limit" in lowered or "quota exceeded" in lowered:
-                raise HermesProviderTemporaryError("Hermes provider quota or rate limit")
+            if "rate limit" in lowered or "quota exceeded" in lowered or "too many requests" in lowered:
+                raise HermesProviderRateLimitError("Hermes provider quota or rate limit")
             result = json.loads(content)
             if not isinstance(result, dict):
                 raise ValueError("assistant content is not a JSON object")

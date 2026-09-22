@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 
 from app.models.models import Evidence, Incident, Job, OutboxEvent, Shift, ShiftDefinition
 from tests.conftest import auth_headers, make_user
+from tests.test_shifts import _create_active_shift
 
 
 def _incident_payload(**overrides):
@@ -84,6 +85,32 @@ def test_list_incidents_can_use_the_canonical_shift_scope(client, db_session):
     assert all(item["shift_id"] == str(shift_a.id) for item in body["items"])
 
 
+def test_incident_readiness_is_a_narrow_shift_projection(client, db_session):
+    make_user(db_session, "operator1", "NOC")
+    headers = auth_headers(client, "operator1")
+    shift = _create_active_shift(db_session)
+    db_session.add(Incident(
+        display_id="INC-READINESS-1",
+        shift_id=shift.id,
+        title="Readiness projection",
+        service="api",
+        environment="production",
+        status="open",
+        triggered_at=datetime.now(timezone.utc),
+    ))
+    db_session.commit()
+
+    response = client.get(f"/api/v1/incidents/readiness?shift_id={shift.id}", headers=headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload) == 1
+    assert payload[0]["title"] == "Readiness projection"
+    assert payload[0]["has_log"] is False
+    assert payload[0]["analysis_status"] == "not_analyzed"
+    assert set(payload[0]) == {"id", "title", "has_log", "analysis_status"}
+
+
 def test_update_incident(client, db_session):
     make_user(db_session, "operator1", "NOC")
     headers = auth_headers(client, "operator1")
@@ -94,11 +121,33 @@ def test_update_incident(client, db_session):
 
     updated = client.patch(
         f"/api/v1/incidents/{created['id']}",
-        json={"status": "recovered"},
+        json={"status": "recovered", "recovered_at": datetime.now(timezone.utc).isoformat()},
         headers=headers,
     )
     assert updated.status_code == 200
     assert updated.json()["status"] == "recovered"
+
+
+def test_recovery_status_requires_recovery_timestamp(client, db_session):
+    make_user(db_session, "operator1", "NOC")
+    headers = auth_headers(client, "operator1")
+    response = client.post(
+        "/api/v1/incidents",
+        json=_incident_payload(status="recovered"),
+        headers=headers,
+    )
+    assert response.status_code == 422
+
+
+def test_non_recovered_status_rejects_recovery_timestamp(client, db_session):
+    make_user(db_session, "operator1", "NOC")
+    headers = auth_headers(client, "operator1")
+    response = client.post(
+        "/api/v1/incidents",
+        json=_incident_payload(recovered_at=datetime.now(timezone.utc).isoformat()),
+        headers=headers,
+    )
+    assert response.status_code == 422
 
 
 def test_delete_incident_requires_delete_permission(client, db_session):

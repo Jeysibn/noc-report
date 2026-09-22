@@ -55,6 +55,10 @@ HERMES_API_KEY='replace-with-a-long-random-value' \
 docker compose -f infrastructure/docker-compose.dev.yml up -d postgres minio rabbitmq hermes ai-worker
 ```
 
+`HERMES_API_KEY` is required; Compose intentionally fails closed rather than
+using a shared development credential. For production, also set
+`RUNTIME_ENVIRONMENT=production` so the worker rejects missing or short keys.
+
 Configure the provider inside the dedicated Hermes profile before submitting a
 real analysis. See [`docs/architecture/provider-neutral-ai-runtime.md`](docs/architecture/provider-neutral-ai-runtime.md),
 [`docs/adr/0029-hermes-runtime-integration.md`](docs/adr/0029-hermes-runtime-integration.md),

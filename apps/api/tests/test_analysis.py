@@ -1,6 +1,7 @@
 """Analysis boundary and historical AnalysisRun coverage."""
 from datetime import datetime, timezone
 
+from app.api.v1.routers.analysis import _find_cached_analysis_run, CACHE_CONTRACT_VERSION
 from app.models.models import AnalysisRun, Evidence, Job, OutboxEvent
 from app.skills.registry import resolve_active_snapshot
 from tests.conftest import auth_headers, make_user
@@ -107,3 +108,62 @@ def test_historical_analysis_remains_readable(client, db_session):
     response = client.get(f"/api/v1/incidents/{incident_id}/analysis-runs", headers=headers)
     assert response.status_code == 200
     assert response.json()[0]["result"]["summary_en"] == "Historical result"
+
+
+def test_analysis_cache_requires_the_same_evidence_checksum(db_session):
+    incident = _create_incident_from_db(db_session)
+    snapshot = resolve_active_snapshot(db_session, "log-triage-summary")
+    job = Job(
+        job_type="log_triage",
+        status="COMPLETED",
+        incident_id=incident.id,
+        skill_name="log-triage-summary",
+        skill_hash=snapshot.content_hash,
+        skill_snapshot_id=snapshot.id,
+        skill_execution_hash="execution-hash",
+        correlation_id="cache-test-job",
+    )
+    db_session.add(job)
+    db_session.flush()
+    db_session.add(AnalysisRun(
+        incident_id=incident.id,
+        job_id=job.id,
+        result_json={"summary_zh": "结果", "summary_en": "result"},
+        skill_name="log-triage-summary",
+        skill_hash=snapshot.content_hash,
+        skill_snapshot_id=snapshot.id,
+        skill_execution_hash="execution-hash",
+        cache_contract_version=CACHE_CONTRACT_VERSION,
+        input_manifest_sha256="b" * 64,
+    ))
+    db_session.commit()
+
+    requested_evidence = Evidence(sha256="a" * 64)
+    assert _find_cached_analysis_run(
+        db_session,
+        log_evidence=requested_evidence,
+        requested_model=None,
+        requested_effort=None,
+        skill_hash=snapshot.content_hash,
+        skill_execution_hash="execution-hash",
+        skill_snapshot_id=snapshot.id,
+    ) is None
+
+
+def _create_incident_from_db(db_session):
+    from app.models.models import Incident
+    from tests.test_shifts import _create_active_shift
+
+    shift = _create_active_shift(db_session)
+    incident = Incident(
+        display_id="INC-CACHE-1",
+        shift_id=shift.id,
+        title="Cache identity test",
+        service="api",
+        environment="production",
+        status="open",
+        triggered_at=datetime.now(timezone.utc),
+    )
+    db_session.add(incident)
+    db_session.flush()
+    return incident

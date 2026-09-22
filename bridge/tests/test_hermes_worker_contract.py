@@ -2,6 +2,7 @@ import json
 
 from noc_bridge.hermes import (
     HermesClient,
+    HermesPolicyError,
     HermesProviderAuthenticationError,
     build_messages,
 )
@@ -120,3 +121,22 @@ def test_hermes_client_classifies_provider_authentication_content(monkeypatch):
         assert exc.retryable is False
     else:
         raise AssertionError("provider authentication warning must not become invalid JSON")
+
+
+def test_hermes_client_fails_closed_when_a_toolset_is_enabled(monkeypatch):
+    class Settings:
+        hermes_base_url = "http://hermes:8642"
+        hermes_api_key = "secret"
+        hermes_timeout_seconds = 10
+        hermes_profile = "noc-log-analysis"
+
+    client = HermesClient(Settings())
+    monkeypatch.setattr(client, "_request", lambda *_args, **_kwargs: {
+        "data": [{"name": "terminal", "enabled": True}],
+    })
+    try:
+        client.verify_restricted_toolsets()
+    except HermesPolicyError as exc:
+        assert exc.error_code == "HERMES_TOOL_POLICY_VIOLATION"
+    else:
+        raise AssertionError("enabled Hermes toolsets must fail closed")

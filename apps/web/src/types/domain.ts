@@ -12,7 +12,7 @@ export interface Incident {
   status: IncidentStatus;
   triggeredAt: string;
   hasLog: boolean;
-  analysisStatus: "not_analyzed" | "queued" | "running" | "completed" | "failed";
+  analysisStatus: "not_analyzed" | "queued" | "running" | "retrying" | "completed" | "failed";
 }
 
 export type ShiftType = "day" | "swing" | "night";

@@ -13,12 +13,15 @@ docker compose -f infrastructure/docker-compose.dev.yml up -d \
 
 The repository pins the verified Hermes image digest for `v0.21.4`
 (`2026.9.21`). Override `HERMES_IMAGE` and set `HERMES_VERSION` together when
-performing an intentional runtime upgrade.
+performing an intentional runtime upgrade. `HERMES_API_KEY` is required; the
+Compose file intentionally has no weak development fallback.
 
 Run the API separately with `AI_RUNTIME=hermes` after applying migrations and
 seeding the database. The local Compose file does not publish Hermes port
-8642. Check the worker at `http://localhost:8092/health` and check Hermes from
-inside the Compose network at `/health`.
+8642. The local Compose file does not publish worker health either. Check the
+worker with `docker exec noc-report-ai-worker python -c 'import urllib.request;
+print(urllib.request.urlopen("http://127.0.0.1:8092/health").read().decode())'`
+and check Hermes from inside the Compose network at `/health`.
 
 ## Manual Hermes setup boundary
 
@@ -45,9 +48,14 @@ listener health endpoint remains `http://hermes:8642/health`.
 
 The NOC profile is `noc-log-analysis`. It auto-loads the repository-controlled
 `log-triage-summary` skill from a read-only mount using Hermes'
-[external skill directory](https://github.com/NousResearch/hermes-agent/blob/main/docs/user-guide/skills.md)
+[external skill directory](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/features/skills.md)
 support. Do not edit the mounted skill from the container. Commit skill
 changes in Git, create a new immutable SkillSnapshot, and redeploy atomically.
+The worker also injects the exact immutable SkillSnapshot and output schema
+into each request; that frozen snapshot is authoritative for the AnalysisRun.
+Hermes terminal execution is configured for the Docker backend as defense in
+depth, but the deployment intentionally does not mount the Docker socket and
+the NOC profile disables terminal tools.
 
 ## Verify the flow
 
@@ -69,10 +77,10 @@ changes in Git, create a new immutable SkillSnapshot, and redeploy atomically.
 - Hermes health failure: inspect `docker logs noc-report-hermes`; confirm the
   internal key matches `RUNTIME_HERMES_API_KEY` and that profile/provider setup
   completed.
-- `GET /v1/skills` returning a Hermes-side 500 is not used by the NOC worker;
-  verify the read-only mounted skill and frozen SkillSnapshot instead. Track
-  the installed Hermes image/version before upgrading past this known runtime
-  compatibility issue.
+- `GET /v1/skills` must return successfully before enabling live profile skill
+  discovery. If it fails, stop at the worker's frozen SkillSnapshot path and
+  pin/upgrade Hermes to a compatible image before relying on auto-loaded
+  external skills.
 - Worker health failure: inspect `docker logs noc-report-ai-worker`; verify
   Postgres, MinIO, RabbitMQ, and the Hermes network are reachable.
 - Invalid output: the job is not marked successful. Inspect the bounded job

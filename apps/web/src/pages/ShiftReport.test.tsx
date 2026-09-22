@@ -12,6 +12,7 @@ const openShift = vi.fn();
 vi.mock("@/services", () => ({
   incidentService: {
     list: async () => ({ items: [] }),
+    listReadiness: async () => [],
   },
   shiftService: {
     getCurrentShift: () => getCurrentShift(),
@@ -44,7 +45,7 @@ afterEach(() => {
 });
 
 describe("ShiftReport", () => {
-  it("renders incident readiness and lets a report be generated", async () => {
+  it("renders incident readiness and keeps Phase 2 report generation gated", async () => {
     generateReport.mockResolvedValue({
       id: "report-1",
       shiftId: "shift-1",
@@ -75,12 +76,10 @@ describe("ShiftReport", () => {
     fireEvent.click(screen.getByRole("button", { name: /generate report/i }));
     await act(async () => {});
 
-    expect(generateReport).toHaveBeenCalledWith("shift-1", {});
-    expect(screen.getByText(/version 1/i)).toBeInTheDocument();
-    expect(screen.getAllByText(/queued/i).length).toBeGreaterThan(0);
+    expect(generateReport).not.toHaveBeenCalled();
   });
 
-  it("requests report generation without provider-specific selectors", async () => {
+  it("does not expose a report request before the Phase 1 gate", async () => {
     generateReport.mockResolvedValue({
       id: "report-2", shiftId: "shift-1", snapshotId: "snap-2", jobId: "job-2",
       version: 1, status: "QUEUED", model: "historical-runtime", effort: null,
@@ -91,7 +90,7 @@ describe("ShiftReport", () => {
     await act(async () => {});
     fireEvent.click(screen.getByRole("button", { name: /generate report/i }));
     await act(async () => {});
-    expect(generateReport).toHaveBeenCalledWith("shift-1", {});
+    expect(generateReport).not.toHaveBeenCalled();
   });
 
   it("shows a download button once a report is downloadable", async () => {

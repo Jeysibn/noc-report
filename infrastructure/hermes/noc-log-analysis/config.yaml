@@ -46,11 +46,24 @@ skills:
   auto_load:
     - log-triage-summary
   create_dir: /opt/data/skills
-  write_approval: true
+  # The repository-mounted skill directory is read-only and skills are not a
+  # Phase 1 capability. Do not create an approval workflow that could ever
+  # turn a runtime request into a skill mutation.
+  write_approval: false
 
 memory:
   memory_enabled: false
   user_profile_enabled: false
+
+# Defense in depth if a future profile change enables terminal execution:
+# never run commands in the Hermes container's host namespace. The NOC
+# deployment intentionally does not mount the Docker socket, so an accidental
+# terminal call fails closed rather than gaining host access.
+terminal:
+  backend: docker
+  docker_forward_env: []
+  docker_mount_cwd_to_workspace: false
+  container_persistent: false
 
 gateway:
   multiplex_profiles: true

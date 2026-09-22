@@ -21,10 +21,10 @@ from noc_bridge.db import (
     JobClaimDisposition,
     bump_attempt,
     claim_job,
-    fetch_job_row,
     get_connection as get_db_connection,
     mark_completed,
     mark_failed,
+    mark_retrying,
     renew_job_lease,
 )
 from noc_bridge.failures import TERMINAL, classify_failure
@@ -85,6 +85,9 @@ class WorkerMetrics:
             "schema_validation_failures": 0,
             "provider_failures": 0,
             "last_duration_ms": 0,
+            "last_preprocessing_duration_ms": 0,
+            "queue_depth": 0,
+            "runtime_ready": False,
         }
 
     def increment(self, name: str, value: int = 1) -> None:
@@ -94,6 +97,14 @@ class WorkerMetrics:
     def snapshot(self) -> dict:
         with self._lock:
             return dict(self.values)
+
+    def set_runtime_ready(self, ready: bool) -> None:
+        with self._lock:
+            self.values["runtime_ready"] = ready
+
+    def set_value(self, name: str, value) -> None:
+        with self._lock:
+            self.values[name] = value
 
 
 class _LeaseRenewer:
@@ -146,7 +157,7 @@ class _HealthHandler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         payload = {
-            "status": "healthy",
+            "status": "healthy" if (self.metrics and self.metrics.snapshot().get("runtime_ready", False)) else "degraded",
             "component": "ai-worker",
             "runtime": "hermes",
             "profile": self.runtime_profile,
@@ -247,7 +258,13 @@ def _error_detail(exc: BaseException) -> tuple[str, str]:
     return str(getattr(exc, "error_code", "WORKER_FAILURE")), type(exc).__name__
 
 
-def process_message(message: dict, *, settings, metrics: WorkerMetrics | None = None) -> dict:
+def process_message(
+    message: dict,
+    *,
+    settings,
+    metrics: WorkerMetrics | None = None,
+    hermes_client_factory=None,
+) -> dict:
     """Process one claimed job; separated from RabbitMQ for contract tests."""
     if message.get("job_type") != "log_triage":
         raise WorkerInputError("Phase 1 worker only accepts log_triage jobs")
@@ -288,14 +305,18 @@ def process_message(message: dict, *, settings, metrics: WorkerMetrics | None = 
             except UnicodeDecodeError as exc:
                 raise EvidenceVerificationError("log evidence is not valid UTF-8") from exc
 
+            preprocessing_started = time.monotonic()
             payload = build_hermes_input(
                 job_id=message["job_id"],
                 incident=incident,
                 evidence=evidence,
                 log_text=log_text,
             )
+            preprocessing_duration_ms = round((time.monotonic() - preprocessing_started) * 1000)
+            if metrics is not None:
+                metrics.set_value("last_preprocessing_duration_ms", preprocessing_duration_ms)
             statistics = payload["statistics"]
-            runtime = HermesClient(settings)
+            runtime = (hermes_client_factory or HermesClient)(settings)
             result = None
             output_attempts = max(1, int(settings.hermes_max_output_attempts))
             for output_attempt in range(output_attempts):
@@ -325,6 +346,7 @@ def process_message(message: dict, *, settings, metrics: WorkerMetrics | None = 
                 "preprocessing_ratio": round(len(json.dumps(payload, ensure_ascii=False)) / max(1, len(raw_bytes)), 4),
                 "confidence": output.get("confidence"),
                 "output_attempts": output_attempt + 1,
+                "preprocessing_duration_ms": preprocessing_duration_ms,
             }
             result_path = scratch_path / "result.json"
             telemetry_path = scratch_path / "telemetry.json"
@@ -348,9 +370,9 @@ def process_message(message: dict, *, settings, metrics: WorkerMetrics | None = 
 
 
 class Worker:
-    def __init__(self, settings):
+    def __init__(self, settings, metrics: WorkerMetrics | None = None):
         self.settings = settings
-        self.metrics = WorkerMetrics()
+        self.metrics = metrics or WorkerMetrics()
         self.storage_client = get_client(settings)
 
     def _settle_failure(self, channel, delivery_tag, message: dict, exc: BaseException) -> None:
@@ -365,6 +387,7 @@ class Worker:
             if disposition != TERMINAL and attempt < self.settings.max_attempts:
                 retry = {key: value for key, value in message.items() if not key.startswith("_")}
                 retry["attempt"] = attempt + 1
+                bump_attempt(conn, job_id, attempt + 1)
                 names = queue_names(message["job_type"])
                 channel.confirm_delivery()
                 channel.basic_publish(
@@ -373,6 +396,7 @@ class Worker:
                     body=json.dumps(retry).encode("utf-8"),
                     properties=None,
                 )
+                mark_retrying(conn, job_id, error_code=error_code, error_message=safe_message)
                 self.metrics.increment("retry_count")
             else:
                 send_to_dlq(channel, job_type=message["job_type"], body={
@@ -386,6 +410,13 @@ class Worker:
             channel.basic_ack(delivery_tag)
         finally:
             conn.close()
+
+    def _update_queue_depth(self, channel) -> None:
+        try:
+            count = channel.queue_declare(queue_names("log_triage")["main"], passive=True).method.message_count
+            self.metrics.set_value("queue_depth", count)
+        except Exception:
+            LOG.debug("unable to sample log-triage queue depth", exc_info=True)
 
     def handle_delivery(self, channel, method, _properties, body: bytes) -> None:
         try:
@@ -417,6 +448,7 @@ class Worker:
                 channel.basic_nack(method.delivery_tag, requeue=False)
                 return
             message["_claim_token"] = claimed["claim_token"]
+            bump_attempt(conn, job_id, int(message.get("attempt", 1)))
         finally:
             conn.close()
 
@@ -498,6 +530,10 @@ class Worker:
                 connection = get_rabbit_connection(self.settings.rabbitmq_url)
                 channel = connection.channel()
                 declare_topology(channel)
+                self._update_queue_depth(channel)
+                self.metrics.set_runtime_ready(False)
+                HermesClient(self.settings).verify_restricted_toolsets()
+                self.metrics.set_runtime_ready(True)
                 channel.basic_qos(prefetch_count=1)
                 channel.basic_consume(queue_names("log_triage")["main"], self.handle_delivery, auto_ack=False)
                 LOG.info("AI Worker ready profile=%s concurrency=%s", self.settings.hermes_profile, self.settings.max_concurrency)
@@ -513,12 +549,13 @@ class Worker:
 
 
 def main() -> None:
-    from noc_bridge.config import settings
+    from noc_bridge.config import assert_runtime_secrets_are_safe, settings
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    assert_runtime_secrets_are_safe()
     metrics = WorkerMetrics()
     start_health_server(settings, metrics)
-    Worker(settings).run_forever()
+    Worker(settings, metrics).run_forever()
 
 
 if __name__ == "__main__":

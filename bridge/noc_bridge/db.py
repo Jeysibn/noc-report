@@ -165,6 +165,20 @@ def mark_failed(
     return updated
 
 
+def mark_retrying(conn, job_id: uuid.UUID, *, error_code: str, error_message: str) -> bool:
+    """Persist a bounded retry without presenting it as terminal failure."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE jobs SET status = %s, completed_at = NULL, error_code = %s, "
+            "error_message = %s, claimed_at = NULL, claim_token = NULL, "
+            "lease_expires_at = NULL WHERE id = %s",
+            ("RETRYING", error_code, error_message, str(job_id)),
+        )
+        updated = cur.rowcount == 1
+    conn.commit()
+    return updated
+
+
 def bump_attempt(conn, job_id: uuid.UUID, attempt: int) -> None:
     with conn.cursor() as cur:
         cur.execute("UPDATE jobs SET attempt = %s WHERE id = %s", (attempt, str(job_id)))
@@ -214,7 +228,7 @@ def claim_job(conn, job_id: uuid.UUID, *, worker_id: str, lease_seconds: int) ->
             WHERE id = %(job_id)s
               AND status != 'COMPLETED'
               AND (
-                    status IN ('QUEUED', 'FAILED')
+                    status IN ('QUEUED', 'FAILED', 'RETRYING')
                     OR (status = 'PROCESSING' AND (lease_expires_at IS NULL OR lease_expires_at < %(now)s))
               )
             RETURNING *

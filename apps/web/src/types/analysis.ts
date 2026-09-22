@@ -11,7 +11,7 @@
  * or RUNNING state, so those never matched and left statusPill lookups
  * undefined for any in-flight job.
  */
-export type AnalysisJobStatus = "NOT_ANALYZED" | "QUEUED" | "PROCESSING" | "COMPLETED" | "FAILED";
+export type AnalysisJobStatus = "NOT_ANALYZED" | "QUEUED" | "PROCESSING" | "RETRYING" | "COMPLETED" | "FAILED";
 
 export type SeveritySignal = "low" | "medium" | "high" | "critical";
 

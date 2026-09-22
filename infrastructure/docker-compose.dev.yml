@@ -85,10 +85,11 @@ services:
         if [ ! -f "$$profile_dir/SOUL.md" ]; then
           hermes profile create noc-log-analysis
         fi
-        if [ ! -f "$$profile_dir/.noc-report-seeded" ]; then
-          cp /opt/noc-report/hermes/noc-log-analysis/config.yaml "$$profile_dir/config.yaml"
-          touch "$$profile_dir/.noc-report-seeded"
-        fi
+        # Profile config is repository-owned and must refresh on each image or
+        # skill-policy upgrade. Provider credentials remain in the profile
+        # .env and are intentionally preserved.
+        cp /opt/noc-report/hermes/noc-log-analysis/config.yaml "$$profile_dir/config.yaml"
+        touch "$$profile_dir/.noc-report-seeded"
         if ! grep -q '^API_SERVER_KEY=' "$$profile_dir/.env" 2>/dev/null; then
           printf '\nAPI_SERVER_KEY=%s\n' "$$API_SERVER_KEY" >> "$$profile_dir/.env"
         fi
@@ -97,7 +98,7 @@ services:
       API_SERVER_ENABLED: "true"
       API_SERVER_HOST: "0.0.0.0"
       API_SERVER_PORT: "8642"
-      API_SERVER_KEY: ${HERMES_API_KEY:-change-me-local-dev}
+      API_SERVER_KEY: ${HERMES_API_KEY:?Set HERMES_API_KEY before starting the Hermes stack}
       # The per-profile .env is created by the command above; this variable is
       # also present for the first profile bootstrap/setup invocation.
       HERMES_SKIP_CONFIG_MIGRATION: "1"
@@ -111,6 +112,11 @@ services:
     mem_limit: 4g
     cpus: 2.0
     pids_limit: 512
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8642/health', timeout=3)"]
       interval: 20s
@@ -133,9 +139,10 @@ services:
       RUNTIME_MINIO_ACCESS_KEY: noc-minio
       RUNTIME_MINIO_SECRET_KEY: noc-minio-secret
       RUNTIME_HERMES_BASE_URL: http://hermes:8642/p/noc-log-analysis
-      RUNTIME_HERMES_API_KEY: ${HERMES_API_KEY:-change-me-local-dev}
+      RUNTIME_HERMES_API_KEY: ${HERMES_API_KEY:?Set HERMES_API_KEY before starting the Hermes stack}
       RUNTIME_HERMES_PROFILE: noc-log-analysis
       RUNTIME_HERMES_VERSION: ${HERMES_VERSION:-v0.21.4-2026.9.21}
+      RUNTIME_ENVIRONMENT: ${RUNTIME_ENVIRONMENT:-development}
       RUNTIME_HEALTH_PORT: "8092"
       PYTHONPATH: /opt/noc-report/sandbox:/opt/noc-report/bridge
     depends_on:
@@ -152,9 +159,23 @@ services:
     networks:
       - default
       - hermes-internal
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     mem_limit: 768m
     cpus: 1.0
     pids_limit: 256
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8092/health', timeout=3)"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   noc-report-postgres-data:

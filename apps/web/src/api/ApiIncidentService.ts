@@ -2,6 +2,7 @@ import type { DashboardSummary, Incident } from "@/types/domain";
 import type {
   IncidentCreateInput,
   IncidentPage,
+  IncidentReadiness,
   IncidentQuery,
   IncidentService,
   IncidentTimelineEvent,
@@ -74,6 +75,21 @@ export class ApiIncidentService implements IncidentService {
       items: page.items.map(toIncident),
       total: page.total,
     };
+  }
+
+  async listReadiness(shiftId: string): Promise<IncidentReadiness[]> {
+    const rows = await httpRequest<Array<{
+      id: string;
+      title: string;
+      has_log: boolean;
+      analysis_status: Incident["analysisStatus"];
+    }>>(`/api/v1/incidents/readiness`, { query: { shift_id: shiftId } });
+    return rows.map((row) => ({
+      id: row.id,
+      title: row.title,
+      hasLog: row.has_log,
+      analysisStatus: row.analysis_status,
+    }));
   }
 
   async get(id: string): Promise<Incident | null> {

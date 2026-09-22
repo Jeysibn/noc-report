@@ -41,3 +41,19 @@ class RuntimeSettings(BaseSettings):
 
 
 settings = RuntimeSettings()
+
+
+def assert_runtime_secrets_are_safe(config: RuntimeSettings = settings) -> None:
+    """Fail closed for production worker deployments.
+
+    Hermes is an authenticated internal service. A missing or placeholder
+    bearer key must never allow the worker to start and repeatedly send
+    unauthenticated requests, especially because the Compose stack can also
+    run the Hermes API on an internal 0.0.0.0 listener.
+    """
+    if config.environment != "production":
+        return
+    if not config.hermes_api_key or config.hermes_api_key in {"change-me-local-dev", "dev-only-secret-change-me"}:
+        raise RuntimeError("Refusing to start the production AI worker without a real HERMES_API_KEY.")
+    if len(config.hermes_api_key) < 32:
+        raise RuntimeError("Refusing to start the production AI worker with a short HERMES_API_KEY.")

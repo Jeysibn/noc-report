@@ -16,6 +16,13 @@ export interface IncidentPage {
   total: number;
 }
 
+export interface IncidentReadiness {
+  id: string;
+  title: string;
+  hasLog: boolean;
+  analysisStatus: Incident["analysisStatus"];
+}
+
 export interface IncidentCreateInput {
   title: string;
   service: string;
@@ -47,6 +54,7 @@ export interface IncidentUpdateInput {
 /** Behind this interface: Mock now, Api later — call sites never change. */
 export interface IncidentService {
   list(params: IncidentQuery): Promise<IncidentPage>;
+  listReadiness(shiftId: string): Promise<IncidentReadiness[]>;
   get(id: string): Promise<Incident | null>;
   create(input: IncidentCreateInput): Promise<Incident>;
   update(id: string, input: IncidentUpdateInput): Promise<Incident>;

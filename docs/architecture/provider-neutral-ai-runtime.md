@@ -54,3 +54,7 @@ Skills describe the analysis/report contract and required output, not a model
 vendor. Provider credentials and model choice are configured inside Hermes,
 not in FastAPI or the browser. See the deployment/runbook and ADR for the
 manual provider setup boundary and failure classification.
+
+Daily Alert Report generation remains feature-gated until the Phase 1 quality
+gate passes. The report endpoint must not enqueue a `daily_report` job while
+the Phase 1 worker only consumes `log_triage`.

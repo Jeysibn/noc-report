@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { Card, CardTitle } from "@/components/ui/Card";
 import { FormField, Input, Select, Textarea } from "@/components/ui/Form";
 import { Button } from "@/components/ui/Button";
@@ -46,6 +46,7 @@ export function CreateIncident() {
   const [prefill, setPrefill] = useState<{ id: string; file: File } | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [createdIncidentId, setCreatedIncidentId] = useState<string | null>(null);
 
   function update<K extends keyof IncidentDraft>(key: K, value: IncidentDraft[K]) {
     setDraft((prev) => ({ ...prev, [key]: value }));
@@ -79,8 +80,17 @@ export function CreateIncident() {
   }
 
   async function save() {
+    if (draft.status === "recovered" && !draft.recoveredAt) {
+      setError("Recovered incidents require a recovery time.");
+      return;
+    }
+    if (draft.status !== "recovered" && draft.recoveredAt) {
+      setError("Only recovered incidents may have a recovery time.");
+      return;
+    }
     setSaving(true);
     setError(null);
+    let createdIncidentIdForSave: string | null = null;
     try {
       const incident = await incidentService.create({
         title: draft.title,
@@ -92,6 +102,8 @@ export function CreateIncident() {
         triggerValue: draft.triggerValue || undefined,
         notes: draft.notes || undefined,
       });
+      createdIncidentIdForSave = incident.id;
+      setCreatedIncidentId(incident.id);
       if (prefill) {
         await ocrService.attachPrefill(prefill.id, incident.id);
       }
@@ -100,7 +112,13 @@ export function CreateIncident() {
       }
       navigate(`/incidents/${incident.id}`);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Could not save the incident.");
+      setError(
+        createdIncidentIdForSave
+          ? "The incident was created, but attaching optional evidence failed. Open the incident and retry the attachment; do not submit this form again."
+          : err instanceof ApiError
+            ? err.message
+            : "Could not save the incident.",
+      );
       setSaving(false);
     }
   }
@@ -183,7 +201,16 @@ export function CreateIncident() {
             )}
           </div>
 
-          {error && <p className="text-sm text-critical">{error}</p>}
+          {error && (
+            <div className="text-sm text-critical">
+              <p>{error}</p>
+              {createdIncidentId && (
+                <Link className="mt-2 inline-block underline" to={`/incidents/${createdIncidentId}`}>
+                  Open created incident
+                </Link>
+              )}
+            </div>
+          )}
 
           <div className="flex gap-2 pt-2">
             <Button onClick={save} disabled={!draft.title || saving}>

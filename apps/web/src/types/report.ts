@@ -1,6 +1,7 @@
 // Mirrors the runtime job.status values —
-// there is no STARTING/RUNNING state, only QUEUED/PROCESSING/COMPLETED/FAILED.
-export type ReportJobStatus = "QUEUED" | "PROCESSING" | "COMPLETED" | "FAILED";
+// RETRYING is persisted while a transient runtime failure is waiting for the
+// existing bounded queue retry.
+export type ReportJobStatus = "QUEUED" | "PROCESSING" | "RETRYING" | "COMPLETED" | "FAILED";
 
 export interface ReportRun {
   id: string;

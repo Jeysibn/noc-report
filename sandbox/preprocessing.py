@@ -13,10 +13,11 @@ from collections import Counter, defaultdict
 from datetime import datetime
 
 
-PREPROCESSOR_VERSION = "6"
+PREPROCESSOR_VERSION = "7"
 _TIMESTAMP = re.compile(r"\b(\d{4}-\d{2}-\d{2}T[^\s]+|\d{4}-\d{2}-\d{2}[^\s]+)")
 _LEVEL = re.compile(r"\b(DEBUG|INFO|WARN|WARNING|ERROR|CRITICAL|FATAL)\b", re.IGNORECASE)
 _ENDPOINT = re.compile(r"(?:GET|POST|PUT|PATCH|DELETE)\s+([^\s?]+)")
+_HTTP_STATUS = re.compile(r"\b(?:status|status_code|statusCode|http_status)\s*[=:]\s*[\"']?(\d{3})\b", re.IGNORECASE)
 _TRACE = re.compile(r"\b(?:trace[_-]?id|traceId)=([A-Za-z0-9_-]+)", re.IGNORECASE)
 _EXCEPTION = re.compile(r"\b[\w$]*(?:Error|Exception)\b")
 _UUID = re.compile(r"\b[0-9a-f]{8}-[0-9a-f-]{27,}\b", re.IGNORECASE)
@@ -47,6 +48,30 @@ def _json_object(line: str) -> dict | None:
     except (json.JSONDecodeError, TypeError):
         return None
     return value if isinstance(value, dict) else None
+
+
+def _entries(log_text: str) -> list[tuple[str, dict | None]]:
+    """Normalize JSON arrays/objects and line-oriented logs into one stream.
+
+    NOC uploads commonly contain either JSON-lines or one JSON array. Keeping
+    this normalization deterministic prevents the latter from being treated
+    as one giant unstructured line and preserves the same downstream facts.
+    """
+    try:
+        document = json.loads(log_text)
+    except (json.JSONDecodeError, TypeError):
+        document = None
+    if isinstance(document, list):
+        normalized = []
+        for item in document:
+            if isinstance(item, dict):
+                normalized.append((json.dumps(item, ensure_ascii=False, separators=(",", ":")), item))
+            else:
+                normalized.append((str(item), None))
+        return [(line, structured) for line, structured in normalized if line.strip()]
+    if isinstance(document, dict):
+        return [(json.dumps(document, ensure_ascii=False, separators=(",", ":")), document)]
+    return [(line, _json_object(line)) for line in log_text.splitlines() if line.strip()]
 
 
 def _level(line: str, structured: dict | None) -> str | None:
@@ -86,19 +111,21 @@ def _pattern_id(template: str) -> str:
 
 def preprocess_log(log_text: str, *, max_patterns: int = 80, max_samples: int = 40) -> dict:
     """Return exact counts, stable pattern IDs, correlations, and samples."""
-    lines = [line for line in log_text.splitlines() if line.strip()]
+    entries = _entries(log_text)
     levels: Counter[str] = Counter()
     endpoints: Counter[str] = Counter()
     traces: Counter[str] = Counter()
     exceptions: Counter[str] = Counter()
+    http_statuses: Counter[str] = Counter()
+    user_ids: Counter[str] = Counter()
+    record_ids: Counter[str] = Counter()
     timestamps: list[datetime] = []
     pattern_counts: Counter[str] = Counter()
     pattern_templates: dict[str, str] = {}
     pattern_samples: dict[str, list[str]] = defaultdict(list)
     representative_entries: list[dict] = []
 
-    for line in lines:
-        structured = _json_object(line)
+    for line, structured in entries:
         level = _level(line, structured)
         if level:
             levels[level] += 1
@@ -114,9 +141,21 @@ def preprocess_log(log_text: str, *, max_patterns: int = 80, max_samples: int = 
             trace_id = structured.get("trace_id") or structured.get("traceId")
             if isinstance(trace_id, str):
                 traces[trace_id] += 1
+            status_code = structured.get("status_code") or structured.get("statusCode") or structured.get("http_status") or structured.get("status")
+            if isinstance(status_code, int) and 100 <= status_code <= 599:
+                http_statuses[str(status_code)] += 1
+            user_id = structured.get("user_id") or structured.get("userId") or structured.get("username")
+            if isinstance(user_id, (str, int)):
+                user_ids[str(user_id)] += 1
+            record_id = structured.get("record_id") or structured.get("recordId")
+            if isinstance(record_id, (str, int)):
+                record_ids[str(record_id)] += 1
         endpoint_match = _ENDPOINT.search(line)
         if endpoint_match:
             endpoints[endpoint_match.group(1)] += 1
+        for status_code in _HTTP_STATUS.findall(line):
+            if 100 <= int(status_code) <= 599:
+                http_statuses[status_code] += 1
         for trace in _TRACE.findall(line):
             traces[trace] += 1
         for exception in _EXCEPTION.findall(line):
@@ -154,17 +193,22 @@ def preprocess_log(log_text: str, *, max_patterns: int = 80, max_samples: int = 
 
     return {
         "preprocessing_version": PREPROCESSOR_VERSION,
-        "total_entries": len(lines),
+        "total_entries": len(entries),
         "level_counts": dict(sorted(levels.items())),
         "error_count": sum(levels[level] for level in ("ERROR", "CRITICAL", "FATAL")),
         "exception_count": sum(exceptions.values()),
         "exception_counts": dict(exceptions.most_common(20)),
         "endpoint_counts": dict(endpoints.most_common(20)),
+        "http_status_counts": dict(http_statuses.most_common(20)),
         "trace_counts": dict(traces.most_common(20)),
+        "user_id_counts": dict(user_ids.most_common(20)),
+        "record_id_counts": dict(record_ids.most_common(20)),
         "representative_entries": representative_entries,
         "timestamp_start": min(timestamps).isoformat() if timestamps else None,
         "timestamp_end": max(timestamps).isoformat() if timestamps else None,
+        "duration_seconds": round((max(timestamps) - min(timestamps)).total_seconds(), 3) if timestamps else None,
         "pattern_manifest": patterns,
+        "normalization": "json-array-or-json-lines-or-text-lines",
     }
 
 

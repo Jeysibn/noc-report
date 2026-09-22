@@ -184,6 +184,15 @@ class IncidentPage(BaseModel):
     total: int
 
 
+class IncidentReadinessOut(BaseModel):
+    """Small polling projection used by the shift report readiness table."""
+
+    id: uuid.UUID
+    title: str
+    has_log: bool
+    analysis_status: str
+
+
 class DashboardSummaryOut(BaseModel):
     open_incidents: int
     active_alerts: int
