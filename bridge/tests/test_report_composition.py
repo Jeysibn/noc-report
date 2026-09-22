@@ -207,7 +207,11 @@ def test_canonical_profile_numbers_from_frozen_order_and_repeats_alert_evidence(
     assert [b.heading for b in analyses] == ["Alert #1 - Payment timeout", "Alert #2 - Cache errors"]
     assert len(alerts[0].screenshots) == 1
     assert len(analyses[0].screenshots) == 1
-    assert alerts[0].metadata == ()
+    assert [(item.label, item.value) for item in alerts[0].metadata] == [
+        ("Triggered", "2026-09-14T01:00:00+00:00"),
+        ("Recovered", "2026-09-14T01:30:00+00:00"),
+        ("Trigger Value", "95%"),
+    ]
     assert {link.label for link in alerts[0].links} == {"Grafana"}
     destination = tmp_path / "canonical.docx"
     render_document(document, destination, screenshot_fetcher=lambda *_: _PNG)

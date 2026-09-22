@@ -86,6 +86,21 @@ def _metadata(incident: dict) -> tuple[Metadata, ...]:
     return tuple(Metadata(label, str(value)) for label, value in values if value not in (None, ""))
 
 
+def _evidence_metadata(incident: dict) -> tuple[Metadata, ...]:
+    """Keep the operator-facing alert facts shown in the reference report.
+
+    Service/status/environment remain frozen snapshot facts, but the Alerts
+    evidence block should stay compact and focus on the timestamp/value that
+    helps an operator reconcile the screenshot and attached export.
+    """
+    values = (
+        ("Triggered", incident.get("triggered_at")),
+        ("Recovered", incident.get("recovered_at")),
+        ("Trigger Value", incident.get("trigger_value")),
+    )
+    return tuple(Metadata(label, str(value)) for label, value in values if value not in (None, ""))
+
+
 def _bookmark_name(incident_id: str) -> str:
     """Return a deterministic, Word-safe, title-independent bookmark name."""
     digest = hashlib.sha256(incident_id.encode("utf-8")).hexdigest()[:24]
@@ -112,9 +127,9 @@ def _incident_block(
     return IncidentEvidence(
         heading=f"Alert #{number} - {incident.get('title') or incident.get('display_id') or 'Incident'}",
         incident_id=str(incident["id"]),
-        # The canonical operator report exposes only operational evidence.
-        # Incident metadata remains in the frozen snapshot for audit views.
-        metadata=() if canonical else _metadata(incident),
+        # The canonical operator report exposes compact operational evidence;
+        # immutable snapshot metadata remains available to audit views.
+        metadata=_evidence_metadata(incident) if canonical else _metadata(incident),
         links=tuple(links),
         log_file=(
             LogFileReference(incident["log_filename"], incident.get("log_file_url"))

@@ -54,20 +54,27 @@ _SINGLE_MAX_WIDTH_IN = 4.9
 _SINGLE_MAX_HEIGHT_IN = 3.4
 _PAIR_MAX_WIDTH_IN = 3.0
 _PAIR_MAX_HEIGHT_IN = 3.2
+_REFERENCE_FONT = "Noto Sans CJK SC"
+_BODY_COLOR = RGBColor(26, 26, 26)
+_MUTED_COLOR = RGBColor(102, 102, 102)
+_ALERT_COLOR = RGBColor(46, 90, 172)
 
 
-def _set_east_asia_font(style, name: str = "Microsoft YaHei") -> None:
+def _set_east_asia_font(style, name: str = _REFERENCE_FONT) -> None:
     style.font.name = name
     style._element.get_or_add_rPr().rFonts.set(qn("w:eastAsia"), name)
 
 
 def _configure_document(doc: Document, title: str, metadata: tuple[Metadata, ...]) -> None:
-    """Apply reusable document typography, margins, headers, and footers."""
+    """Apply the compact, reference-report typography and page geometry."""
     for section in doc.sections:
-        section.top_margin = Inches(0.72)
-        section.bottom_margin = Inches(0.68)
-        section.left_margin = Inches(0.78)
-        section.right_margin = Inches(0.78)
+        # Match the reference report's usable portrait page area (roughly
+        # 0.65in side margins and 0.62in top/bottom margins). Screenshot
+        # bounds remain deliberately smaller than this area.
+        section.top_margin = Inches(0.62)
+        section.bottom_margin = Inches(0.62)
+        section.left_margin = Inches(0.65)
+        section.right_margin = Inches(0.65)
         header = section.header.paragraphs[0]
         header.text = title
         header.alignment = WD_ALIGN_PARAGRAPH.RIGHT
@@ -95,10 +102,45 @@ def _configure_document(doc: Document, title: str, metadata: tuple[Metadata, ...
         _set_east_asia_font(style)
         if style_name == "Normal":
             style.font.size = Pt(10)
+            style.font.color.rgb = _BODY_COLOR
+            style.paragraph_format.space_after = Pt(4)
+            style.paragraph_format.line_spacing = 1.08
+        elif style_name == "Title":
+            style.font.size = Pt(20)
+            style.font.bold = True
+            style.font.italic = True
+            style.font.color.rgb = _BODY_COLOR
         elif style_name == "Heading 1":
-            style.font.color.rgb = RGBColor(30, 64, 175)
+            style.font.size = Pt(16)
+            style.font.bold = True
+            style.font.italic = True
+            style.font.color.rgb = _BODY_COLOR
+            style.paragraph_format.space_before = Pt(12)
+            style.paragraph_format.space_after = Pt(6)
+            style.paragraph_format.keep_with_next = True
         elif style_name == "Heading 2":
-            style.font.color.rgb = RGBColor(37, 99, 235)
+            style.font.size = Pt(13)
+            style.font.bold = True
+            style.font.italic = True
+            style.font.color.rgb = _ALERT_COLOR
+            style.paragraph_format.space_before = Pt(10)
+            style.paragraph_format.space_after = Pt(5)
+            style.paragraph_format.keep_with_next = True
+        elif style_name == "Heading 3":
+            style.font.size = Pt(11.5)
+            style.font.bold = True
+            style.font.italic = True
+            style.font.color.rgb = _BODY_COLOR
+            style.paragraph_format.space_before = Pt(8)
+            style.paragraph_format.space_after = Pt(4)
+            style.paragraph_format.keep_with_next = True
+        elif style_name == "Intense Quote":
+            style.font.size = Pt(10.5)
+            style.font.bold = True
+            style.font.italic = True
+            style.font.color.rgb = RGBColor(51, 51, 51)
+            style.paragraph_format.space_before = Pt(6)
+            style.paragraph_format.space_after = Pt(3)
 
 
 def _add_hyperlink(paragraph, url: str, text: str) -> None:
@@ -157,8 +199,10 @@ def _add_bookmark(paragraph, name: str) -> None:
 def _add_link_paragraph(doc: Document, link: Link) -> None:
     paragraph = doc.add_paragraph()
     paragraph.paragraph_format.keep_with_next = True
-    paragraph.add_run(f"{link.prefix or link.label}: ").bold = True
-    _add_hyperlink(paragraph, link.url, link.text or link.url)
+    paragraph.paragraph_format.space_after = Pt(3)
+    # The reference report presents compact, human-readable link labels
+    # instead of printing long dashboard URLs into the evidence block.
+    _add_hyperlink(paragraph, link.url, link.prefix or link.label)
 
 
 def _fetch_screenshot(shot: Screenshot, screenshot_fetcher: ScreenshotFetcher | None) -> bytes:
@@ -198,7 +242,11 @@ def _add_picture_dimensions(paragraph, data: bytes, width: int, height: int) -> 
 def _add_screenshot(doc: Document, shot: Screenshot, screenshot_fetcher: ScreenshotFetcher | None) -> None:
     data = _fetch_screenshot(shot, screenshot_fetcher)
     try:
-        _add_picture(doc.add_paragraph(), data, _SINGLE_MAX_WIDTH_IN, _SINGLE_MAX_HEIGHT_IN)
+        paragraph = doc.add_paragraph()
+        paragraph.paragraph_format.space_before = Pt(0)
+        paragraph.paragraph_format.space_after = Pt(5)
+        paragraph.paragraph_format.keep_with_next = True
+        _add_picture(paragraph, data, _SINGLE_MAX_WIDTH_IN, _SINGLE_MAX_HEIGHT_IN)
     except Exception as exc:
         raise EvidenceIntegrityError(f"frozen screenshot is not a valid image: {shot.filename or shot.object_key}") from exc
 
@@ -227,6 +275,7 @@ def _add_screenshots(doc: Document, shots: tuple[Screenshot, ...], screenshot_fe
                 label = doc.add_paragraph(_screenshot_label(shot, index))
                 label.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 label.paragraph_format.keep_with_next = True
+                label.paragraph_format.space_after = Pt(2)
                 _add_picture(doc.add_paragraph(), item, _SINGLE_MAX_WIDTH_IN, _SINGLE_MAX_HEIGHT_IN)
             return
         table = doc.add_table(rows=2, cols=2)
@@ -236,6 +285,7 @@ def _add_screenshots(doc: Document, shots: tuple[Screenshot, ...], screenshot_fe
             label = table.cell(0, index).paragraphs[0]
             label.add_run(_screenshot_label(shot, index + 1)).bold = True
             label.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            label.paragraph_format.space_after = Pt(2)
             width, height = dimensions[index]
             width = round(width * common_height / height)
             _add_picture_dimensions(table.cell(1, index).paragraphs[0], item, width, common_height)
@@ -244,7 +294,7 @@ def _add_screenshots(doc: Document, shots: tuple[Screenshot, ...], screenshot_fe
 
 
 def _add_alert_navigation(doc: Document, block: AlertNavigation) -> None:
-    heading = doc.add_heading("Alert Navigation", level=2)
+    heading = doc.add_heading("Alert Navigation", level=3)
     heading.paragraph_format.keep_with_next = True
     _add_bookmark(heading, "alerts_start")
     for entry in block.entries:
@@ -253,25 +303,37 @@ def _add_alert_navigation(doc: Document, block: AlertNavigation) -> None:
 
 
 def _add_log_file(doc: Document, log_file: LogFileReference) -> None:
-    paragraph = doc.add_paragraph()
-    paragraph.add_run("Log File  ").bold = True
-    paragraph.add_run("File Name: ")
+    heading = doc.add_paragraph()
+    heading.paragraph_format.keep_with_next = True
+    heading.paragraph_format.space_before = Pt(4)
+    heading.paragraph_format.space_after = Pt(2)
+    run = heading.add_run("Log File")
+    run.bold = True
+    run.italic = True
+    run.font.size = Pt(10.5)
+    filename = doc.add_paragraph()
+    filename.paragraph_format.space_after = Pt(4)
+    filename.add_run("File Name: ").bold = True
     if log_file.url:
-        _add_hyperlink(paragraph, log_file.url, log_file.filename)
+        _add_hyperlink(filename, log_file.url, log_file.filename)
     else:
-        paragraph.add_run(log_file.filename)
+        filename.add_run(log_file.filename)
 
 
 def _add_finds(doc: Document, heading: str, finds, *, zh: bool) -> None:
     if not finds:
         return
-    doc.add_paragraph(heading, style="Intense Quote")
+    heading_paragraph = doc.add_paragraph(heading, style="Intense Quote")
+    heading_paragraph.paragraph_format.keep_with_next = True
     for i, find in enumerate(finds, start=1):
         stats = f"（{find.stat}）" if (zh and find.stat) else (f" ({find.stat})" if find.stat else "")
         p = doc.add_paragraph()
+        p.paragraph_format.left_indent = Inches(0.1)
+        p.paragraph_format.right_indent = Inches(0.1)
+        p.paragraph_format.space_after = Pt(4)
         p.add_run(f"{i}. {find.label}{stats}").bold = True
         if find.detail:
-            doc.add_paragraph(find.detail)
+            p.add_run(f" - {find.detail}")
 
 
 def _add_bilingual_find_list(doc: Document, find_list: BilingualFindList) -> None:
@@ -282,10 +344,14 @@ def _add_bilingual_find_list(doc: Document, find_list: BilingualFindList) -> Non
 def _add_bilingual_text(doc: Document, block: BilingualText) -> None:
     if block.heading_zh:
         doc.add_heading(block.heading_zh, level=3)
-    doc.add_paragraph(block.text_zh)
+    zh = doc.add_paragraph(block.text_zh)
+    zh.paragraph_format.left_indent = Inches(0.1)
+    zh.paragraph_format.right_indent = Inches(0.1)
     if block.heading_en:
         doc.add_heading(block.heading_en, level=3)
-    doc.add_paragraph(block.text_en)
+    en = doc.add_paragraph(block.text_en)
+    en.paragraph_format.left_indent = Inches(0.1)
+    en.paragraph_format.right_indent = Inches(0.1)
 
 
 def _add_incident_evidence(doc: Document, block: IncidentEvidence, screenshot_fetcher: ScreenshotFetcher | None, *, include_provenance: bool = False) -> None:
@@ -299,6 +365,13 @@ def _add_incident_evidence(doc: Document, block: IncidentEvidence, screenshot_fe
     else:
         heading.add_run(block.heading)
     _add_screenshots(doc, block.screenshots, screenshot_fetcher)
+    if block.metadata:
+        for index, item in enumerate(block.metadata):
+            metadata = doc.add_paragraph()
+            metadata.paragraph_format.space_before = Pt(2 if index == 0 else 0)
+            metadata.paragraph_format.space_after = Pt(2)
+            metadata.add_run(f"{item.label}: ").bold = True
+            metadata.add_run(item.value)
     links = list(block.links)
     if block.link:
         links.insert(0, block.link)
@@ -308,8 +381,6 @@ def _add_incident_evidence(doc: Document, block: IncidentEvidence, screenshot_fe
         _add_log_file(doc, block.log_file)
     if include_provenance and block.incident_id:
         doc.add_paragraph(f"Incident ID: {block.incident_id}")
-    if block.metadata:
-        doc.add_paragraph("  ·  ".join(f"{m.label}: {m.value}" for m in block.metadata))
 
 
 def _add_analysis_reference(
@@ -322,7 +393,7 @@ def _add_analysis_reference(
     heading = doc.add_heading(block.heading, level=2)
     heading.paragraph_format.keep_with_next = True
     if heading.runs:
-        heading.runs[0].font.color.rgb = RGBColor(37, 99, 235)
+        heading.runs[0].font.color.rgb = _ALERT_COLOR
     if block.bookmark:
         _add_bookmark(heading, block.bookmark)
     _add_screenshots(doc, block.screenshots, screenshot_fetcher)
@@ -409,14 +480,26 @@ def render_document(
     _configure_document(doc, document.title, document.metadata)
     title = doc.add_heading(document.title, level=0)
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    title.paragraph_format.keep_with_next = True
+    title.paragraph_format.space_after = Pt(2)
     if title.runs:
-        title.runs[0].font.size = Pt(22)
+        title.runs[0].font.size = Pt(20)
         title.runs[0].font.bold = True
-        title.runs[0].font.color.rgb = RGBColor(30, 64, 175)
-    for metadata in document.metadata:
-        paragraph = doc.add_paragraph()
-        paragraph.add_run(f"{metadata.label}: ").bold = True
-        paragraph.add_run(metadata.value)
+        title.runs[0].font.italic = True
+        title.runs[0].font.color.rgb = _BODY_COLOR
+    if document.metadata:
+        subtitle_values = [
+            item.value if item.label in {"Date", "Shift"} else f"{item.label}: {item.value}"
+            for item in document.metadata
+        ]
+        subtitle = doc.add_paragraph(" | ".join(subtitle_values))
+        subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        subtitle.paragraph_format.space_after = Pt(12)
+        for run in subtitle.runs:
+            run.font.size = Pt(10.5)
+            run.font.bold = True
+            run.font.italic = True
+            run.font.color.rgb = _MUTED_COLOR
 
     if include_provenance and document.provenance:
         doc.add_heading("Audit Provenance", level=2)

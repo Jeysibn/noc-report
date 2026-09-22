@@ -4,6 +4,7 @@ import io
 import zipfile
 
 from docx import Document
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 from PIL import Image
 
 from noc_bridge.docx_render import (
@@ -176,6 +177,32 @@ def test_canonical_report_omits_empty_navigation_when_no_analysis_exists(tmp_pat
     with zipfile.ZipFile(path) as archive:
         xml = archive.read("word/document.xml").decode()
     assert 'w:anchor="log_analysis_' not in xml
+
+
+def test_daily_report_uses_reference_inspired_typography_and_evidence_lines(tmp_path):
+    snapshot = _snapshot(1)
+    snapshot["composition_profile"] = "noc-daily-report-v1"
+    snapshot["coverage"] = {"incidents": "all", "analyses": "all_available"}
+    document = compose_report({"general_summary": {"zh": "摘要", "en": "Summary"}}, snapshot)
+    path = tmp_path / "reference-style.docx"
+    render_document(document, path)
+
+    doc = Document(str(path))
+    paragraphs = doc.paragraphs
+    assert paragraphs[0].text == "Daily Alert & Log Analysis Report"
+    assert paragraphs[0].alignment == WD_ALIGN_PARAGRAPH.CENTER
+    assert paragraphs[0].runs[0].bold is True
+    assert paragraphs[0].runs[0].italic is True
+    assert paragraphs[0].runs[0].font.size.pt == 20
+    assert paragraphs[1].alignment == WD_ALIGN_PARAGRAPH.CENTER
+
+    texts = [paragraph.text for paragraph in paragraphs]
+    assert "Alerts" in texts
+    assert "General Summary" in texts
+    assert "Log Analysis" in texts
+    assert "Log File" in texts
+    assert any(text.startswith("File Name: alert-1.json") for text in texts)
+    assert any(text.startswith("Triggered: ") for text in texts)
 
 
 def test_twelve_alert_navigation_targets_remain_unique(tmp_path):
