@@ -13,7 +13,7 @@ from collections import Counter, defaultdict
 from datetime import datetime
 
 
-PREPROCESSOR_VERSION = "9"
+PREPROCESSOR_VERSION = "13"
 _TIMESTAMP = re.compile(r"\b(\d{4}-\d{2}-\d{2}T[^\s]+|\d{4}-\d{2}-\d{2}[^\s]+)")
 _LEVEL = re.compile(r"\b(DEBUG|INFO|WARN|WARNING|ERROR|CRITICAL|FATAL)\b", re.IGNORECASE)
 _ENDPOINT = re.compile(r"(?:GET|POST|PUT|PATCH|DELETE)\s+([^\s?]+)")
@@ -121,6 +121,49 @@ def _pattern_id(template: str) -> str:
     return "p-" + hashlib.sha256(template.encode("utf-8")).hexdigest()[:12]
 
 
+def _cause_family(template: str) -> tuple[str, str]:
+    """Return a conservative deterministic family for related manifestations.
+
+    A physical log template is not necessarily an operational error type. The
+    same dependency failure is often logged by several layers with different
+    logger names, wrappers, or request context. These families are grouping
+    candidates for the semantic runtime and for the deterministic fallback;
+    they never replace the physical pattern IDs or their counts.
+    """
+    value = template.casefold()
+    rules = (
+        ("elasticsearch-timeout", ("elasticsearch", "timeout"), "Elasticsearch timeout"),
+        ("elasticsearch-failure", ("elasticsearch",), "Elasticsearch failure"),
+        ("ndrp-availability", ("ndrp",), "NDRP availability or response failure"),
+        ("clickhouse-sql", ("clickhouse", "sql"), "ClickHouse SQL failure"),
+        ("face-compare-timeout", ("facecompare", "timeout"), "Face comparison timeout"),
+        ("payment-order-missing", ("payment", "does not exist"), "Payment order lookup failure"),
+        ("sms-opted-out", ("sms", "optout"), "SMS recipient opted out"),
+        ("sms-invalid-destination", ("sms", "invalid"), "SMS destination validation failure"),
+        ("sms-command-failure", ("sms", "command_not_recognised"), "SMS provider command failure"),
+    )
+    for family_key, required, label in rules:
+        if all(token in value for token in required):
+            return family_key, label
+
+    exceptions = tuple(dict.fromkeys(_EXCEPTION.findall(template)))
+    dependency = next(
+        (
+            token
+            for token in ("elasticsearch", "clickhouse", "kafka", "redis", "mysql", "postgres", "payment", "sms")
+            if token in value
+        ),
+        None,
+    )
+    if exceptions:
+        key = ":".join((dependency or "generic", *sorted(exception.casefold() for exception in exceptions)))
+        label = "Related " + (dependency or "exception") + " failure: " + ", ".join(exceptions)
+        return key, label
+    # Keep otherwise unrelated templates separate. This fallback is still
+    # stable, but it intentionally does not claim semantic equivalence.
+    return "template:" + _pattern_id(template), template[:120]
+
+
 def preprocess_log(log_text: str, *, max_patterns: int = 80, max_samples: int = 40) -> dict:
     """Return exact counts, stable pattern IDs, correlations, and samples."""
     entries = _entries(log_text)
@@ -135,6 +178,7 @@ def preprocess_log(log_text: str, *, max_patterns: int = 80, max_samples: int = 
     pattern_counts: Counter[str] = Counter()
     pattern_templates: dict[str, str] = {}
     pattern_samples: dict[str, list[str]] = defaultdict(list)
+    pattern_families: dict[str, tuple[str, str]] = {}
     representative_entries: list[dict] = []
 
     for line, structured in entries:
@@ -180,6 +224,7 @@ def preprocess_log(log_text: str, *, max_patterns: int = 80, max_samples: int = 
         pattern_id = _pattern_id(template)
         pattern_counts[pattern_id] += 1
         pattern_templates[pattern_id] = template
+        pattern_families[pattern_id] = _cause_family(template)
         if len(pattern_samples[pattern_id]) < 2:
             pattern_samples[pattern_id].append(line[:500])
         if len(representative_entries) < max_samples and (level in {"ERROR", "CRITICAL", "FATAL"} or len(representative_entries) < 8):
@@ -188,11 +233,14 @@ def preprocess_log(log_text: str, *, max_patterns: int = 80, max_samples: int = 
     ranked = sorted(pattern_counts, key=lambda item: (-pattern_counts[item], item))
     patterns = []
     for pattern_id in ranked[:max_patterns]:
+        family_id, family_label = pattern_families[pattern_id]
         patterns.append({
             "id": pattern_id,
             "template": pattern_templates[pattern_id],
             "count": pattern_counts[pattern_id],
             "samples": pattern_samples[pattern_id],
+            "family_id": family_id,
+            "family_label": family_label,
         })
     omitted_count = sum(pattern_counts[item] for item in ranked[max_patterns:])
     if omitted_count:
@@ -201,6 +249,27 @@ def preprocess_log(log_text: str, *, max_patterns: int = 80, max_samples: int = 
             "template": "Other deterministic log patterns",
             "count": omitted_count,
             "samples": [],
+            "family_id": "other",
+            "family_label": "Other deterministic log patterns",
+        })
+
+    family_members: dict[str, list[str]] = defaultdict(list)
+    family_labels: dict[str, str] = {}
+    for item in patterns:
+        if item["id"] == "other":
+            continue
+        family_members[item["family_id"]].append(item["id"])
+        family_labels[item["family_id"]] = item["family_label"]
+    families = []
+    for family_id, member_ids in sorted(
+        family_members.items(),
+        key=lambda item: (-sum(pattern_counts[pattern_id] for pattern_id in item[1]), item[0]),
+    ):
+        families.append({
+            "id": family_id,
+            "label": family_labels[family_id],
+            "pattern_ids": member_ids,
+            "count": sum(pattern_counts[pattern_id] for pattern_id in member_ids),
         })
 
     return {
@@ -220,6 +289,7 @@ def preprocess_log(log_text: str, *, max_patterns: int = 80, max_samples: int = 
         "timestamp_end": max(timestamps).isoformat() if timestamps else None,
         "duration_seconds": round((max(timestamps) - min(timestamps)).total_seconds(), 3) if timestamps else None,
         "pattern_manifest": patterns,
+        "pattern_families": families,
         "normalization": "json-array-or-json-lines-or-text-lines",
     }
 
@@ -317,6 +387,16 @@ def reconcile_result(
     below so evidence is not silently discarded.
     """
     pattern_by_id = {item["id"]: item for item in statistics["pattern_manifest"]}
+    family_by_pattern = {
+        pattern_id: item.get("family_id", "template:" + pattern_id)
+        for pattern_id, item in pattern_by_id.items()
+        if pattern_id != "other"
+    }
+    family_labels = {
+        item.get("family_id", "template:" + item["id"]): item.get("family_label", item["template"])
+        for item in statistics["pattern_manifest"]
+        if item["id"] != "other"
+    }
     used: set[str] = set()
     unquantified_seen = False
     for group_name in ("key_finds", "secondary_finds"):
@@ -363,19 +443,273 @@ def reconcile_result(
             normalized_findings.append(finding)
         result[group_name] = normalized_findings
 
+    # Collapse model-created splits where several physical templates belong to
+    # the same deterministic cause family. The first finding keeps its
+    # semantic label/detail; all member pattern IDs and their exact counts are
+    # retained. Prefer a Key Find when one exists for the same family.
+    finding_items = [
+        (group_name, finding)
+        for group_name in ("key_finds", "secondary_finds")
+        for finding in result[group_name]
+        if finding.get("pattern_ids") != ["unquantified"]
+    ]
+    family_to_item: dict[str, tuple[str, dict]] = {}
+    parent: dict[int, int] = {index: index for index in range(len(finding_items))}
+
+    def find(index: int) -> int:
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    def union(left: int, right: int) -> None:
+        left_root, right_root = find(left), find(right)
+        if left_root != right_root:
+            parent[right_root] = left_root
+
+    for index, (_group_name, finding) in enumerate(finding_items):
+        families = {
+            family_by_pattern[pattern_id]
+            for pattern_id in finding.get("pattern_ids", [])
+            if pattern_id in family_by_pattern
+        }
+        for family_id in families:
+            previous = family_to_item.get(family_id)
+            if previous is not None:
+                union(index, previous[1])
+            else:
+                family_to_item[family_id] = ("", index)
+
+    components: dict[int, list[tuple[str, dict]]] = defaultdict(list)
+    for index, item in enumerate(finding_items):
+        components[find(index)].append(item)
+    if any(len(items) > 1 for items in components.values()):
+        rebuilt = {"key_finds": [], "secondary_finds": []}
+        for items in components.values():
+            primary_group, primary = next(
+                ((group, finding) for group, finding in items if group == "key_finds"),
+                items[0],
+            )
+            merged_ids = list(dict.fromkeys(
+                pattern_id
+                for _group, finding in items
+                for pattern_id in finding.get("pattern_ids", [])
+            ))
+            primary["pattern_ids"] = merged_ids
+            rebuilt[primary_group].append(primary)
+        unquantified = {
+            group_name: [finding for finding in result[group_name] if finding.get("pattern_ids") == ["unquantified"]]
+            for group_name in ("key_finds", "secondary_finds")
+        }
+        result = {
+            group_name: rebuilt[group_name] + unquantified[group_name]
+            for group_name in ("key_finds", "secondary_finds")
+        } | {key: value for key, value in result.items() if key not in {"key_finds", "secondary_finds"}}
+
+    if allow_unquantified_fallback:
+        # A provider may describe the same grouped evidence with duplicated
+        # bilingual details even when it selected different physical IDs.
+        # Merge those entries during the terminal repair path so validation
+        # does not force a safe, count-preserving analysis into the DLQ.
+        detail_owner: dict[str, dict] = {}
+        detail_items: list[tuple[str, dict]] = []
+        duplicate_of: dict[int, dict] = {}
+        for group_name in ("key_finds", "secondary_finds"):
+            for finding in result[group_name]:
+                if finding.get("pattern_ids") == ["unquantified"]:
+                    continue
+                detail_items.append((group_name, finding))
+                for field in ("detail_en", "detail_zh"):
+                    value = finding.get(field)
+                    signature = _compact_narrative_key(value) if isinstance(value, str) else ""
+                    if len(signature) >= 32:
+                        owner = detail_owner.get(signature)
+                        if owner is not None and owner is not finding:
+                            duplicate_of[id(finding)] = owner
+                            break
+                        detail_owner[signature] = finding
+        if duplicate_of:
+            for _group_name, finding in detail_items:
+                owner = duplicate_of.get(id(finding))
+                if owner is not None:
+                    owner["pattern_ids"] = list(dict.fromkeys(
+                        [*owner.get("pattern_ids", []), *finding.get("pattern_ids", [])]
+                    ))
+            result = {
+                group_name: [
+                    finding for finding in result[group_name] if id(finding) not in duplicate_of
+                ]
+                for group_name in ("key_finds", "secondary_finds")
+            } | {key: value for key, value in result.items() if key not in {"key_finds", "secondary_finds"}}
+
+    used = set()
+    for group_name in ("key_finds", "secondary_finds"):
+        for finding in result[group_name]:
+            ids = finding.get("pattern_ids") or []
+            if ids == ["unquantified"]:
+                continue
+            for pattern_id in ids:
+                used.add(pattern_id)
+            count = sum(pattern_by_id[pattern_id]["count"] for pattern_id in ids)
+            finding["count"] = count
+            finding["percentage"] = round((count / statistics["total_entries"]) * 100, 2) if statistics["total_entries"] else 0.0
+
+    if allow_unquantified_fallback:
+        # If the model understood a cause but failed to copy its opaque IDs,
+        # attach that unquantified finding to the best deterministic family
+        # instead of rendering the same cause twice (once unquantified and
+        # once as an appended family). Only distinctive ASCII hints are used;
+        # generic prose is deliberately not enough to claim a match.
+        family_hints: dict[str, set[str]] = defaultdict(set)
+        for item in statistics["pattern_manifest"]:
+            if item["id"] == "other":
+                continue
+            family_id = item.get("family_id", "template:" + item["id"])
+            source = " ".join((family_labels.get(family_id, ""), item.get("template", ""))).casefold()
+            family_hints[family_id].update(
+                token for token in re.findall(r"[a-z][a-z0-9_]{3,}|\b\d{3}\b", source)
+                if token not in {
+                    "related", "failure", "failures", "error", "entries", "pattern",
+                    "timeout", "exception", "database", "query", "service", "logged",
+                    "json", "http", "response", "return", "warning", "failed", "parse",
+                    "callback", "external", "third", "api", "request", "line", "trace",
+                }
+            )
+        family_used = {
+            family_by_pattern[pattern_id]
+            for pattern_id in used
+            if pattern_id in family_by_pattern
+        }
+        remove_unquantified: set[int] = set()
+        for group_name in ("key_finds", "secondary_finds"):
+            for finding in result[group_name]:
+                if finding.get("pattern_ids") != ["unquantified"]:
+                    continue
+                text = " ".join(
+                    str(finding.get(field, ""))
+                    for field in ("label_en", "detail_en", "label_zh", "detail_zh")
+                ).casefold()
+                preferred_families = {
+                    family_id
+                    for family_id, marker in (
+                        ("ndrp-availability", "ndrp"),
+                        ("elasticsearch-timeout", "elasticsearch"),
+                        ("clickhouse-sql", "clickhouse"),
+                        ("face-compare-timeout", "facecompare"),
+                        ("payment-order-missing", "payment"),
+                    )
+                    if family_id in family_hints and marker in text
+                }
+                if len(preferred_families) == 1:
+                    matches = list(preferred_families)
+                else:
+                    matches = [
+                        family_id
+                        for family_id, hints in family_hints.items()
+                        if any(hint in text for hint in hints if len(hint) >= 4)
+                    ]
+                if len(matches) != 1:
+                    continue
+                family_id = matches[0]
+                if family_id in family_used:
+                    remove_unquantified.add(id(finding))
+                    continue
+                member_ids = [
+                    item["id"]
+                    for item in statistics["pattern_manifest"]
+                    if item.get("family_id") == family_id and item["id"] != "other"
+                ]
+                if not member_ids:
+                    continue
+                finding["pattern_ids"] = member_ids
+                count = sum(pattern_by_id[pattern_id]["count"] for pattern_id in member_ids)
+                finding["count"] = count
+                finding["percentage"] = round((count / statistics["total_entries"]) * 100, 2) if statistics["total_entries"] else 0.0
+                used.update(member_ids)
+                family_used.add(family_id)
+
+        # If an unquantified finding matched a family already represented by
+        # another finding, it was a duplicate semantic description. Remove it
+        # rather than leaving a null-count duplicate in the operator report.
+        for group_name in ("key_finds", "secondary_finds"):
+            result[group_name] = [
+                finding for finding in result[group_name]
+                if id(finding) not in remove_unquantified
+            ]
+
     omitted = [item for item in statistics["pattern_manifest"] if item["id"] not in used and item["id"] != "other"]
+    omitted_by_family: dict[str, list[dict]] = defaultdict(list)
     for item in omitted:
-        descriptor = re.sub(r"[.!?。！？]+", " ", item["template"])
+        omitted_by_family[item.get("family_id", "template:" + item["id"])].append(item)
+    existing_by_family: dict[str, dict] = {}
+    for group_name in ("key_finds", "secondary_finds"):
+        for finding in result[group_name]:
+            for pattern_id in finding.get("pattern_ids", []):
+                family_id = family_by_pattern.get(pattern_id)
+                if family_id:
+                    existing_by_family[family_id] = finding
+
+    for family_id, family_items in omitted_by_family.items():
+        target = existing_by_family.get(family_id)
+        if target is not None:
+            target["pattern_ids"] = list(dict.fromkeys(
+                [*target.get("pattern_ids", []), *(item["id"] for item in family_items)]
+            ))
+            count = sum(pattern_by_id[pattern_id]["count"] for pattern_id in target["pattern_ids"])
+            target["count"] = count
+            target["percentage"] = round((count / statistics["total_entries"]) * 100, 2) if statistics["total_entries"] else 0.0
+            used.update(item["id"] for item in family_items)
+            continue
+        item = family_items[0]
+        family_pattern_ids = [member["id"] for member in family_items]
+        count = sum(member["count"] for member in family_items)
+        descriptor = re.sub(r"[.!?。！？]+", " ", family_labels.get(family_id, item["template"]))
         descriptor = _WHITESPACE.sub(" ", descriptor).strip()[:180].rstrip()
         result.setdefault("secondary_finds", []).append({
-            "id": f"unlabeled-{item['id']}",
-            "label_en": item["template"],
-            "label_zh": item["template"],
-            "count": item["count"],
-            "percentage": round((item["count"] / statistics["total_entries"]) * 100, 2) if statistics["total_entries"] else 0.0,
-            "pattern_ids": [item["id"]],
-            "detail_en": f"Observed deterministic pattern {item['id']}: {descriptor}.",
-            "detail_zh": f"检测到确定性模式 {item['id']}：{descriptor}。",
+            "id": f"unlabeled-{family_id}",
+            "label_en": family_labels.get(family_id, item["template"]),
+            "label_zh": family_labels.get(family_id, item["template"]),
+            "count": count,
+            "percentage": round((count / statistics["total_entries"]) * 100, 2) if statistics["total_entries"] else 0.0,
+            "pattern_ids": family_pattern_ids,
+            "detail_en": f"Observed related log entries matching: {descriptor}.",
+            "detail_zh": f"相关日志条目匹配以下模式：{descriptor}。",
         })
+        used.update(family_pattern_ids)
+    if allow_unquantified_fallback and not result.get("key_finds"):
+        # The schema requires at least one primary finding. A provider can
+        # return only an unquantified/duplicate secondary narrative after the
+        # family repair; promote the first deterministic family so the result
+        # remains count-preserving and operator-readable.
+        if result.get("secondary_finds"):
+            result["key_finds"].append(result["secondary_finds"].pop(0))
+        elif statistics["pattern_manifest"]:
+            item = next(
+                (candidate for candidate in statistics["pattern_manifest"] if candidate["id"] != "other"),
+                None,
+            )
+            if item is not None:
+                family_id = item.get("family_id", "template:" + item["id"])
+                member_ids = [
+                    candidate["id"]
+                    for candidate in statistics["pattern_manifest"]
+                    if candidate.get("family_id") == family_id and candidate["id"] != "other"
+                ]
+                count = sum(pattern_by_id[pattern_id]["count"] for pattern_id in member_ids)
+                result["key_finds"].append({
+                    "id": f"fallback-{family_id}",
+                    "label_en": family_labels.get(family_id, item["template"]),
+                    "label_zh": family_labels.get(family_id, item["template"]),
+                    "count": count,
+                    "percentage": round((count / statistics["total_entries"]) * 100, 2) if statistics["total_entries"] else 0.0,
+                    "pattern_ids": member_ids,
+                    "detail_en": f"Observed the dominant deterministic family: {family_labels.get(family_id, item['template'])}.",
+                    "detail_zh": f"检测到主要确定性模式族：{family_labels.get(family_id, item['template'])}。",
+                })
     result["total_entries"] = statistics["total_entries"]
     return result
+
+
+def _compact_narrative_key(value: str) -> str:
+    """Normalize a detail only for duplicate-detection in fallback repair."""
+    return re.sub(r"\W+", "", value.casefold(), flags=re.UNICODE)

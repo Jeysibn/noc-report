@@ -26,12 +26,17 @@ Output shape:
     URLs, tokens, and stack locations into the same template.
   - `id` — one stable finding identity shared by both language presentations;
     it must be unique across Key Finds and Secondary Finds.
-  - `pattern_ids` — one or more IDs from the deterministic count manifest
+- `pattern_ids` — one or more IDs from the deterministic count manifest
     appended to the log. Select the IDs whose patterns belong to this finding;
     do not invent IDs. The runtime calculates the count from these IDs. The
     runtime-reserved `other` ID is the exact remainder; do not combine it with
     a specific pattern ID. `unquantified` is reserved for a finding that has
     no defensible manifest match and is intentionally left uncounted.
+    The input also includes deterministic `pattern_families`, which are
+    grouping candidates for physical templates emitted by different logger
+    layers. When several templates describe the same dependency failure or
+    exception chain, use one finding with all of their exact `pattern_ids`.
+    Do not emit one finding per family member.
   - `count` — returned for schema compatibility, but ignored and replaced by
     the runtime with the exact sum of the selected pattern IDs.
   - `percentage` — returned for schema compatibility, but ignored and
@@ -52,7 +57,7 @@ Output shape:
   appends deterministic templates that the model does not label and may
   consolidate clearly related low-volume variants under the dominant finding.
   It must not collapse omitted evidence into a generic "other" finding or
-  split one template into one finding per request.
+  split one cause family into one finding per logger/request variant.
 - `severity_signal` — one of `low`, `medium`, `high`, `critical`.
 - `confidence` — float 0.0–1.0.
 

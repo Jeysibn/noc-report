@@ -101,8 +101,70 @@ def test_reconciliation_replaces_model_numbers_and_retains_omitted_patterns():
     assert reconciled["total_entries"] == 3
     assert reconciled["key_finds"][0]["count"] == first["count"]
     assert reconciled["key_finds"][0]["percentage"] == round(first["count"] / 3 * 100, 2)
-    assert len(reconciled["secondary_finds"]) == len(facts["pattern_manifest"]) - 1
-    assert len({finding["detail_en"] for finding in reconciled["secondary_finds"]}) == len(reconciled["secondary_finds"])
+    assert len(reconciled["secondary_finds"]) == 1
+    grouped = reconciled["secondary_finds"][0]
+    assert grouped["pattern_ids"] == [
+        item["id"] for item in facts["pattern_manifest"] if item["id"] != first["id"]
+    ]
+    assert grouped["count"] == 2
+
+
+def test_reconciliation_groups_model_selected_family_members_into_one_finding():
+    facts = preprocess_log(
+        "2026-09-10T14:00:00Z ERROR CacheService ElasticsearchTimeoutException timeout=3000\n"
+        "2026-09-10T14:00:01Z ERROR LogEsAspect ElasticsearchTimeoutException timeout=3001\n"
+    )
+    assert len(facts["pattern_manifest"]) == 2
+    result = {
+        "total_entries": 2,
+        "summary_en": "The log shows a repeated Elasticsearch timeout. The evidence is limited to this file.",
+        "summary_zh": "日志显示重复的Elasticsearch超时。证据仅限于此文件。",
+        "key_finds": [{
+            "id": "es-timeout",
+            "label_en": "Elasticsearch timeout",
+            "label_zh": "Elasticsearch超时",
+            "count": 1,
+            "percentage": 50.0,
+            "pattern_ids": [facts["pattern_manifest"][0]["id"]],
+            "detail_en": "The Elasticsearch dependency timed out in multiple application logging layers.",
+            "detail_zh": "Elasticsearch依赖在多个应用日志层中发生超时。",
+        }],
+        "secondary_finds": [],
+        "severity_signal": "high",
+        "confidence": 0.8,
+    }
+    reconciled = reconcile_result(result, facts)
+    assert len(reconciled["key_finds"]) == 1
+    assert len(reconciled["key_finds"][0]["pattern_ids"]) == 2
+    assert reconciled["key_finds"][0]["count"] == 2
+
+
+def test_reconciliation_maps_unquantified_named_dependency_to_its_family():
+    facts = preprocess_log(
+        "2026-09-10T14:00:00Z WARN NdrpApiService HTTP 503 Failed to parse response as JSON\n"
+        "2026-09-10T14:00:01Z WARN NdrpApiService HTTP 503 Service Unavailable\n"
+    )
+    result = {
+        "total_entries": 0,
+        "summary_en": "The NDRP callback failed repeatedly. The evidence is limited to this file.",
+        "summary_zh": "NDRP回调反复失败。证据仅限于此文件。",
+        "key_finds": [{
+            "id": "ndrp",
+            "label_en": "NDRP callback returning HTTP 503",
+            "label_zh": "NDRP回调返回HTTP 503",
+            "count": None,
+            "percentage": None,
+            "pattern_ids": ["unquantified"],
+            "detail_en": "NDRP returned HTTP 503 and the client failed to parse the JSON response.",
+            "detail_zh": "NDRP返回HTTP 503，客户端无法解析JSON响应。",
+        }],
+        "secondary_finds": [],
+        "severity_signal": "high",
+        "confidence": 0.8,
+    }
+    reconciled = reconcile_result(result, facts, allow_unquantified_fallback=True)
+    assert reconciled["key_finds"][0]["pattern_ids"] == facts["pattern_families"][0]["pattern_ids"]
+    assert reconciled["key_finds"][0]["count"] == 2
 
 
 def test_reconciliation_can_safely_fallback_unknown_model_pattern_id():
