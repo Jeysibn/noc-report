@@ -101,6 +101,21 @@ def test_hermes_client_parses_usage_and_runtime_metadata(monkeypatch):
     assert response.telemetry["input_tokens"] == 12
 
 
+def test_hermes_client_accepts_only_a_complete_json_code_fence(monkeypatch):
+    class Settings:
+        hermes_base_url = "http://hermes:8642"
+        hermes_api_key = "secret"
+        hermes_timeout_seconds = 10
+        hermes_profile = "noc-log-analysis"
+
+    client = HermesClient(Settings())
+    monkeypatch.setattr(client, "_request", lambda *_args, **_kwargs: {
+        "choices": [{"message": {"content": '```json\n{"ok": true}\n```'}}],
+    })
+    response = client.analyze(payload={}, skill_md="skill", output_schema={"type": "object"})
+    assert response.result == {"ok": True}
+
+
 def test_hermes_client_classifies_provider_authentication_content(monkeypatch):
     class Settings:
         hermes_base_url = "http://hermes:8642"

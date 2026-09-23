@@ -62,6 +62,30 @@ class HermesResult:
     telemetry: dict
 
 
+def _parse_structured_content(content: str) -> dict:
+    """Parse bare JSON or one complete JSON Markdown fence.
+
+    Some Hermes/provider combinations wrap otherwise-valid structured output
+    in a `````json`` fence despite the prompt contract. Accepting only that
+    exact envelope preserves the strict boundary: prose before/after JSON,
+    multiple blocks, and non-JSON fences remain invalid and are rejected by
+    the normal output-validation path.
+    """
+    text = content.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if len(lines) < 3 or lines[-1].strip() != "```":
+            raise ValueError("incomplete structured JSON fence")
+        language = lines[0][3:].strip().lower()
+        if language not in {"", "json"}:
+            raise ValueError("structured output used a non-JSON fence")
+        text = "\n".join(lines[1:-1]).strip()
+    result = json.loads(text)
+    if not isinstance(result, dict):
+        raise ValueError("assistant content is not a JSON object")
+    return result
+
+
 def build_messages(*, payload: dict, skill_md: str, output_schema: dict) -> list[dict]:
     """Build the exact system/user boundary used by the worker.
 
@@ -172,9 +196,7 @@ class HermesClient:
                 raise HermesProviderAuthenticationError("Hermes provider authentication failed")
             if "rate limit" in lowered or "quota exceeded" in lowered or "too many requests" in lowered:
                 raise HermesProviderRateLimitError("Hermes provider quota or rate limit")
-            result = json.loads(content)
-            if not isinstance(result, dict):
-                raise ValueError("assistant content is not a JSON object")
+            result = _parse_structured_content(content)
         except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError) as exc:
             raise HermesInvalidResponse("Hermes returned invalid structured output") from exc
 
