@@ -242,18 +242,53 @@ def build_hermes_input(*, job_id: str, incident: dict, evidence: dict, log_text:
     }
 
 
-def reconcile_result(result: dict, statistics: dict) -> dict:
+def reconcile_result(
+    result: dict,
+    statistics: dict,
+    *,
+    allow_unquantified_fallback: bool = False,
+) -> dict:
     """Replace model-supplied numbers with deterministic values.
 
-    Unknown or duplicate pattern IDs are rejected by the worker validator.
-    Patterns the model omitted are retained as concise Secondary Finds so no
-    deterministic evidence silently disappears from the persisted result.
+    Unknown or duplicate pattern IDs are rejected by default. The worker may
+    enable ``allow_unquantified_fallback`` only after the bounded Hermes
+    repair attempt: an unknown model reference is then stripped from a mixed
+    finding or represented as one unquantified finding. It is never treated as
+    a deterministic pattern, and all exact manifest patterns remain appended
+    below so evidence is not silently discarded.
     """
     pattern_by_id = {item["id"]: item for item in statistics["pattern_manifest"]}
     used: set[str] = set()
+    unquantified_seen = False
     for group_name in ("key_finds", "secondary_finds"):
+        normalized_findings = []
         for finding in result.get(group_name, []):
             ids = finding.get("pattern_ids") or []
+            unknown_ids = [
+                pattern_id
+                for pattern_id in ids
+                if pattern_id != "unquantified" and pattern_id not in pattern_by_id
+            ]
+            if unknown_ids and allow_unquantified_fallback:
+                known_ids = [pattern_id for pattern_id in ids if pattern_id in pattern_by_id]
+                if known_ids:
+                    ids = list(dict.fromkeys(known_ids))
+                    finding["pattern_ids"] = ids
+                else:
+                    ids = ["unquantified"]
+                    finding["pattern_ids"] = ids
+                    finding["count"] = None
+                    finding["percentage"] = None
+            elif unknown_ids:
+                raise ValueError(f"unknown deterministic pattern id: {unknown_ids[0]}")
+
+            if ids == ["unquantified"]:
+                if unquantified_seen and allow_unquantified_fallback:
+                    continue
+                unquantified_seen = True
+                finding["count"] = None
+                finding["percentage"] = None
+
             for pattern_id in ids:
                 if pattern_id == "unquantified":
                     continue
@@ -266,6 +301,8 @@ def reconcile_result(result: dict, statistics: dict) -> dict:
                 count = sum(pattern_by_id[item]["count"] for item in ids)
                 finding["count"] = count
                 finding["percentage"] = round((count / statistics["total_entries"]) * 100, 2) if statistics["total_entries"] else 0.0
+            normalized_findings.append(finding)
+        result[group_name] = normalized_findings
 
     omitted = [item for item in statistics["pattern_manifest"] if item["id"] not in used and item["id"] != "other"]
     for item in omitted:

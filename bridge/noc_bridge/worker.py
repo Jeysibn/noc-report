@@ -391,6 +391,20 @@ def _process_log_triage_message(
                     # runtime its bounded second chance before the existing
                     # terminal HERMES_INVALID_OUTPUT/DLQ path.
                     if output_attempt + 1 >= output_attempts:
+                        if isinstance(exc, ValueError) and "unknown deterministic pattern id" in str(exc):
+                            # Preserve the deterministic boundary even when
+                            # Hermes ignores both the manifest instruction and
+                            # the repair hint. Unknown IDs are not evidence;
+                            # the safe terminal fallback is unquantified.
+                            candidate = reconcile_result(
+                                result.result,
+                                statistics,
+                                allow_unquantified_fallback=True,
+                            )
+                            validate_against_schema(candidate, schema, label="Hermes fallback output")
+                            validate_log_triage_result(candidate, label="Hermes fallback output")
+                            output = candidate
+                            break
                         raise HermesInvalidResponse("Hermes returned invalid structured output") from exc
             assert result is not None and output is not None
             telemetry = {
