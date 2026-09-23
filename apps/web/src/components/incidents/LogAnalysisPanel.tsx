@@ -12,6 +12,7 @@ import type {
 } from "@/types/analysis";
 
 const POLL_INTERVAL_MS = 3000;
+const MAX_VISIBLE_SECONDARY_FINDS = 8;
 const IN_FLIGHT: AnalysisJobStatus[] = ["QUEUED", "PROCESSING", "RETRYING"];
 
 const statusPill: Record<
@@ -275,6 +276,11 @@ function AnalysisLanguageSection({
   language: "en" | "zh";
 }) {
   const isChinese = language === "zh";
+  const [showAllSecondary, setShowAllSecondary] = useState(false);
+  const secondaryFinds = showAllSecondary
+    ? result.secondaryFinds
+    : result.secondaryFinds.slice(0, MAX_VISIBLE_SECONDARY_FINDS);
+  const hiddenSecondaryCount = result.secondaryFinds.length - secondaryFinds.length;
   return (
     <section className="flex flex-col gap-2" aria-labelledby={`analysis-${language}`}>
       <h3 id={`analysis-${language}`} className="text-base font-semibold text-accent">
@@ -283,7 +289,20 @@ function AnalysisLanguageSection({
       <h4 className="font-medium">Short Summary</h4>
       <p className="text-muted">{isChinese ? result.summaryZh : result.summaryEn}</p>
       <FindList title="Key Finds" finds={result.keyFinds} lang={language} />
-      <FindList title="Secondary Finds" finds={result.secondaryFinds} lang={language} />
+      <FindList title="Secondary Finds" finds={secondaryFinds} lang={language} />
+      {result.secondaryFinds.length > MAX_VISIBLE_SECONDARY_FINDS && (
+        <button
+          type="button"
+          className="self-start text-xs text-accent underline underline-offset-2"
+          onClick={() => setShowAllSecondary((visible) => !visible)}
+        >
+          {showAllSecondary
+            ? (isChinese ? "收起次要发现" : "Show fewer secondary findings")
+            : (isChinese
+              ? `显示其余 ${hiddenSecondaryCount} 个次要发现`
+              : `Show ${hiddenSecondaryCount} more secondary findings`)}
+        </button>
+      )}
     </section>
   );
 }

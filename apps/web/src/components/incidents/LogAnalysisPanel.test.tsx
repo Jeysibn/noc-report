@@ -112,4 +112,50 @@ describe("LogAnalysisPanel", () => {
     expect(screen.queryByText(/analysis status temporarily unavailable/i)).not.toBeInTheDocument();
     expect(screen.getAllByText(/completed/i).length).toBeGreaterThan(0);
   });
+
+  it("keeps a large secondary-find list compact until the operator expands it", async () => {
+    const secondaryFinds = Array.from({ length: 10 }, (_, index) => ({
+      id: `secondary-${index}`,
+      labelEn: `Pattern ${index} (10)`,
+      labelZh: `模式 ${index}（10）`,
+      count: 10,
+      percentage: 1.72,
+      patternIds: [`p-${index}`],
+      detailEn: `Observed pattern ${index}.`,
+      detailZh: `检测到模式 ${index}。`,
+    }));
+    listRuns.mockResolvedValueOnce([{
+      jobId: "job-complete",
+      status: "COMPLETED",
+      model: "hermes",
+      effort: "medium",
+      skillVersion: "1",
+      queuedAt: new Date().toISOString(),
+      completedAt: new Date().toISOString(),
+      errorMessage: null,
+      isCurrent: true,
+      result: {
+        totalEntries: 100,
+        summaryEn: "Summary",
+        summaryZh: "摘要",
+        keyFinds: [],
+        secondaryFinds,
+        severitySignal: "high",
+        confidence: 0.9,
+      },
+    }]);
+
+    render(<LogAnalysisPanel incidentId="incident-1" hasLog />);
+    await act(async () => await Promise.resolve());
+
+    expect(screen.getAllByText(/Pattern 0/).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/Pattern 9/)).not.toBeInTheDocument();
+    const expanders = screen.getAllByRole("button").filter((button) =>
+      /show 2 more secondary findings|显示其余 2 个次要发现/i.test(button.textContent ?? ""),
+    );
+    expect(expanders).toHaveLength(2);
+
+    fireEvent.click(expanders[1]);
+    expect(screen.getAllByText(/Pattern 9/).length).toBeGreaterThan(0);
+  });
 });
