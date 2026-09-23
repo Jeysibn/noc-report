@@ -41,6 +41,41 @@ def test_hermes_health_reports_worker_separately_without_affecting_core_readines
     assert readiness.status_code == 200
 
 
+def test_internal_hermes_is_reported_from_healthy_worker_probe(client, monkeypatch):
+    """The host-run API must not require Hermes to be publicly published."""
+    monkeypatch.setattr(operational_health.settings, "ai_runtime", "hermes")
+    monkeypatch.setattr(operational_health, "_check_database", lambda: {"status": "healthy"})
+    monkeypatch.setattr(operational_health, "_check_rabbitmq", lambda: {"status": "healthy"})
+    monkeypatch.setattr(operational_health, "_check_minio", lambda: {"status": "healthy"})
+    monkeypatch.setattr(
+        operational_health,
+        "_check_hermes",
+        lambda: {"status": "unavailable", "detail": "hermes: URLError"},
+    )
+    monkeypatch.setattr(
+        operational_health,
+        "_check_ai_worker",
+        lambda: {
+            "status": "healthy",
+            "detail": {
+                "status": "healthy",
+                "runtime": "hermes",
+                "profile": "noc-log-analysis",
+                "runtime_ready": True,
+                "runtime_reachable": True,
+            },
+        },
+    )
+
+    response = client.get("/health/dependencies")
+    body = response.json()
+    assert response.status_code == 200
+    assert body["status"] == "healthy"
+    assert body["dependencies"]["ai_runtime"]["status"] == "healthy"
+    assert body["dependencies"]["ai_runtime"]["detail"]["source"] == "ai-worker"
+    assert body["dependencies"]["ai_runtime"]["detail"]["direct_probe"]["status"] == "unavailable"
+
+
 def test_readiness_returns_service_unavailable_when_core_dependency_is_down(client, monkeypatch):
     monkeypatch.setattr(operational_health, "_check_database", lambda: {"status": "healthy"})
     monkeypatch.setattr(operational_health, "_check_rabbitmq", lambda: {"status": "healthy"})

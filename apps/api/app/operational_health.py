@@ -113,6 +113,24 @@ def _check_ai_worker() -> dict:
     return _check_http_dependency(settings.ai_worker_health_url, name="ai-worker")
 
 
+def _worker_reports_hermes_healthy(worker: dict) -> bool:
+    """Return whether the worker's authenticated runtime probe is healthy.
+
+    In the supported Compose topology Hermes is intentionally reachable only
+    from the AI Worker network. A host-run API therefore cannot use a direct
+    Hermes HTTP probe as the source of truth; the worker's probe includes both
+    Hermes reachability and the restricted-profile readiness check.
+    """
+    detail = worker.get("detail")
+    runtime_detail = detail.get("metrics", detail) if isinstance(detail, dict) else {}
+    return (
+        worker.get("status") == "healthy"
+        and isinstance(detail, dict)
+        and runtime_detail.get("runtime_ready") is True
+        and runtime_detail.get("runtime_reachable") is True
+    )
+
+
 def _overall_status(dependencies: dict[str, dict]) -> str:
     # Disabled/not-applicable optional services do not make an otherwise
     # healthy installation unknown. Unknown still remains visible when a
@@ -148,6 +166,26 @@ def dependency_health() -> dict:
         futures = {executor.submit(check): name for name, check in checks.items()}
         for future in as_completed(futures):
             dependencies[futures[future]] = future.result()
+
+    # Hermes is intentionally internal-only in Compose. When FastAPI runs on
+    # the host, its localhost/default Hermes probe is not expected to work;
+    # the worker is the authenticated component that can actually reach and
+    # validate the configured NOC profile. Avoid reporting a false AI outage
+    # when that worker-side probe is healthy, while retaining the direct probe
+    # result for diagnostics.
+    if settings.ai_runtime == "hermes":
+        direct_runtime = dependencies.get("ai_runtime")
+        worker = dependencies.get("ai_worker")
+        if isinstance(direct_runtime, dict) and _worker_reports_hermes_healthy(worker or {}):
+            dependencies["ai_runtime"] = {
+                "status": "healthy",
+                "detail": {
+                    "source": "ai-worker",
+                    "runtime": worker["detail"].get("runtime"),
+                    "profile": worker["detail"].get("profile"),
+                    "direct_probe": direct_runtime,
+                },
+            }
     dependency_status = _overall_status(dependencies)
     queue_detail = dependencies.get("rabbitmq", {}).get("detail", {}).get("queues", {})
     dead_letter_count = sum(
