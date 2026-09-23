@@ -74,6 +74,82 @@ def test_request_contract_contains_only_prepared_application_facts():
     assert payload["language_order"] == ["zh-CN", "en"]
     assert "password" not in json.dumps(payload).lower()
     assert payload["statistics"]["error_count"] == 2
+    assert "pattern_manifest" not in payload["statistics"]
+    assert "pattern_families" not in payload["statistics"]
+    assert "[entry_id=0]" in payload["log_excerpt"]
+
+
+def test_reconciliation_uses_model_selected_entry_ids_for_semantic_grouping():
+    facts = preprocess_log(
+        "2026-09-10T14:00:00Z ERROR CacheService ElasticsearchTimeoutException timeout=3000\n"
+        "2026-09-10T14:00:01Z ERROR LogEsAspect ElasticsearchTimeoutException timeout=3001\n"
+        "2026-09-10T14:00:02Z ERROR NdrpApiService HTTP 503 Service Unavailable\n"
+    )
+    result = {
+        "total_entries": 0,
+        "summary_en": "The log shows two independent operational failures. Evidence is limited to this file.",
+        "summary_zh": "日志显示两个相互独立的运行故障。证据仅限于此文件。",
+        "key_finds": [{
+            "id": "elasticsearch-timeout",
+            "label_en": "Elasticsearch timeout",
+            "label_zh": "Elasticsearch超时",
+            "count": None,
+            "percentage": None,
+            "pattern_ids": ["unquantified"],
+            "evidence_entry_ids": [0, 1],
+            "detail_en": "CacheService and LogEsAspect report the same Elasticsearch timeout through different logging layers.",
+            "detail_zh": "CacheService和LogEsAspect从不同日志层记录了同一个Elasticsearch超时。",
+        }],
+        "secondary_finds": [{
+            "id": "ndrp-outage",
+            "label_en": "NDRP unavailable",
+            "label_zh": "NDRP不可用",
+            "count": None,
+            "percentage": None,
+            "pattern_ids": ["unquantified"],
+            "evidence_entry_ids": [2],
+            "detail_en": "NDRP returned HTTP 503 Service Unavailable.",
+            "detail_zh": "NDRP返回HTTP 503服务不可用。",
+        }],
+        "severity_signal": "high",
+        "confidence": 0.8,
+    }
+    reconciled = reconcile_result(result, facts)
+    assert reconciled["total_entries"] == 3
+    assert reconciled["key_finds"][0]["count"] == 2
+    assert reconciled["key_finds"][0]["percentage"] == 66.67
+    assert reconciled["secondary_finds"][0]["count"] == 1
+    assert reconciled["key_finds"][0]["pattern_ids"][0].startswith("semantic-")
+    assert reconciled["key_finds"][0]["evidence_entry_ids"] == [0, 1]
+
+
+def test_reconciliation_does_not_reexpand_unselected_physical_templates():
+    facts = preprocess_log(
+        "2026-09-10T14:00:00Z ERROR ElasticsearchTimeoutException\n"
+        "2026-09-10T14:00:01Z ERROR independent database failure\n"
+    )
+    result = {
+        "total_entries": 0,
+        "summary_en": "The log shows a timeout failure. Evidence is limited to this file.",
+        "summary_zh": "日志显示超时故障。证据仅限于此文件。",
+        "key_finds": [{
+            "id": "timeout",
+            "label_en": "Elasticsearch timeout",
+            "label_zh": "Elasticsearch超时",
+            "count": None,
+            "percentage": None,
+            "pattern_ids": ["unquantified"],
+            "evidence_entry_ids": [0],
+            "detail_en": "The Elasticsearch operation timed out.",
+            "detail_zh": "Elasticsearch操作超时。",
+        }],
+        "secondary_finds": [],
+        "severity_signal": "high",
+        "confidence": 0.8,
+    }
+    reconciled = reconcile_result(result, facts)
+    assert reconciled["secondary_finds"] == []
+    assert reconciled["key_finds"][0]["count"] == 1
 
 
 def test_reconciliation_replaces_model_numbers_and_retains_omitted_patterns():
@@ -263,18 +339,18 @@ def test_prompt_injection_is_below_trusted_security_instruction():
     assert messages[0]["role"] == "system"
 
 
-def test_log_analysis_requires_exact_deterministic_pattern_ids_and_supports_repair_feedback():
+def test_log_analysis_requires_semantic_entry_ids_and_supports_repair_feedback():
     messages = build_messages(
-        payload={"statistics": {"pattern_manifest": [{"id": "p-1"}]}},
+        payload={"statistics": {"total_entries": 1}, "log_excerpt": "[entry_id=0] ERROR timeout"},
         skill_md="# Log Triage",
         output_schema={"type": "object"},
-        repair_hint="Use only exact pattern IDs copied from statistics.pattern_manifest.",
+        repair_hint="Return evidence_entry_ids copied exactly from log_excerpt.",
     )
     system = messages[0]["content"]
-    assert "Pattern IDs are opaque identifiers" in system
-    assert "never invent, normalize, translate, or rename" in system
+    assert "evidence_entry_ids" in system
+    assert "physical pattern catalogue" in system
     assert "APPLICATION VALIDATION FEEDBACK" in system
-    assert "Use only exact pattern IDs" in system
+    assert "evidence_entry_ids copied exactly" in system
 
 
 def test_hermes_client_parses_usage_and_runtime_metadata(monkeypatch):

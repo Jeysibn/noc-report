@@ -55,7 +55,7 @@ def test_process_message_verifies_preprocesses_calls_fake_hermes_and_uploads(mon
             pass
 
         def analyze(self, *, payload, skill_md, output_schema, repair_hint=None):
-            pattern_id = payload["statistics"]["pattern_manifest"][0]["id"]
+            assert "pattern_manifest" not in payload["statistics"]
             return HermesResult(
                 result={
                     "total_entries": 999,
@@ -67,7 +67,8 @@ def test_process_message_verifies_preprocesses_calls_fake_hermes_and_uploads(mon
                         "label_zh": "超时",
                         "count": 999,
                         "percentage": 99.9,
-                        "pattern_ids": [pattern_id],
+                            "pattern_ids": ["unquantified"],
+                            "evidence_entry_ids": [0],
                         "detail_en": "The timeout pattern is repeated in the payment path.",
                         "detail_zh": "支付路径中重复出现超时模式。",
                     }],
@@ -149,8 +150,7 @@ def test_process_message_retries_semantically_invalid_model_output(monkeypatch, 
             self.calls += 1
             if self.calls == 2:
                 assert repair_hint is not None
-                assert "exact pattern IDs" in repair_hint
-            pattern_id = payload["statistics"]["pattern_manifest"][0]["id"]
+                assert "evidence_entry_ids" in repair_hint
             result = {
                 "total_entries": 1,
                 "summary_zh": (
@@ -168,7 +168,7 @@ def test_process_message_retries_semantically_invalid_model_output(monkeypatch, 
                     "label_zh": "支付错误",
                     "count": 1 if self.calls > 1 else 0,
                     "percentage": 100.0 if self.calls == 1 else None,
-                    "pattern_ids": ["unquantified"] if self.calls > 1 else ["unknown-pattern"],
+                        "pattern_ids": ["unquantified"] if self.calls > 1 else ["unknown-pattern"],
                     "detail_en": "The payment path logged one database failure.",
                     "detail_zh": "支付路径记录了一次数据库故障。",
                 }],

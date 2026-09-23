@@ -214,6 +214,18 @@ def validate_log_triage_result(result: dict, *, label: str = "log_triage output"
                     raise OutputValidationError(f"duplicate finding identity: {pattern_id}")
                 seen_ids.add(pattern_id)
 
+            evidence_entry_ids = finding.get("evidence_entry_ids")
+            if evidence_entry_ids is not None:
+                if not isinstance(evidence_entry_ids, list) or not evidence_entry_ids:
+                    raise OutputValidationError(f"{path}.evidence_entry_ids must be a non-empty list")
+                if any(
+                    not isinstance(entry_id, int) or isinstance(entry_id, bool) or entry_id < 0
+                    for entry_id in evidence_entry_ids
+                ):
+                    raise OutputValidationError(f"{path}.evidence_entry_ids contains an invalid entry ID")
+                if len(evidence_entry_ids) != len(set(evidence_entry_ids)):
+                    raise OutputValidationError(f"{path}.evidence_entry_ids contains duplicate IDs")
+
             count = finding.get("count")
             percentage = finding.get("percentage")
             is_unquantified = pattern_ids == ["unquantified"]

@@ -40,14 +40,17 @@ reasoning; it is not given application database, object-storage, queue, or JWT
 credentials.
 
 The log-analysis request contract contains incident metadata, evidence identity,
-exact statistics, stable pattern IDs, representative entries, a bounded
-excerpt, and the language order `zh-CN` then `en`. The Daily Report request is
-smaller: it contains a shift label, ordinal incident context, and compact frozen
-analysis fragments, with application IDs and exact timestamps removed.
-Evidence is explicitly untrusted data. The worker verifies each response
-against the frozen SkillSnapshot schema, replaces model-supplied counts with
-deterministic values for log analysis, and only then persists the result or
-report artifact.
+exact aggregate statistics, normalized log entries annotated with stable
+`entry_id` values, a bounded direct log excerpt, and the language order
+`zh-CN` then `en`. The physical pattern manifest remains worker-only; Hermes
+selects semantic cause groups through `evidence_entry_ids`, and the worker
+computes exact counts and stable semantic finding identities from those entries.
+The Daily Report request is smaller: it contains a shift label, ordinal incident
+context, and compact frozen analysis fragments, with application IDs and exact
+timestamps removed. Evidence is explicitly untrusted data. The worker verifies
+each response against the frozen SkillSnapshot schema, reconciles entry IDs,
+replaces model-supplied counts with deterministic values, and only then
+persists the result or report artifact.
 
 Hermes is configured with two task-specific profiles: `noc-log-analysis`
 loads `log-triage-summary`, and `noc-daily-report` loads `daily-alert-report`.

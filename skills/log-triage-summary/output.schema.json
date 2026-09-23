@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$comment": "Active canonical LogAnalysisResult contract. Deterministic preprocessing supplies total_entries/count/percentage from the physical log manifest, then the runtime worker applies semantic validation. Chinese and English are presentations of the same finding object; pattern_ids is the shared finding identity and list membership is the shared Key-vs-Secondary classification. Historical snapshots may retain the legacy cause/action fields under their frozen schema.",
+  "$comment": "Active canonical LogAnalysisResult contract. The semantic runtime groups annotated evidence_entry_ids; the worker then supplies authoritative counts and stable finding identities. Chinese and English are presentations of the same finding object. Historical snapshots may retain the legacy cause/action fields under their frozen schema.",
   "type": "object",
   "properties": {
     "total_entries": {"type": "integer", "minimum": 0},
@@ -35,6 +35,12 @@
         "pattern_ids": {
           "type": "array",
           "items": {"type": "string"},
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "evidence_entry_ids": {
+          "type": "array",
+          "items": {"type": "integer", "minimum": 0},
           "minItems": 1,
           "uniqueItems": true
         },

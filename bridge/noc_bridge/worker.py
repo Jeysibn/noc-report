@@ -352,16 +352,17 @@ def _process_log_triage_message(
                 raise EvidenceVerificationError("log evidence is not valid UTF-8") from exc
 
             preprocessing_started = time.monotonic()
+            statistics = preprocess_log(log_text)
             payload = build_hermes_input(
                 job_id=message["job_id"],
                 incident=incident,
                 evidence=evidence,
                 log_text=log_text,
+                statistics=statistics,
             )
             preprocessing_duration_ms = round((time.monotonic() - preprocessing_started) * 1000)
             if metrics is not None:
                 metrics.set_value("last_preprocessing_duration_ms", preprocessing_duration_ms)
-            statistics = payload["statistics"]
             runtime = (hermes_client_factory or HermesClient)(settings)
             result = None
             output = None
@@ -373,10 +374,12 @@ def _process_log_triage_message(
                         skill_md=skill_md,
                         output_schema=schema,
                         repair_hint=(
-                            "Use only exact pattern IDs copied from "
-                            "statistics.pattern_manifest. Never invent or transform "
-                            "a pattern ID. If no exact manifest ID applies, use "
-                            'pattern_ids:["unquantified"] with null count and percentage. '
+                            "Group the annotated log entries by underlying operational cause. "
+                            "Return evidence_entry_ids copied exactly from the [entry_id=N] "
+                            "markers in log_excerpt; do not invent IDs or assign one entry to "
+                            "more than one finding. Use pattern_ids:[\"unquantified\"] and "
+                            "null count/percentage in the model response; the application "
+                            "will calculate authoritative counts after reconciliation. "
                             "Return one concise bilingual result: summary_zh/summary_en "
                             "must be at most 800 characters and 2-4 sentences; key "
                             "details at most 600 characters and 3 sentences; secondary "

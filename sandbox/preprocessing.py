@@ -13,7 +13,8 @@ from collections import Counter, defaultdict
 from datetime import datetime
 
 
-PREPROCESSOR_VERSION = "13"
+PREPROCESSOR_VERSION = "14"
+MAX_DIRECT_LOG_CHARS = 2_000_000
 _TIMESTAMP = re.compile(r"\b(\d{4}-\d{2}-\d{2}T[^\s]+|\d{4}-\d{2}-\d{2}[^\s]+)")
 _LEVEL = re.compile(r"\b(DEBUG|INFO|WARN|WARNING|ERROR|CRITICAL|FATAL)\b", re.IGNORECASE)
 _ENDPOINT = re.compile(r"(?:GET|POST|PUT|PATCH|DELETE)\s+([^\s?]+)")
@@ -180,8 +181,9 @@ def preprocess_log(log_text: str, *, max_patterns: int = 80, max_samples: int = 
     pattern_samples: dict[str, list[str]] = defaultdict(list)
     pattern_families: dict[str, tuple[str, str]] = {}
     representative_entries: list[dict] = []
+    entry_manifest: list[dict] = []
 
-    for line, structured in entries:
+    for entry_id, (line, structured) in enumerate(entries):
         level = _level(line, structured)
         if level:
             levels[level] += 1
@@ -225,10 +227,16 @@ def preprocess_log(log_text: str, *, max_patterns: int = 80, max_samples: int = 
         pattern_counts[pattern_id] += 1
         pattern_templates[pattern_id] = template
         pattern_families[pattern_id] = _cause_family(template)
+        entry_manifest.append({
+            "id": entry_id,
+            "level": level,
+            "text": line[:1200],
+            "pattern_id": pattern_id,
+        })
         if len(pattern_samples[pattern_id]) < 2:
             pattern_samples[pattern_id].append(line[:500])
         if len(representative_entries) < max_samples and (level in {"ERROR", "CRITICAL", "FATAL"} or len(representative_entries) < 8):
-            representative_entries.append({"level": level, "text": line[:700]})
+            representative_entries.append({"id": entry_id, "level": level, "text": line[:700]})
 
     ranked = sorted(pattern_counts, key=lambda item: (-pattern_counts[item], item))
     patterns = []
@@ -285,6 +293,10 @@ def preprocess_log(log_text: str, *, max_patterns: int = 80, max_samples: int = 
         "user_id_counts": dict(user_ids.most_common(20)),
         "record_id_counts": dict(record_ids.most_common(20)),
         "representative_entries": representative_entries,
+        # This is deliberately kept out of the Hermes request. The worker
+        # uses it after inference to translate semantic evidence selections
+        # into authoritative counts and immutable physical identities.
+        "entry_manifest": entry_manifest,
         "timestamp_start": min(timestamps).isoformat() if timestamps else None,
         "timestamp_end": max(timestamps).isoformat() if timestamps else None,
         "duration_seconds": round((max(timestamps) - min(timestamps)).total_seconds(), 3) if timestamps else None,
@@ -355,20 +367,102 @@ def compact_log_triage_narrative(result: dict) -> dict:
     return result
 
 
-def build_hermes_input(*, job_id: str, incident: dict, evidence: dict, log_text: str, language_order: list[str] | None = None) -> dict:
-    """Build the provider-neutral request sent by the worker to Hermes."""
-    statistics = preprocess_log(log_text)
+def _annotated_log(statistics: dict, log_text: str) -> str:
+    """Annotate normalized entries so Hermes can return semantic evidence IDs."""
+    entries = statistics.get("entry_manifest") or []
+    if not entries:
+        return log_text
+    return "\n".join(
+        f"[entry_id={item['id']}] {item['text']}"
+        for item in entries
+    )
+
+
+def _public_statistics(statistics: dict) -> dict:
+    """Expose deterministic facts without exposing physical pattern IDs."""
+    return {
+        key: value
+        for key, value in statistics.items()
+        if key not in {"pattern_manifest", "pattern_families", "entry_manifest"}
+    }
+
+
+def build_hermes_input(
+    *,
+    job_id: str,
+    incident: dict,
+    evidence: dict,
+    log_text: str,
+    language_order: list[str] | None = None,
+    statistics: dict | None = None,
+) -> dict:
+    """Build a semantic-grouping request sent by the worker to Hermes.
+
+    The model receives normalized entries annotated with stable entry IDs and
+    deterministic aggregate facts. It does not receive the application's
+    physical pattern catalogue, so it can group different logger/stack-trace
+    manifestations as one cause. The full deterministic statistics remain in
+    the worker for post-inference reconciliation.
+    """
+    statistics = statistics or preprocess_log(log_text)
+    annotated_log = _annotated_log(statistics, log_text)
     return {
         "schema_version": "1.0",
         "task": "log_analysis",
         "job_id": job_id,
         "incident": incident,
         "evidence": evidence,
-        "statistics": statistics,
+        "statistics": _public_statistics(statistics),
         "representative_entries": statistics["representative_entries"],
-        "log_excerpt": compact_log(log_text),
+        "log_excerpt": compact_log(annotated_log, max_chars=MAX_DIRECT_LOG_CHARS),
         "language_order": language_order or ["zh-CN", "en"],
     }
+
+
+def _semantic_pattern_id(finding: dict) -> str:
+    """Create a stable persisted identity for one model-defined cause group."""
+    finding_id = str(finding.get("id") or "finding")
+    digest = hashlib.sha256(f"semantic-v1:{finding_id}".encode("utf-8")).hexdigest()[:12]
+    return f"semantic-{digest}"
+
+
+def _reconcile_entry_grouped_result(result: dict, statistics: dict) -> dict:
+    """Reconcile Hermes semantic groups against exact normalized entry IDs."""
+    entries = statistics.get("entry_manifest") or []
+    entry_by_id = {item["id"]: item for item in entries}
+    total_entries = statistics.get("total_entries", len(entries))
+    claimed: set[int] = set()
+
+    for group_name in ("key_finds", "secondary_finds"):
+        for finding in result.get(group_name, []):
+            if "evidence_entry_ids" not in finding:
+                continue
+            raw_ids = finding.get("evidence_entry_ids")
+            if not isinstance(raw_ids, list) or any(
+                not isinstance(entry_id, int) or isinstance(entry_id, bool)
+                for entry_id in raw_ids
+            ):
+                raise ValueError("evidence_entry_ids must contain integer entry IDs")
+            entry_ids = list(dict.fromkeys(raw_ids))
+            unknown = [entry_id for entry_id in entry_ids if entry_id not in entry_by_id]
+            if unknown:
+                raise ValueError(f"unknown evidence entry id: {unknown[0]}")
+            overlap = claimed.intersection(entry_ids)
+            if overlap:
+                raise ValueError(f"evidence entry assigned to more than one finding: {min(overlap)}")
+            claimed.update(entry_ids)
+
+            if entry_ids:
+                finding["pattern_ids"] = [_semantic_pattern_id(finding)]
+                finding["count"] = len(entry_ids)
+                finding["percentage"] = round((len(entry_ids) / total_entries) * 100, 2) if total_entries else 0.0
+            else:
+                finding["pattern_ids"] = ["unquantified"]
+                finding["count"] = None
+                finding["percentage"] = None
+
+    result["total_entries"] = total_entries
+    return result
 
 
 def reconcile_result(
@@ -386,6 +480,13 @@ def reconcile_result(
     a deterministic pattern, and all exact manifest patterns remain appended
     below so evidence is not silently discarded.
     """
+    if any(
+        "evidence_entry_ids" in finding
+        for group_name in ("key_finds", "secondary_finds")
+        for finding in result.get(group_name, [])
+    ):
+        return _reconcile_entry_grouped_result(result, statistics)
+
     pattern_by_id = {item["id"]: item for item in statistics["pattern_manifest"]}
     family_by_pattern = {
         pattern_id: item.get("family_id", "template:" + pattern_id)

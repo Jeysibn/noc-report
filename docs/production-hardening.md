@@ -42,13 +42,14 @@ bookmarks, hyperlinks, and section order are deterministic renderer concerns,
 not AI formatting decisions.
 
 Log Analysis uses the active versioned `LogAnalysisResult` contract from
-`skills/log-triage-summary`: counts mean matching physical log entries and are
-recomputed from deterministic pattern IDs; percentages are validated against
-the single denominator; and one finding object owns both language
-presentations and its Key/Secondary classification. Runtime validation rejects
-duplicate identities, missing bilingual detail, invalid arithmetic, oversized
-summaries, and unsupported shared-causation assertions before a Job can be
-completed. `AnalysisPresentation` converts the stored result into the same
+`skills/log-triage-summary`: Hermes groups normalized log entries through exact
+`evidence_entry_ids`, while the worker computes matching physical-entry counts
+and percentages after inference. The physical pattern manifest remains an
+internal deterministic fallback and is not sent to Hermes. One finding object
+owns both language presentations and its Key/Secondary classification. Runtime
+validation rejects duplicate identities or entry assignments, missing bilingual
+detail, invalid arithmetic, oversized summaries, and unsupported shared-causation
+assertions before a Job can be completed. `AnalysisPresentation` converts the stored result into the same
 Chinese-first Short Summary/Key Finds/Secondary Finds sequence used by both
 the standalone UI and the active Daily Report DOCX. Legacy cause/action fields
 remain readable only through frozen compatibility adapters. Key Find details

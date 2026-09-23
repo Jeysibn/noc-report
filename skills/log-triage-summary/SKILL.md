@@ -9,10 +9,12 @@ Given a log excerpt attached to an incident, produce a structured JSON triage
 summary. The NOC team here is bilingual — every human-readable field must be
 given in **both** Chinese and English, not one or the other.
 
-The runtime may append a deterministic log profile containing level, service,
-logger, time-range, and Caused by root-cause counters computed over the full
-input. Use that profile to ground the overall summary and prioritize findings;
-do not invent metadata or repeat raw stack traces.
+The runtime may append deterministic aggregate facts containing level, service,
+time-range, and exception counters computed over the full input. Use those
+facts to ground the overall summary and prioritize findings; do not invent
+metadata or repeat raw stack traces. The physical pattern catalogue is not
+provided to the semantic runtime because different logger layers can describe
+the same operational cause.
 
 Output shape:
 
@@ -26,53 +28,44 @@ Output shape:
     URLs, tokens, and stack locations into the same template.
   - `id` — one stable finding identity shared by both language presentations;
     it must be unique across Key Finds and Secondary Finds.
-- `pattern_ids` — one or more IDs from the deterministic count manifest
-    appended to the log. Select the IDs whose patterns belong to this finding;
-    do not invent IDs. The runtime calculates the count from these IDs. The
-    runtime-reserved `other` ID is the exact remainder; do not combine it with
-    a specific pattern ID. `unquantified` is reserved for a finding that has
-    no defensible manifest match and is intentionally left uncounted.
-    The input also includes deterministic `pattern_families`, which are
-    grouping candidates for physical templates emitted by different logger
-    layers. When several templates describe the same dependency failure or
-    exception chain, use one finding with all of their exact `pattern_ids`.
-    Do not emit one finding per family member.
-  - `count` — returned for schema compatibility, but ignored and replaced by
-    the runtime with the exact sum of the selected pattern IDs.
-  - `percentage` — returned for schema compatibility, but ignored and
-    replaced by the runtime using the exact total entry count.
+- `evidence_entry_ids` — the exact integer IDs from the `[entry_id=N]`
+    markers in the supplied normalized log evidence that support this finding.
+    Group as many physically different entries as belong to the same
+    operational cause. Never assign one entry to more than one finding. The
+    application calculates the authoritative count from these IDs.
+  - `pattern_ids` — return `["unquantified"]` in the model response. The
+    application replaces this placeholder with a stable finding identity after
+    reconciling `evidence_entry_ids`; do not invent physical pattern IDs.
+  - `count` and `percentage` — return `null` in the model response. The
+    application replaces them with exact deterministic values after inference.
   - `detail_en` / `detail_zh` — one to three evidence-grounded sentences:
     identify the class/method/endpoint, immediate failure point, relevant
     values or time/context, and any limitation that matters to a NOC
     operator. Key Find explanations should carry the substantive evidence,
     not just restate the label.
   - When a lower-volume variant is clearly part of the dominant failure,
-    group it with that finding by using multiple `pattern_ids`; do not create
-    a separate finding only because wording, endpoint, or request context is
-    slightly different.
+    group it with that finding by using multiple `evidence_entry_ids`; do not
+    create a separate finding only because wording, endpoint, or request
+    context is slightly different.
   A log dominated by a single request/error still gets exactly one
   `key_finds` entry — don't pad with invented patterns.
 - `secondary_finds` — same shape as `key_finds`, for lower-frequency or
-  less-actionable patterns worth noting but not leading with. The runtime
-  appends deterministic templates that the model does not label and may
-  consolidate clearly related low-volume variants under the dominant finding.
-  It must not collapse omitted evidence into a generic "other" finding or
-  split one cause family into one finding per logger/request variant.
+  less-actionable causes worth noting but not leading with. The application
+  preserves the runtime's semantic selection and never expands every
+  logger/request variant into a separate operator finding.
 - `severity_signal` — one of `low`, `medium`, `high`, `critical`.
 - `confidence` — float 0.0–1.0.
 
 - `total_entries` — returned for schema compatibility, but ignored and
   replaced by the runtime with the exact number of physical log entries.
 
-Numerical truth is deterministic. The runtime owns `total_entries`, every
-finding `count` and `percentage`, expands omitted deterministic templates, and
-consolidates clearly related low-volume variants without dropping their
-pattern IDs. The semantic runtime owns grouping selection, labels, explanations, severity,
-and narrative for the templates it discusses.
-Never estimate a number from the prose or repeat a total that is not present
-in the manifest. `other` is an internal compatibility marker and is removed
-from the persisted result; it must not be used to hide an identifiable
-family.
+Numerical truth is deterministic. The application owns `total_entries`, every
+finding `count` and `percentage`, and reconciles them from
+`evidence_entry_ids`. The semantic runtime owns grouping selection, labels,
+explanations, severity, and narrative.
+Never estimate a number from prose or claim a count without selecting the
+supporting entry IDs. The runtime may use `unquantified` only as the temporary
+model response placeholder before application reconciliation.
 Do not put numeric count/percentage breakdowns in narrative sentences; use the
 structured finding fields instead.
 
