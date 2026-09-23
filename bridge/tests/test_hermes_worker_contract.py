@@ -102,6 +102,7 @@ def test_reconciliation_replaces_model_numbers_and_retains_omitted_patterns():
     assert reconciled["key_finds"][0]["count"] == first["count"]
     assert reconciled["key_finds"][0]["percentage"] == round(first["count"] / 3 * 100, 2)
     assert len(reconciled["secondary_finds"]) == len(facts["pattern_manifest"]) - 1
+    assert len({finding["detail_en"] for finding in reconciled["secondary_finds"]}) == len(reconciled["secondary_finds"])
 
 
 def test_reconciliation_can_safely_fallback_unknown_model_pattern_id():

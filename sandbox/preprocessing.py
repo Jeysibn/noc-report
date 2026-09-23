@@ -13,7 +13,7 @@ from collections import Counter, defaultdict
 from datetime import datetime
 
 
-PREPROCESSOR_VERSION = "8"
+PREPROCESSOR_VERSION = "9"
 _TIMESTAMP = re.compile(r"\b(\d{4}-\d{2}-\d{2}T[^\s]+|\d{4}-\d{2}-\d{2}[^\s]+)")
 _LEVEL = re.compile(r"\b(DEBUG|INFO|WARN|WARNING|ERROR|CRITICAL|FATAL)\b", re.IGNORECASE)
 _ENDPOINT = re.compile(r"(?:GET|POST|PUT|PATCH|DELETE)\s+([^\s?]+)")
@@ -365,6 +365,8 @@ def reconcile_result(
 
     omitted = [item for item in statistics["pattern_manifest"] if item["id"] not in used and item["id"] != "other"]
     for item in omitted:
+        descriptor = re.sub(r"[.!?。！？]+", " ", item["template"])
+        descriptor = _WHITESPACE.sub(" ", descriptor).strip()[:180].rstrip()
         result.setdefault("secondary_finds", []).append({
             "id": f"unlabeled-{item['id']}",
             "label_en": item["template"],
@@ -372,8 +374,8 @@ def reconcile_result(
             "count": item["count"],
             "percentage": round((item["count"] / statistics["total_entries"]) * 100, 2) if statistics["total_entries"] else 0.0,
             "pattern_ids": [item["id"]],
-            "detail_en": "This deterministic pattern was present in the evidence but was not given a separate semantic label by the runtime.",
-            "detail_zh": "该确定性模式出现在证据中，但运行时未为其提供单独的语义标签。",
+            "detail_en": f"Observed deterministic pattern {item['id']}: {descriptor}.",
+            "detail_zh": f"检测到确定性模式 {item['id']}：{descriptor}。",
         })
     result["total_entries"] = statistics["total_entries"]
     return result
