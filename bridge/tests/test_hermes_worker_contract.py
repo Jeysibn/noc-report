@@ -97,6 +97,9 @@ def test_hermes_client_parses_usage_and_runtime_metadata(monkeypatch):
     response = client.analyze(payload={}, skill_md="skill", output_schema={"type": "object"})
     assert response.result == {"ok": True}
     assert response.telemetry["runtime"] == "hermes"
+    assert response.telemetry["runtime_name"] == "hermes"
+    assert response.telemetry["runtime_profile"] == "noc-log-analysis"
+    assert response.telemetry["runtime_model"] == "configured-model"
     assert response.telemetry["provider"] == "configured-provider"
     assert response.telemetry["input_tokens"] == 12
 

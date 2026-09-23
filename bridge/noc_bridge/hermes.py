@@ -204,9 +204,12 @@ class HermesClient:
         runtime = response.get("runtime") or {}
         telemetry = {
             "runtime": "hermes",
+            "runtime_name": "hermes",
             "profile": self.profile,
+            "runtime_profile": self.profile,
             "provider": runtime.get("provider"),
             "model": runtime.get("model") or response.get("model"),
+            "runtime_model": runtime.get("model") or response.get("model"),
             "hermes_response_id": response.get("id"),
             "input_tokens": usage.get("prompt_tokens", usage.get("input_tokens")),
             "output_tokens": usage.get("completion_tokens", usage.get("output_tokens")),

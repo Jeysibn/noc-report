@@ -345,22 +345,31 @@ def requeue_dlq(
 
     job_id = payload.get("job_id")
     if job_id:
-        job = db.get(Job, uuid.UUID(job_id))
+        # The DLQ message is already published before this database
+        # reconciliation can commit. Lock the row while reading it so a
+        # concurrent worker claim cannot be interleaved with the reset.
+        # If the worker has already claimed/completed the job, preserve that
+        # authoritative lifecycle state instead of overwriting it with
+        # QUEUED.
+        job = db.execute(
+            select(Job).where(Job.id == uuid.UUID(job_id)).with_for_update()
+        ).scalar_one_or_none()
         if job is not None:
-            job.status = "QUEUED"
-            job.attempt = 1
-            job.error_code = None
-            job.error_message = None
-            job.started_at = None
-            job.completed_at = None
-            # Reliability mission Batch A: clear any stale claim/lease so
-            # the idempotent job lifecycle module's
-            # claim_job) is willing to claim this job again rather than
-            # treating it as still leased by whatever worker had it before.
-            job.claimed_at = None
-            job.claim_token = None
-            job.lease_expires_at = None
-            job.worker_id = None
+            if job.status in {"FAILED", "RETRYING", "QUEUED"}:
+                job.status = "QUEUED"
+                job.attempt = 1
+                job.error_code = None
+                job.error_message = None
+                job.started_at = None
+                job.completed_at = None
+                # Reliability mission Batch A: clear any stale claim/lease so
+                # the idempotent job lifecycle module's claim_job is willing
+                # to claim this job again rather than treating it as still
+                # leased by whatever worker had it before.
+                job.claimed_at = None
+                job.claim_token = None
+                job.lease_expires_at = None
+                job.worker_id = None
 
     record_audit(
         db,

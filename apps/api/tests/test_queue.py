@@ -280,6 +280,52 @@ def test_dlq_requeue_and_purge(client, db_session):
     assert unknown_resp.status_code == 404
 
 
+def test_dlq_requeue_does_not_overwrite_concurrent_processing_state(client, db_session):
+    """A worker claim must win over the admin's post-publish reconciliation."""
+    from app.core.queue import send_to_dlq
+
+    make_user(db_session, "admin1", "Admin")
+    headers = auth_headers(client, "admin1")
+
+    with open_channel() as channel:
+        _purge_all(channel)
+        snapshot = _snapshot(db_session, "log-triage-summary")
+        job = enqueue_job(
+            db_session,
+            job_type="log_triage",
+            requested_by=None,
+            incident_id=None,
+            object_refs=[],
+            model="historical-runtime",
+            effort="medium",
+            skill_name="log-triage-summary",
+            skill_version="1",
+            skill_hash=snapshot.content_hash,
+            skill_snapshot_id=snapshot.id,
+        )
+        db_session.commit()
+        send_to_dlq(
+            channel,
+            job_type="log_triage",
+            body={"job_id": str(job.id), "job_type": "log_triage", "attempt": 4},
+        )
+        job.status = "PROCESSING"
+        job.worker_id = "worker-already-claimed"
+        db_session.commit()
+
+    response = client.post("/api/v1/admin/dlq/log_triage/requeue", headers=headers)
+
+    assert response.status_code == 200
+    db_session.expire_all()
+    reloaded = db_session.get(Job, job.id)
+    assert reloaded.status == "PROCESSING"
+    assert reloaded.worker_id == "worker-already-claimed"
+
+    with open_channel() as channel:
+        assert queue_message_count(channel, _queue_names("log_triage")["main"]) == 1
+        _purge_all(channel)
+
+
 # -- Skill Runtime mission Phase 14: canonical job message protocol --------
 
 

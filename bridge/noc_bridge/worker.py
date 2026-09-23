@@ -46,7 +46,7 @@ from noc_bridge.storage import (
     object_exists,
     upload_artifact,
 )
-from noc_bridge.validation import validate_against_schema, validate_log_triage_result
+from noc_bridge.validation import OutputValidationError, validate_against_schema, validate_log_triage_result
 from preprocessing import build_hermes_input, preprocess_log, reconcile_result
 
 
@@ -318,6 +318,7 @@ def process_message(
             statistics = payload["statistics"]
             runtime = (hermes_client_factory or HermesClient)(settings)
             result = None
+            output = None
             output_attempts = max(1, int(settings.hermes_max_output_attempts))
             for output_attempt in range(output_attempts):
                 try:
@@ -326,17 +327,27 @@ def process_message(
                         skill_md=skill_md,
                         output_schema=schema,
                     )
+                    candidate = reconcile_result(result.result, statistics)
+                    validate_against_schema(candidate, schema, label="Hermes output")
+                    validate_log_triage_result(candidate, label="Hermes output")
+                    output = candidate
                     break
                 except HermesInvalidResponse:
                     if output_attempt + 1 >= output_attempts:
                         raise
-            assert result is not None
-            output = reconcile_result(result.result, statistics)
-            validate_against_schema(output, schema, label="Hermes output")
-            validate_log_triage_result(output, label="Hermes output")
+                except (OutputValidationError, ValueError) as exc:
+                    # A model can return JSON that is syntactically valid but
+                    # violates the frozen schema/semantic contract (for
+                    # example a wrong pattern ID or percentage). Give the
+                    # runtime its bounded second chance before the existing
+                    # terminal HERMES_INVALID_OUTPUT/DLQ path.
+                    if output_attempt + 1 >= output_attempts:
+                        raise HermesInvalidResponse("Hermes returned invalid structured output") from exc
+            assert result is not None and output is not None
             telemetry = {
                 **result.telemetry,
                 "hermes_version": settings.hermes_version,
+                "runtime_version": settings.hermes_version,
                 "input_hash": evidence["sha256"],
                 "evidence_sha256": evidence["sha256"],
                 "preprocessor_version": statistics["preprocessing_version"],
@@ -514,7 +525,10 @@ class Worker:
         except Exception as exc:
             if hasattr(exc, "error_code") and getattr(exc, "error_code") == "HERMES_INVALID_OUTPUT":
                 self.metrics.increment("schema_validation_failures")
-            if type(exc).__name__.startswith("Hermes"):
+            if (
+                type(exc).__name__.startswith("Hermes")
+                and getattr(exc, "error_code", None) != "HERMES_INVALID_OUTPUT"
+            ):
                 self.metrics.increment("provider_failures")
             self._settle_failure(channel, method.delivery_tag, message, exc)
         finally:
