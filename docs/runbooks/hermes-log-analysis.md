@@ -89,6 +89,10 @@ needed.
   overage, or subscription authorization, or select a model available to the
   account with `docker exec -it noc-report-hermes hermes -p noc-log-analysis model`.
   Do not add that provider credential to FastAPI or the browser.
+- `PROVIDER_AUTHENTICATION_ERROR` with `invalid x-api-key` or HTTP 401 means
+  the provider credential in the Hermes profile is invalid or expired. Repair
+  it inside Hermes' profile/provider setup and restart the worker; do not copy
+  the provider key into the NOC application.
 - `GET /v1/skills` must return successfully before enabling live profile skill
   discovery. If it fails, stop at the worker's frozen SkillSnapshot path and
   pin/upgrade Hermes to a compatible image before relying on auto-loaded

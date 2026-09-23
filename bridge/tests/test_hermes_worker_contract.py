@@ -164,6 +164,28 @@ def test_hermes_client_classifies_provider_credit_message_as_rate_limit(monkeypa
         raise AssertionError("provider credit exhaustion must not become invalid JSON")
 
 
+def test_hermes_client_classifies_provider_invalid_x_api_key(monkeypatch):
+    class Settings:
+        hermes_base_url = "http://hermes:8642"
+        hermes_api_key = "secret"
+        hermes_timeout_seconds = 10
+        hermes_profile = "noc-log-analysis"
+
+    client = HermesClient(Settings())
+    monkeypatch.setattr(client, "_request", lambda *_args, **_kwargs: {
+        "choices": [{"message": {
+            "content": "Anthropic rejected your API key. Provider said: HTTP 401: invalid x-api-key"
+        }}],
+    })
+    try:
+        client.analyze(payload={}, skill_md="skill", output_schema={"type": "object"})
+    except HermesProviderAuthenticationError as exc:
+        assert exc.error_code == "PROVIDER_AUTHENTICATION_ERROR"
+        assert exc.retryable is False
+    else:
+        raise AssertionError("provider invalid x-api-key must not become invalid JSON")
+
+
 def test_hermes_client_fails_closed_when_a_toolset_is_enabled(monkeypatch):
     class Settings:
         hermes_base_url = "http://hermes:8642"

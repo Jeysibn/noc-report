@@ -192,6 +192,9 @@ class HermesClient:
                 "provider authentication failed" in lowered
                 or "not connected to any ai provider" in lowered
                 or "invalid api key" in lowered
+                or "invalid x-api-key" in lowered
+                or "rejected your api key" in lowered
+                or "http 401" in lowered
             ):
                 raise HermesProviderAuthenticationError("Hermes provider authentication failed")
             if any(
