@@ -153,15 +153,22 @@ def test_process_message_retries_semantically_invalid_model_output(monkeypatch, 
             pattern_id = payload["statistics"]["pattern_manifest"][0]["id"]
             result = {
                 "total_entries": 1,
-                "summary_zh": "日志显示一次支付错误。证据仅限于该日志。需要进一步确认。",
-                "summary_en": "The log shows one payment error. Evidence is limited to this file. Further confirmation is needed.",
+                "summary_zh": (
+                    "日志显示一次支付错误。证据仅限于该日志。需要进一步确认。"
+                    "仍需检查下游依赖。当前无法确认更广泛影响。"
+                ),
+                "summary_en": (
+                    "The log shows one payment error. Evidence is limited to this file. "
+                    "Further confirmation is needed. Downstream dependencies need review. "
+                    "Broader impact is not confirmed."
+                ),
                 "key_finds": [{
                     "id": "payment-error",
                     "label_en": "Payment error",
                     "label_zh": "支付错误",
                     "count": 1 if self.calls > 1 else 0,
-                    "percentage": 100.0,
-                    "pattern_ids": [pattern_id] if self.calls > 1 else ["unknown-pattern"],
+                    "percentage": 100.0 if self.calls == 1 else None,
+                    "pattern_ids": ["unquantified"] if self.calls > 1 else ["unknown-pattern"],
                     "detail_en": "The payment path logged one database failure.",
                     "detail_zh": "支付路径记录了一次数据库故障。",
                 }],

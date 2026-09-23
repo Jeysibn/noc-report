@@ -277,6 +277,26 @@ def test_hermes_client_classifies_provider_authentication_content(monkeypatch):
         raise AssertionError("provider authentication warning must not become invalid JSON")
 
 
+def test_hermes_client_does_not_classify_provider_words_inside_valid_result(monkeypatch):
+    class Settings:
+        hermes_base_url = "http://hermes:8642"
+        hermes_api_key = "secret"
+        hermes_timeout_seconds = 10
+        hermes_profile = "noc-log-analysis"
+
+    client = HermesClient(Settings())
+    monkeypatch.setattr(client, "_request", lambda *_args, **_kwargs: {
+        "choices": [{"message": {
+            "content": json.dumps({
+                "summary_en": "The log contains an invalid API key error from a downstream service.",
+                "summary_zh": "日志包含下游服务返回的 invalid API key 错误。",
+            }),
+        }}],
+    })
+    response = client.analyze(payload={}, skill_md="skill", output_schema={"type": "object"})
+    assert "invalid API key" in response.result["summary_en"]
+
+
 def test_hermes_client_classifies_provider_credit_message_as_rate_limit(monkeypatch):
     class Settings:
         hermes_base_url = "http://hermes:8642"

@@ -400,19 +400,15 @@ def _process_log_triage_message(
                     # runtime its bounded second chance before the existing
                     # terminal HERMES_INVALID_OUTPUT/DLQ path.
                     if output_attempt + 1 >= output_attempts:
-                        fallback_reason = str(exc).lower()
-                        if any(
-                            marker in fallback_reason
-                            for marker in (
-                                "unknown deterministic pattern id",
-                                "duplicate finding identity: unquantified",
-                            )
-                        ):
-                            # Preserve the deterministic boundary even when
-                            # Hermes ignores both the manifest instruction and
-                            # the repair hint. Unknown IDs are not evidence;
-                            # the safe terminal fallback is one unquantified
-                            # finding, never a duplicated pseudo-pattern.
+                        # Preserve the deterministic boundary even when Hermes
+                        # ignores the repair hint or returns a narrative that
+                        # still violates the frozen limits. The fallback
+                        # removes unsupported identities, compacts bounded
+                        # narrative fields, restores authoritative counts, and
+                        # must pass the same schema/semantic validators before
+                        # it can be persisted. If it cannot, the original
+                        # failure remains terminal.
+                        try:
                             candidate = reconcile_result(
                                 result.result,
                                 statistics,
@@ -423,7 +419,10 @@ def _process_log_triage_message(
                             validate_log_triage_result(candidate, label="Hermes fallback output")
                             output = candidate
                             break
-                        raise HermesInvalidResponse("Hermes returned invalid structured output") from exc
+                        except (KeyError, TypeError, ValueError, OutputValidationError) as fallback_error:
+                            raise HermesInvalidResponse(
+                                "Hermes returned invalid structured output"
+                            ) from fallback_error
             assert result is not None and output is not None
             telemetry = {
                 **result.telemetry,

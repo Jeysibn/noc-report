@@ -251,30 +251,45 @@ class HermesClient:
             content = message.get("content")
             if not isinstance(content, str) or not content.strip():
                 raise ValueError("missing assistant content")
-            lowered = content.lower()
-            if (
-                "provider authentication failed" in lowered
-                or "not connected to any ai provider" in lowered
-                or "invalid api key" in lowered
-                or "invalid x-api-key" in lowered
-                or "rejected your api key" in lowered
-                or "http 401" in lowered
-            ):
-                raise HermesProviderAuthenticationError("Hermes provider authentication failed")
-            if any(
-                phrase in lowered
-                for phrase in (
-                    "rate limit",
-                    "rate-limited",
-                    "rate limited",
-                    "quota exceeded",
-                    "too many requests",
-                    "http 429",
-                    "usage credits are required",
-                )
-            ):
-                raise HermesProviderRateLimitError("Hermes provider quota or rate limit")
-            result = _parse_structured_content(content)
+            try:
+                # Parse the contract before looking for provider diagnostics.
+                # Incident evidence and model-generated findings are untrusted
+                # text and may legitimately contain phrases such as "invalid
+                # API key" or "provider authentication failed". Scanning a
+                # valid result first prevents those phrases from turning a
+                # completed analysis into a false provider failure.
+                result = _parse_structured_content(content)
+            except (ValueError, json.JSONDecodeError) as parse_error:
+                lowered = content.lower()
+                if (
+                    "provider authentication failed" in lowered
+                    or "not connected to any ai provider" in lowered
+                    or "invalid api key" in lowered
+                    or "invalid x-api-key" in lowered
+                    or "rejected your api key" in lowered
+                    or "http 401" in lowered
+                ):
+                    raise HermesProviderAuthenticationError(
+                        "Hermes provider authentication failed"
+                    ) from parse_error
+                if any(
+                    phrase in lowered
+                    for phrase in (
+                        "rate limit",
+                        "rate-limited",
+                        "rate limited",
+                        "quota exceeded",
+                        "too many requests",
+                        "http 429",
+                        "usage credits are required",
+                    )
+                ):
+                    raise HermesProviderRateLimitError(
+                        "Hermes provider quota or rate limit"
+                    ) from parse_error
+                raise HermesInvalidResponse(
+                    "Hermes returned invalid structured output"
+                ) from parse_error
         except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError) as exc:
             raise HermesInvalidResponse("Hermes returned invalid structured output") from exc
 
