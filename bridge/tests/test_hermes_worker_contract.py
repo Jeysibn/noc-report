@@ -33,6 +33,36 @@ def test_preprocessing_keeps_injection_as_error_evidence_and_counts_exactly():
     assert sum(item["count"] for item in facts["pattern_manifest"]) == 3
 
 
+def test_preprocessing_uses_embedded_json_log_line_for_pattern_templates():
+    exported = json.dumps([
+        {
+            "date": "2026-09-10T14:00:00.000Z",
+            "timestamp": "1789048800000000000",
+            "line": "2026-09-10T14:00:00Z ERROR trace_id=t-1 ElasticsearchTimeoutException timeout=3000",
+            "fields": {"service_name": "betbingo-app-service", "trace_id": "t-1"},
+        },
+        {
+            "date": "2026-09-10T14:01:00.000Z",
+            "timestamp": "1789048860000000000",
+            "line": "2026-09-10T14:01:00Z ERROR trace_id=t-2 ElasticsearchTimeoutException timeout=3001",
+            "fields": {"service_name": "betbingo-app-service", "trace_id": "t-2"},
+        },
+    ])
+    facts = preprocess_log(exported)
+    assert len(facts["pattern_manifest"]) == 1
+    assert "ElasticsearchTimeoutException" in facts["pattern_manifest"][0]["template"]
+    assert "<value>" not in facts["pattern_manifest"][0]["template"]
+
+
+def test_preprocessing_groups_log_lines_across_trace_and_span_ids():
+    facts = preprocess_log(
+        "2026-09-10T14:00:00Z ERROR trace_id=t-1 span_id=s-1 ElasticsearchTimeoutException timeout=3000\n"
+        "2026-09-10T14:00:01Z ERROR trace_id=t-2 span_id=s-2 ElasticsearchTimeoutException timeout=3001\n"
+    )
+    assert len(facts["pattern_manifest"]) == 1
+    assert facts["pattern_manifest"][0]["count"] == 2
+
+
 def test_request_contract_contains_only_prepared_application_facts():
     payload = build_hermes_input(
         job_id="job-1",

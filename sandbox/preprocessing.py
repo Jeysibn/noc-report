@@ -90,7 +90,12 @@ def _template(line: str, structured: dict | None) -> str:
     """Normalize request-specific values without removing technical causes."""
     message = None
     if structured:
-        for key in ("message", "msg", "error", "exception", "error_message", "detail"):
+        # Exported JSON logs in the NOC commonly wrap the real log line under
+        # ``line`` and put transport metadata in sibling fields. Prefer the
+        # line/message payload; templating the whole JSON envelope turns every
+        # field into ``<value>`` and collapses unrelated failures into one
+        # meaningless deterministic pattern.
+        for key in ("line", "message", "msg", "error", "exception", "error_message", "detail"):
             if isinstance(structured.get(key), str) and structured[key].strip():
                 message = structured[key]
                 break
@@ -99,9 +104,15 @@ def _template(line: str, structured: dict | None) -> str:
     value = _UUID.sub("<uuid>", value)
     value = _HEX.sub("<hex>", value)
     value = _QUOTED.sub('"<value>"', value)
-    value = _NUMBER.sub("<n>", value)
-    value = re.sub(r"\b(?:trace[_-]?id|traceId|request[_-]?id|requestId|correlation[_-]?id)\s*[=:]\s*\S+", "trace=<id>", value, flags=re.IGNORECASE)
     value = _TIMESTAMP.sub("<timestamp>", value)
+    value = _NUMBER.sub("<n>", value)
+    value = re.sub(
+        r"\b(?:trace[_-]?id|traceId|span[_-]?id|spanId|request[_-]?id|requestId|"
+        r"correlation[_-]?id|correlationId)\s*[=:]\s*\S+",
+        "trace=<id>",
+        value,
+        flags=re.IGNORECASE,
+    )
     value = _LEVEL.sub("<level>", value)
     return _WHITESPACE.sub(" ", value).strip()[:300] or "unclassified log entry"
 
