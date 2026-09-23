@@ -61,7 +61,7 @@ SKILL_VERSION = str((yaml.safe_load(_SOURCE_MANIFEST.read_text()) or {}).get("ve
 #                              schema and preprocessor.
 # SKILL_VERSION remains a compatibility display alias for older API clients;
 # the immutable snapshot hash, not this label, selects execution or cache data.
-PREPROCESSOR_VERSION = "7"
+PREPROCESSOR_VERSION = "8"
 AI_POLICY_VERSION = "1"
 CACHE_CONTRACT_VERSION = f"{PREPROCESSOR_VERSION}.{AI_POLICY_VERSION}"
 
