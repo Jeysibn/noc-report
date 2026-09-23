@@ -391,11 +391,19 @@ def _process_log_triage_message(
                     # runtime its bounded second chance before the existing
                     # terminal HERMES_INVALID_OUTPUT/DLQ path.
                     if output_attempt + 1 >= output_attempts:
-                        if isinstance(exc, ValueError) and "unknown deterministic pattern id" in str(exc):
+                        fallback_reason = str(exc).lower()
+                        if any(
+                            marker in fallback_reason
+                            for marker in (
+                                "unknown deterministic pattern id",
+                                "duplicate finding identity: unquantified",
+                            )
+                        ):
                             # Preserve the deterministic boundary even when
                             # Hermes ignores both the manifest instruction and
                             # the repair hint. Unknown IDs are not evidence;
-                            # the safe terminal fallback is unquantified.
+                            # the safe terminal fallback is one unquantified
+                            # finding, never a duplicated pseudo-pattern.
                             candidate = reconcile_result(
                                 result.result,
                                 statistics,
