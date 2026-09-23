@@ -14,6 +14,7 @@ import threading
 import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib import request as urllib_request
 
 import jsonschema
 
@@ -107,6 +108,21 @@ class WorkerMetrics:
             self.values[name] = value
 
 
+def hermes_health_url(base_url: str) -> str:
+    """Resolve a profile-scoped Hermes URL to the unauthenticated liveness endpoint."""
+    listener_url = base_url.rstrip("/").split("/p/", 1)[0]
+    return f"{listener_url}/health"
+
+
+def hermes_is_reachable(base_url: str, timeout_seconds: float) -> bool:
+    """Probe Hermes liveness without requiring provider credentials."""
+    try:
+        with urllib_request.urlopen(hermes_health_url(base_url), timeout=timeout_seconds) as response:
+            return 200 <= response.status < 300
+    except Exception:
+        return False
+
+
 class _LeaseRenewer:
     """Keep a claimed job lease alive while Hermes performs inference."""
 
@@ -150,18 +166,26 @@ class _LeaseRenewer:
 class _HealthHandler(BaseHTTPRequestHandler):
     metrics: WorkerMetrics | None = None
     runtime_profile: str = "noc-log-analysis"
+    runtime_base_url: str = "http://hermes:8642"
+    runtime_health_timeout_seconds: float = 2.0
 
     def do_GET(self):  # noqa: N802 - stdlib HTTP handler API
         if self.path not in {"/health", "/metrics"}:
             self.send_response(404)
             self.end_headers()
             return
+        metrics = self.metrics.snapshot() if self.metrics else {}
+        runtime_reachable = hermes_is_reachable(
+            self.runtime_base_url,
+            self.runtime_health_timeout_seconds,
+        )
+        metrics["runtime_reachable"] = runtime_reachable
         payload = {
-            "status": "healthy" if (self.metrics and self.metrics.snapshot().get("runtime_ready", False)) else "degraded",
+            "status": "healthy" if (metrics.get("runtime_ready", False) and runtime_reachable) else "degraded",
             "component": "ai-worker",
             "runtime": "hermes",
             "profile": self.runtime_profile,
-            "metrics": self.metrics.snapshot() if self.metrics else {},
+            "metrics": metrics,
         }
         body = json.dumps(payload).encode("utf-8")
         self.send_response(200)
@@ -178,6 +202,8 @@ def start_health_server(settings, metrics: WorkerMetrics):
     handler = type("WorkerHealthHandler", (_HealthHandler,), {
         "metrics": metrics,
         "runtime_profile": settings.hermes_profile,
+        "runtime_base_url": settings.hermes_base_url,
+        "runtime_health_timeout_seconds": min(5.0, max(0.5, settings.hermes_timeout_seconds)),
     })
     server = ThreadingHTTPServer((settings.health_host, settings.health_port), handler)
     thread = threading.Thread(target=server.serve_forever, name="ai-worker-health", daemon=True)

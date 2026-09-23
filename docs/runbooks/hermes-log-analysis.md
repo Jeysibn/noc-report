@@ -70,6 +70,12 @@ the NOC profile disables terminal tools.
    model metadata, skill hash, evidence SHA-256, preprocessing version,
    schema version, duration, and token fields where Hermes reports them.
 
+Some Hermes API responses expose the runtime/profile/model but omit the
+underlying provider name. In that case `provider` is intentionally stored as
+`null`; do not infer or hard-code a provider in the NOC application. Confirm
+the provider in the dedicated Hermes profile when operational provenance is
+needed.
+
 ## Troubleshooting
 
 - `AI_RUNTIME_UNAVAILABLE`: API is still using its safe default; set
