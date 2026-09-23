@@ -194,7 +194,18 @@ class HermesClient:
                 or "invalid api key" in lowered
             ):
                 raise HermesProviderAuthenticationError("Hermes provider authentication failed")
-            if "rate limit" in lowered or "quota exceeded" in lowered or "too many requests" in lowered:
+            if any(
+                phrase in lowered
+                for phrase in (
+                    "rate limit",
+                    "rate-limited",
+                    "rate limited",
+                    "quota exceeded",
+                    "too many requests",
+                    "http 429",
+                    "usage credits are required",
+                )
+            ):
                 raise HermesProviderRateLimitError("Hermes provider quota or rate limit")
             result = _parse_structured_content(content)
         except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError) as exc:

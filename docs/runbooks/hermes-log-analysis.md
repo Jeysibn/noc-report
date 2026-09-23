@@ -83,6 +83,12 @@ needed.
 - Hermes health failure: inspect `docker logs noc-report-hermes`; confirm the
   internal key matches `RUNTIME_HERMES_API_KEY` and that profile/provider setup
   completed.
+- `PROVIDER_RATE_LIMIT` with `usage credits are required` or HTTP 429 means
+  Hermes reached the configured provider but that provider account/model is
+  not currently authorized for usage. Complete the provider's billing,
+  overage, or subscription authorization, or select a model available to the
+  account with `docker exec -it noc-report-hermes hermes -p noc-log-analysis model`.
+  Do not add that provider credential to FastAPI or the browser.
 - `GET /v1/skills` must return successfully before enabling live profile skill
   discovery. If it fails, stop at the worker's frozen SkillSnapshot path and
   pin/upgrade Hermes to a compatible image before relying on auto-loaded
