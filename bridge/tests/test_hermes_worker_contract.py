@@ -80,6 +80,20 @@ def test_prompt_injection_is_below_trusted_security_instruction():
     assert messages[0]["role"] == "system"
 
 
+def test_log_analysis_requires_exact_deterministic_pattern_ids_and_supports_repair_feedback():
+    messages = build_messages(
+        payload={"statistics": {"pattern_manifest": [{"id": "p-1"}]}},
+        skill_md="# Log Triage",
+        output_schema={"type": "object"},
+        repair_hint="Use only exact pattern IDs copied from statistics.pattern_manifest.",
+    )
+    system = messages[0]["content"]
+    assert "Pattern IDs are opaque identifiers" in system
+    assert "never invent, normalize, translate, or rename" in system
+    assert "APPLICATION VALIDATION FEEDBACK" in system
+    assert "Use only exact pattern IDs" in system
+
+
 def test_hermes_client_parses_usage_and_runtime_metadata(monkeypatch):
     class Settings:
         hermes_base_url = "http://hermes:8642"

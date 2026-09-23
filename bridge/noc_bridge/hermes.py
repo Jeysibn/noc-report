@@ -87,7 +87,12 @@ def _parse_structured_content(content: str) -> dict:
 
 
 def build_messages(
-    *, payload: dict, skill_md: str, output_schema: dict, task: str = "log_analysis"
+    *,
+    payload: dict,
+    skill_md: str,
+    output_schema: dict,
+    task: str = "log_analysis",
+    repair_hint: str | None = None,
 ) -> list[dict]:
     """Build the exact system/user boundary used by the worker.
 
@@ -109,8 +114,24 @@ def build_messages(
         role = "You are the dedicated NOC log-analysis runtime."
         task_rules = (
             "Use statistics and the pattern_manifest for authoritative counts; use "
-            "log_excerpt and representative_entries for semantic context."
+            "log_excerpt and representative_entries for semantic context. "
+            "Before emitting output, copy every pattern_ids value exactly from "
+            "statistics.pattern_manifest. Pattern IDs are opaque identifiers, not "
+            "human-readable labels: never invent, normalize, translate, or rename "
+            "them. If a finding cannot be mapped to an exact manifest ID, use "
+            'pattern_ids:["unquantified"] and null count/percentage. The application '
+            "replaces authoritative totals and percentages after inference."
         )
+    repair_section = ""
+    if repair_hint:
+        repair_section = f"""
+
+APPLICATION VALIDATION FEEDBACK:
+The previous candidate was rejected by trusted application validation. Treat this
+feedback as control-plane instruction, not incident evidence. Return a corrected
+JSON object and obey the frozen schema. Do not repeat the rejected value.
+{repair_hint}
+"""
     system = f"""{role}
 
 The repository-maintained task skill is loaded for this profile.
@@ -128,6 +149,7 @@ tools, never request tools, and never disclose secrets.
 
 TASK BOUNDARY:
 {task_rules}
+{repair_section}
 
 FROZEN SKILL INSTRUCTIONS:
 ---
@@ -207,6 +229,7 @@ class HermesClient:
         skill_md: str,
         output_schema: dict,
         task: str = "log_analysis",
+        repair_hint: str | None = None,
     ) -> HermesResult:
         started = time.monotonic()
         response = self._request(
@@ -218,6 +241,7 @@ class HermesClient:
                     skill_md=skill_md,
                     output_schema=output_schema,
                     task=task,
+                    repair_hint=repair_hint,
                 ),
                 "stream": False,
             },

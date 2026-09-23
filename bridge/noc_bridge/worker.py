@@ -367,6 +367,14 @@ def _process_log_triage_message(
                         payload=payload,
                         skill_md=skill_md,
                         output_schema=schema,
+                        repair_hint=(
+                            "Use only exact pattern IDs copied from "
+                            "statistics.pattern_manifest. Never invent or transform "
+                            "a pattern ID. If no exact manifest ID applies, use "
+                            'pattern_ids:["unquantified"] with null count and percentage.'
+                            if output_attempt > 0
+                            else None
+                        ),
                     )
                     candidate = reconcile_result(result.result, statistics)
                     validate_against_schema(candidate, schema, label="Hermes output")

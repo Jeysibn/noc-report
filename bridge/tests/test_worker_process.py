@@ -54,7 +54,7 @@ def test_process_message_verifies_preprocesses_calls_fake_hermes_and_uploads(mon
         def __init__(self, _settings):
             pass
 
-        def analyze(self, *, payload, skill_md, output_schema):
+        def analyze(self, *, payload, skill_md, output_schema, repair_hint=None):
             pattern_id = payload["statistics"]["pattern_manifest"][0]["id"]
             return HermesResult(
                 result={
@@ -145,8 +145,11 @@ def test_process_message_retries_semantically_invalid_model_output(monkeypatch, 
         def __init__(self, _settings):
             pass
 
-        def analyze(self, *, payload, skill_md, output_schema):
+        def analyze(self, *, payload, skill_md, output_schema, repair_hint=None):
             self.calls += 1
+            if self.calls == 2:
+                assert repair_hint is not None
+                assert "exact pattern IDs" in repair_hint
             pattern_id = payload["statistics"]["pattern_manifest"][0]["id"]
             result = {
                 "total_entries": 1,
