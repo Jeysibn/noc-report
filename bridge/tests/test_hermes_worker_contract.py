@@ -7,7 +7,12 @@ from noc_bridge.hermes import (
     HermesProviderRateLimitError,
     build_messages,
 )
-from preprocessing import build_hermes_input, preprocess_log, reconcile_result
+from preprocessing import (
+    build_hermes_input,
+    compact_log_triage_narrative,
+    preprocess_log,
+    reconcile_result,
+)
 
 
 def _log():
@@ -131,6 +136,27 @@ def test_reconciliation_collapses_repeated_unquantified_findings():
     fallback = reconcile_result(result, facts, allow_unquantified_fallback=True)
     all_findings = fallback["key_finds"] + fallback["secondary_finds"]
     assert [finding["pattern_ids"] for finding in all_findings].count(["unquantified"]) == 1
+
+
+def test_fallback_narrative_compaction_respects_frozen_field_limits():
+    result = {
+        "summary_zh": "。".join(["第一句", "第二句", "第三句", "第四句", "第五句"]),
+        "summary_en": ". ".join(["First sentence", "Second sentence", "Third sentence", "Fourth sentence", "Fifth sentence"]),
+        "key_finds": [{
+            "detail_zh": "。".join(["第一句"] * 5),
+            "detail_en": ". ".join(["First sentence"] * 5),
+        }],
+        "secondary_finds": [{
+            "detail_zh": "第一句。第二句。",
+            "detail_en": "First sentence. Second sentence.",
+        }],
+    }
+    compact_log_triage_narrative(result)
+    assert len(result["summary_zh"]) <= 800
+    assert len(result["summary_en"]) <= 800
+    assert result["summary_en"].count(".") <= 4
+    assert result["key_finds"][0]["detail_en"].count(".") <= 3
+    assert result["secondary_finds"][0]["detail_en"].count(".") <= 1
 
 
 def test_prompt_injection_is_below_trusted_security_instruction():

@@ -63,7 +63,12 @@ from noc_bridge.validation import (
     validate_daily_report_result,
     validate_log_triage_result,
 )
-from preprocessing import build_hermes_input, preprocess_log, reconcile_result
+from preprocessing import (
+    build_hermes_input,
+    compact_log_triage_narrative,
+    preprocess_log,
+    reconcile_result,
+)
 
 
 LOG = logging.getLogger("noc.ai_worker")
@@ -371,7 +376,11 @@ def _process_log_triage_message(
                             "Use only exact pattern IDs copied from "
                             "statistics.pattern_manifest. Never invent or transform "
                             "a pattern ID. If no exact manifest ID applies, use "
-                            'pattern_ids:["unquantified"] with null count and percentage.'
+                            'pattern_ids:["unquantified"] with null count and percentage. '
+                            "Return one concise bilingual result: summary_zh/summary_en "
+                            "must be at most 800 characters and 2-4 sentences; key "
+                            "details at most 600 characters and 3 sentences; secondary "
+                            "details at most 320 characters and 1 sentence."
                             if output_attempt > 0
                             else None
                         ),
@@ -409,6 +418,7 @@ def _process_log_triage_message(
                                 statistics,
                                 allow_unquantified_fallback=True,
                             )
+                            compact_log_triage_narrative(candidate)
                             validate_against_schema(candidate, schema, label="Hermes fallback output")
                             validate_log_triage_result(candidate, label="Hermes fallback output")
                             output = candidate

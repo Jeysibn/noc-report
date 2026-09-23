@@ -26,6 +26,7 @@ _URL = re.compile(r"https?://[^\s\]\)]+", re.IGNORECASE)
 _NUMBER = re.compile(r"(?<![A-Za-z])\d+(?:\.\d+)?(?![A-Za-z])")
 _QUOTED = re.compile(r"(['\"])(?:\\.|(?!\1).)*\1")
 _WHITESPACE = re.compile(r"\s+")
+_SENTENCE_ENDINGS = frozenset(".!?。！？")
 
 
 def _timestamp(value: str | None) -> str | None:
@@ -224,6 +225,53 @@ def compact_log(log_text: str, *, max_chars: int = 80_000) -> str:
     head = available // 2
     tail = available - head
     return "\n".join([log_text[:head], marker, log_text[-tail:]])
+
+
+def _compact_narrative(value: str, *, max_chars: int, max_sentences: int, chinese: bool = False) -> str:
+    """Bound model narrative text without changing its factual values.
+
+    This is used only by the terminal structured-output repair path. It keeps
+    complete sentences when possible so a verbose provider response cannot
+    turn an otherwise safe deterministic result into a failed job.
+    """
+    text = value.strip()
+    endings = [index + 1 for index, char in enumerate(text) if char in _SENTENCE_ENDINGS]
+    if len(text) <= max_chars and len(endings) <= max_sentences:
+        return text
+    usable = [index for index in endings if index <= max_chars]
+    if usable:
+        cutoff = usable[min(max_sentences, len(usable)) - 1]
+        return text[:cutoff].strip()
+    bounded = text[:max_chars].rstrip()
+    if bounded and bounded[-1] not in _SENTENCE_ENDINGS:
+        punctuation = "。" if chinese else "."
+        bounded = bounded[:-1].rstrip() + punctuation
+    return bounded
+
+
+def compact_log_triage_narrative(result: dict) -> dict:
+    """Apply frozen narrative field limits to a final safe fallback result."""
+    for field in ("summary_zh", "summary_en"):
+        value = result.get(field)
+        if isinstance(value, str):
+            result[field] = _compact_narrative(
+                value,
+                max_chars=800,
+                max_sentences=4,
+                chinese=field.endswith("_zh"),
+            )
+    for group_name, max_chars, max_sentences in (("key_finds", 600, 3), ("secondary_finds", 320, 1)):
+        for finding in result.get(group_name, []):
+            for field in ("detail_zh", "detail_en"):
+                value = finding.get(field)
+                if isinstance(value, str):
+                    finding[field] = _compact_narrative(
+                        value,
+                        max_chars=max_chars,
+                        max_sentences=max_sentences,
+                        chinese=field.endswith("_zh"),
+                    )
+    return result
 
 
 def build_hermes_input(*, job_id: str, incident: dict, evidence: dict, log_text: str, language_order: list[str] | None = None) -> dict:
