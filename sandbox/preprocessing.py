@@ -13,7 +13,7 @@ from collections import Counter, defaultdict
 from datetime import datetime
 
 
-PREPROCESSOR_VERSION = "14"
+PREPROCESSOR_VERSION = "15"
 MAX_DIRECT_LOG_CHARS = 2_000_000
 _TIMESTAMP = re.compile(r"\b(\d{4}-\d{2}-\d{2}T[^\s]+|\d{4}-\d{2}-\d{2}[^\s]+)")
 _LEVEL = re.compile(r"\b(DEBUG|INFO|WARN|WARNING|ERROR|CRITICAL|FATAL)\b", re.IGNORECASE)
@@ -232,6 +232,11 @@ def preprocess_log(log_text: str, *, max_patterns: int = 80, max_samples: int = 
             "level": level,
             "text": line[:1200],
             "pattern_id": pattern_id,
+            # Keep the family identity internal to the worker. Hermes does
+            # not receive this catalogue; it only selects semantic evidence
+            # entries. Reconciliation uses the family to expand a selected
+            # representative to every physically equivalent entry.
+            "family_id": pattern_families[pattern_id][0],
         })
         if len(pattern_samples[pattern_id]) < 2:
             pattern_samples[pattern_id].append(line[:500])
@@ -261,13 +266,16 @@ def preprocess_log(log_text: str, *, max_patterns: int = 80, max_samples: int = 
             "family_label": "Other deterministic log patterns",
         })
 
+    # Build complete family totals from every physical pattern, not only the
+    # bounded public pattern manifest. The manifest is intentionally compact;
+    # authoritative post-inference reconciliation must still see families
+    # represented by low-frequency templates.
     family_members: dict[str, list[str]] = defaultdict(list)
     family_labels: dict[str, str] = {}
-    for item in patterns:
-        if item["id"] == "other":
-            continue
-        family_members[item["family_id"]].append(item["id"])
-        family_labels[item["family_id"]] = item["family_label"]
+    for pattern_id in pattern_counts:
+        family_id, family_label = pattern_families[pattern_id]
+        family_members[family_id].append(pattern_id)
+        family_labels[family_id] = family_label
     families = []
     for family_id, member_ids in sorted(
         family_members.items(),
@@ -427,11 +435,28 @@ def _semantic_pattern_id(finding: dict) -> str:
 
 
 def _reconcile_entry_grouped_result(result: dict, statistics: dict) -> dict:
-    """Reconcile Hermes semantic groups against exact normalized entry IDs."""
+    """Reconcile semantic selections against exact physical evidence.
+
+    Hermes selects one or more representative entries for a semantic cause.
+    Those selections are not counts: a model can reasonably cite one cache
+    timeout while the same cause appears in several logger/stack-trace
+    manifestations. Expand each selected entry through the deterministic
+    family assigned during preprocessing, then calculate the authoritative
+    count and evidence identity from the expanded physical entries.
+    """
     entries = statistics.get("entry_manifest") or []
     entry_by_id = {item["id"]: item for item in entries}
     total_entries = statistics.get("total_entries", len(entries))
     claimed: set[int] = set()
+
+    family_entries: dict[str, list[int]] = defaultdict(list)
+    pattern_entries: dict[str, list[int]] = defaultdict(list)
+    for item in entries:
+        entry_id = item["id"]
+        pattern_entries[item["pattern_id"]].append(entry_id)
+        family_id = item.get("family_id")
+        if family_id:
+            family_entries[family_id].append(entry_id)
 
     for group_name in ("key_finds", "secondary_finds"):
         for finding in result.get(group_name, []):
@@ -450,12 +475,29 @@ def _reconcile_entry_grouped_result(result: dict, statistics: dict) -> dict:
             overlap = claimed.intersection(entry_ids)
             if overlap:
                 raise ValueError(f"evidence entry assigned to more than one finding: {min(overlap)}")
-            claimed.update(entry_ids)
 
-            if entry_ids:
+            # A selected entry is a semantic anchor. Expand to every entry in
+            # its deterministic cause family. For an older snapshot without
+            # family_id, retain exact physical-pattern expansion as a safe
+            # backward-compatible fallback.
+            expanded_ids: set[int] = set()
+            for entry_id in entry_ids:
+                entry = entry_by_id[entry_id]
+                family_id = entry.get("family_id")
+                if family_id and family_id in family_entries:
+                    expanded_ids.update(family_entries[family_id])
+                else:
+                    expanded_ids.update(pattern_entries[entry["pattern_id"]])
+
+            expanded_ids.difference_update(claimed)
+            expanded = sorted(expanded_ids)
+            claimed.update(expanded)
+
+            if expanded:
                 finding["pattern_ids"] = [_semantic_pattern_id(finding)]
-                finding["count"] = len(entry_ids)
-                finding["percentage"] = round((len(entry_ids) / total_entries) * 100, 2) if total_entries else 0.0
+                finding["evidence_entry_ids"] = expanded
+                finding["count"] = len(expanded)
+                finding["percentage"] = round((len(expanded) / total_entries) * 100, 2) if total_entries else 0.0
             else:
                 finding["pattern_ids"] = ["unquantified"]
                 finding["count"] = None

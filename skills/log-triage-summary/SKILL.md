@@ -32,7 +32,9 @@ Output shape:
     markers in the supplied normalized log evidence that support this finding.
     Group as many physically different entries as belong to the same
     operational cause. Never assign one entry to more than one finding. The
-    application calculates the authoritative count from these IDs.
+    application expands these semantic anchors through its deterministic cause
+    families and calculates the authoritative count from the resulting
+    physical evidence IDs.
   - `pattern_ids` — return `["unquantified"]` in the model response. The
     application replaces this placeholder with a stable finding identity after
     reconciling `evidence_entry_ids`; do not invent physical pattern IDs.

@@ -79,7 +79,7 @@ def test_request_contract_contains_only_prepared_application_facts():
     assert "[entry_id=0]" in payload["log_excerpt"]
 
 
-def test_reconciliation_uses_model_selected_entry_ids_for_semantic_grouping():
+def test_reconciliation_expands_semantic_selection_to_the_full_cause_family():
     facts = preprocess_log(
         "2026-09-10T14:00:00Z ERROR CacheService ElasticsearchTimeoutException timeout=3000\n"
         "2026-09-10T14:00:01Z ERROR LogEsAspect ElasticsearchTimeoutException timeout=3001\n"
@@ -96,7 +96,7 @@ def test_reconciliation_uses_model_selected_entry_ids_for_semantic_grouping():
             "count": None,
             "percentage": None,
             "pattern_ids": ["unquantified"],
-            "evidence_entry_ids": [0, 1],
+            "evidence_entry_ids": [0],
             "detail_en": "CacheService and LogEsAspect report the same Elasticsearch timeout through different logging layers.",
             "detail_zh": "CacheService和LogEsAspect从不同日志层记录了同一个Elasticsearch超时。",
         }],
@@ -123,7 +123,7 @@ def test_reconciliation_uses_model_selected_entry_ids_for_semantic_grouping():
     assert reconciled["key_finds"][0]["evidence_entry_ids"] == [0, 1]
 
 
-def test_reconciliation_does_not_reexpand_unselected_physical_templates():
+def test_reconciliation_does_not_expand_into_an_unrelated_cause_family():
     facts = preprocess_log(
         "2026-09-10T14:00:00Z ERROR ElasticsearchTimeoutException\n"
         "2026-09-10T14:00:01Z ERROR independent database failure\n"
@@ -150,6 +150,41 @@ def test_reconciliation_does_not_reexpand_unselected_physical_templates():
     reconciled = reconcile_result(result, facts)
     assert reconciled["secondary_finds"] == []
     assert reconciled["key_finds"][0]["count"] == 1
+
+
+def test_reconciliation_expands_all_entries_in_a_family_even_when_patterns_are_omitted():
+    facts = preprocess_log(
+        "\n".join(
+            [
+                "2026-09-10T14:00:00Z WARN NdrpApiService HTTP 503 Service Unavailable request=1",
+                "2026-09-10T14:00:01Z WARN NdrpApiService Failed to parse response as JSON request=2",
+                "2026-09-10T14:00:02Z WARN NdrpApiService HTTP 503 Service Unavailable request=3",
+            ]
+        )
+    )
+    result = {
+        "total_entries": 0,
+        "summary_en": "NDRP was unavailable.",
+        "summary_zh": "NDRP不可用。",
+        "key_finds": [{
+            "id": "ndrp",
+            "label_en": "NDRP unavailable",
+            "label_zh": "NDRP不可用",
+            "count": None,
+            "percentage": None,
+            "pattern_ids": ["unquantified"],
+            "evidence_entry_ids": [0],
+            "detail_en": "NDRP returned an unavailable response.",
+            "detail_zh": "NDRP返回不可用响应。",
+        }],
+        "secondary_finds": [],
+        "severity_signal": "high",
+        "confidence": 0.8,
+    }
+    reconciled = reconcile_result(result, facts)
+    assert reconciled["key_finds"][0]["evidence_entry_ids"] == [0, 1, 2]
+    assert reconciled["key_finds"][0]["count"] == 3
+    assert reconciled["key_finds"][0]["percentage"] == 100.0
 
 
 def test_reconciliation_replaces_model_numbers_and_retains_omitted_patterns():

@@ -125,8 +125,10 @@ def build_messages(
             "finding. Include all actionable ERROR/WARN/CRITICAL/FATAL entries in a "
             "semantic finding or in one concise unclassified finding; routine INFO "
             "entries may be omitted. Use pattern_ids:[\"unquantified\"] and set "
-            "count and percentage to null in the model response. The application "
-            "reconciles evidence_entry_ids and computes authoritative totals."
+            "count and percentage to null in the model response. Do not put exact "
+            "counts or percentages in narrative text; the application expands "
+            "semantic evidence to equivalent physical entries and computes the "
+            "authoritative totals."
         )
     repair_section = ""
     if repair_hint:

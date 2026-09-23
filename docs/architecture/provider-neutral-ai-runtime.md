@@ -43,8 +43,10 @@ The log-analysis request contract contains incident metadata, evidence identity,
 exact aggregate statistics, normalized log entries annotated with stable
 `entry_id` values, a bounded direct log excerpt, and the language order
 `zh-CN` then `en`. The physical pattern manifest remains worker-only; Hermes
-selects semantic cause groups through `evidence_entry_ids`, and the worker
-computes exact counts and stable semantic finding identities from those entries.
+selects semantic cause groups through `evidence_entry_ids`. Those IDs are
+semantic anchors, not representative-only counts: the worker expands them to
+all entries in the matching deterministic cause families, then computes exact
+counts and stable semantic finding identities from the expanded evidence.
 The Daily Report request is smaller: it contains a shift label, ordinal incident
 context, and compact frozen analysis fragments, with application IDs and exact
 timestamps removed. Evidence is explicitly untrusted data. The worker verifies
