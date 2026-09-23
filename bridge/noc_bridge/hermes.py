@@ -127,7 +127,8 @@ def build_messages(
             "entries may be omitted. Use pattern_ids:[\"unquantified\"] and set "
             "count and percentage to null in the model response. Do not put exact "
             "counts or percentages in narrative text; the application expands "
-            "semantic evidence to equivalent physical entries and computes the "
+            "semantic evidence to equivalent physical entries, deduplicates "
+            "correlated records into operational occurrences, and computes the "
             "authoritative totals."
         )
     repair_section = ""

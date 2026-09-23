@@ -13,7 +13,7 @@ from collections import Counter, defaultdict
 from datetime import datetime
 
 
-PREPROCESSOR_VERSION = "15"
+PREPROCESSOR_VERSION = "16"
 MAX_DIRECT_LOG_CHARS = 2_000_000
 _TIMESTAMP = re.compile(r"\b(\d{4}-\d{2}-\d{2}T[^\s]+|\d{4}-\d{2}-\d{2}[^\s]+)")
 _LEVEL = re.compile(r"\b(DEBUG|INFO|WARN|WARNING|ERROR|CRITICAL|FATAL)\b", re.IGNORECASE)
@@ -38,6 +38,23 @@ def _timestamp(value: str | None) -> str | None:
 def _parse_timestamp(value: str | None) -> datetime | None:
     if not value:
         return None
+
+
+def _trace_id(line: str, structured: dict | None) -> str | None:
+    """Return the request correlation identity when the log provides one."""
+    if structured:
+        for key in ("trace_id", "traceId", "correlation_id", "correlationId", "request_id", "requestId"):
+            value = structured.get(key)
+            if isinstance(value, (str, int)) and str(value).strip():
+                return str(value).strip()
+        fields = structured.get("fields")
+        if isinstance(fields, dict):
+            for key in ("trace_id", "traceId", "correlation_id", "correlationId", "request_id", "requestId"):
+                value = fields.get(key)
+                if isinstance(value, (str, int)) and str(value).strip():
+                    return str(value).strip()
+    matches = _TRACE.findall(line)
+    return matches[0] if matches else None
     try:
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
@@ -237,6 +254,7 @@ def preprocess_log(log_text: str, *, max_patterns: int = 80, max_samples: int = 
             # entries. Reconciliation uses the family to expand a selected
             # representative to every physically equivalent entry.
             "family_id": pattern_families[pattern_id][0],
+            "trace_id": _trace_id(line, structured),
         })
         if len(pattern_samples[pattern_id]) < 2:
             pattern_samples[pattern_id].append(line[:500])
@@ -493,11 +511,24 @@ def _reconcile_entry_grouped_result(result: dict, statistics: dict) -> dict:
             expanded = sorted(expanded_ids)
             claimed.update(expanded)
 
+            # A single request is often logged by several layers. Preserve
+            # every physical record for audit, but count one operational
+            # occurrence per correlation identity. Records without a usable
+            # correlation ID remain individually countable because the worker
+            # cannot safely prove that they are duplicates.
+            occurrence_keys = {
+                f"trace:{entry_by_id[entry_id]['trace_id']}"
+                if entry_by_id[entry_id].get("trace_id")
+                else f"entry:{entry_id}"
+                for entry_id in expanded
+            }
+
             if expanded:
                 finding["pattern_ids"] = [_semantic_pattern_id(finding)]
                 finding["evidence_entry_ids"] = expanded
-                finding["count"] = len(expanded)
-                finding["percentage"] = round((len(expanded) / total_entries) * 100, 2) if total_entries else 0.0
+                finding["physical_entry_count"] = len(expanded)
+                finding["count"] = len(occurrence_keys)
+                finding["percentage"] = round((len(occurrence_keys) / total_entries) * 100, 2) if total_entries else 0.0
             else:
                 finding["pattern_ids"] = ["unquantified"]
                 finding["count"] = None

@@ -33,8 +33,9 @@ Output shape:
     Group as many physically different entries as belong to the same
     operational cause. Never assign one entry to more than one finding. The
     application expands these semantic anchors through its deterministic cause
-    families and calculates the authoritative count from the resulting
-    physical evidence IDs.
+    families, deduplicates records sharing a request/correlation identity, and
+    calculates the authoritative occurrence count. The raw physical-record
+    count remains available as `physical_entry_count`.
   - `pattern_ids` — return `["unquantified"]` in the model response. The
     application replaces this placeholder with a stable finding identity after
     reconciling `evidence_entry_ids`; do not invent physical pattern IDs.
@@ -62,8 +63,10 @@ Output shape:
   replaced by the runtime with the exact number of physical log entries.
 
 Numerical truth is deterministic. The application owns `total_entries`, every
-finding `count` and `percentage`, and reconciles them from
-`evidence_entry_ids`. The semantic runtime owns grouping selection, labels,
+finding `count`, `physical_entry_count`, and `percentage`, and reconciles them
+from `evidence_entry_ids`. `count` means distinct operational occurrences after
+correlation de-duplication; `physical_entry_count` means raw log records. The
+semantic runtime owns grouping selection, labels,
 explanations, severity, and narrative.
 Never estimate a number from prose or claim a count without selecting the
 supporting entry IDs. The runtime may use `unquantified` only as the temporary
@@ -93,9 +96,9 @@ structured finding fields instead.
 - Do not repeat the same evidence in the summary, a finding, and another
   finding. Do not include recommendations unless a separate task explicitly
   requests them.
-- Counts mean matching physical log entries, not estimated unique failures.
-  The same request may be logged by multiple layers; say so only when the log
-  provides that evidence. Never independently invent different counts,
+- Counts mean matching operational occurrences after deterministic correlation
+  de-duplication, not estimated unique failures. The same request may be logged
+  by multiple layers; say so only when the log provides that evidence. Never independently invent different counts,
   percentages, order, or Key-vs-Secondary classification for Chinese and
   English—the single finding object owns those shared facts.
 - Temporal coexistence is not evidence of shared causation. Do not say that

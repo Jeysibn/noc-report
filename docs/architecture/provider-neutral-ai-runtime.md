@@ -45,8 +45,10 @@ exact aggregate statistics, normalized log entries annotated with stable
 `zh-CN` then `en`. The physical pattern manifest remains worker-only; Hermes
 selects semantic cause groups through `evidence_entry_ids`. Those IDs are
 semantic anchors, not representative-only counts: the worker expands them to
-all entries in the matching deterministic cause families, then computes exact
-counts and stable semantic finding identities from the expanded evidence.
+all entries in the matching deterministic cause families, deduplicates records
+sharing a request correlation identity, then computes exact occurrence counts
+and stable semantic finding identities from the expanded evidence. Raw physical
+record totals remain available for audit.
 The Daily Report request is smaller: it contains a shift label, ordinal incident
 context, and compact frozen analysis fragments, with application IDs and exact
 timestamps removed. Evidence is explicitly untrusted data. The worker verifies

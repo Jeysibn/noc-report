@@ -158,9 +158,10 @@ def validate_log_triage_result(result: dict, *, label: str = "log_triage output"
 
     JSON Schema checks field shape. This second seam checks the invariants that
     Schema cannot express portably: one bilingual finding object owns one
-    identity/classification, counts are matching physical log entries, and a
-    percentage agrees with its count and total after deterministic runtime
-    reconciliation.
+    identity/classification, counts are correlated operational occurrences,
+    physical_entry_count preserves the matching raw log-record count, and a
+    percentage agrees with the occurrence count and total after deterministic
+    runtime reconciliation.
 
     Legacy snapshots may still contain cause/action fields. The caller keeps
     those immutable rows on the historical adapter and only invokes this
@@ -228,6 +229,12 @@ def validate_log_triage_result(result: dict, *, label: str = "log_triage output"
 
             count = finding.get("count")
             percentage = finding.get("percentage")
+            physical_entry_count = finding.get("physical_entry_count")
+            if physical_entry_count is not None:
+                if not isinstance(physical_entry_count, int) or isinstance(physical_entry_count, bool) or physical_entry_count < 0:
+                    raise OutputValidationError(f"{path}.physical_entry_count must be a non-negative integer")
+                if physical_entry_count > total:
+                    raise OutputValidationError(f"{path}.physical_entry_count cannot exceed total_entries")
             is_unquantified = pattern_ids == ["unquantified"]
             if is_unquantified:
                 if count is not None or percentage is not None:
@@ -239,6 +246,8 @@ def validate_log_triage_result(result: dict, *, label: str = "log_triage output"
                 raise OutputValidationError(f"{path}.count must be a non-negative integer")
             if count > total:
                 raise OutputValidationError(f"{path}.count cannot exceed total_entries")
+            if physical_entry_count is not None and physical_entry_count < count:
+                raise OutputValidationError(f"{path}.physical_entry_count cannot be less than count")
             if not isinstance(percentage, (int, float)) or isinstance(percentage, bool):
                 raise OutputValidationError(f"{path}.percentage must be a number")
             if not math.isfinite(float(percentage)) or not 0 <= float(percentage) <= 100:

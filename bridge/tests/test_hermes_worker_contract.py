@@ -187,6 +187,38 @@ def test_reconciliation_expands_all_entries_in_a_family_even_when_patterns_are_o
     assert reconciled["key_finds"][0]["percentage"] == 100.0
 
 
+def test_reconciliation_counts_one_occurrence_for_correlated_layer_logs():
+    facts = preprocess_log(
+        "2026-09-10T14:00:00Z WARN trace_id=t-1 NdrpApiService HTTP 503 response parse failed\n"
+        "2026-09-10T14:00:00Z WARN trace_id=t-1 NdrpApiService HTTP 503 Service Unavailable\n"
+    )
+    result = {
+        "total_entries": 0,
+        "summary_en": "The NDRP request failed in two logging layers.",
+        "summary_zh": "同一个NDRP请求在两个日志层记录失败。",
+        "key_finds": [{
+            "id": "ndrp",
+            "label_en": "NDRP unavailable",
+            "label_zh": "NDRP不可用",
+            "count": None,
+            "percentage": None,
+            "pattern_ids": ["unquantified"],
+            "evidence_entry_ids": [0],
+            "detail_en": "The same request produced a parse warning and an HTTP 503 detail record.",
+            "detail_zh": "同一请求同时产生了解析警告和HTTP 503详情记录。",
+        }],
+        "secondary_finds": [],
+        "severity_signal": "high",
+        "confidence": 0.8,
+    }
+    reconciled = reconcile_result(result, facts)
+    finding = reconciled["key_finds"][0]
+    assert finding["evidence_entry_ids"] == [0, 1]
+    assert finding["physical_entry_count"] == 2
+    assert finding["count"] == 1
+    assert finding["percentage"] == 50.0
+
+
 def test_reconciliation_replaces_model_numbers_and_retains_omitted_patterns():
     facts = preprocess_log(_log())
     first = facts["pattern_manifest"][0]
