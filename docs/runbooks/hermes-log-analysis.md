@@ -18,10 +18,10 @@ Compose file intentionally has no weak development fallback.
 
 Run the API separately with `AI_RUNTIME=hermes` after applying migrations and
 seeding the database. The local Compose file does not publish Hermes port
-8642. The local Compose file does not publish worker health either. Check the
-worker with `docker exec noc-report-ai-worker python -c 'import urllib.request;
-print(urllib.request.urlopen("http://127.0.0.1:8092/health").read().decode())'`
-and check Hermes from inside the Compose network at `/health`.
+8642. Worker health is published on loopback only at `127.0.0.1:8092` for a
+host-run API and operator diagnostics. Check it with
+`curl http://127.0.0.1:8092/health` and check Hermes from inside the Compose
+network at `/health`.
 
 ## Manual Hermes setup boundary
 

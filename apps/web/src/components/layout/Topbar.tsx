@@ -14,7 +14,11 @@ import { useOperationalHealth } from "@/lib/operationalHealth";
 export function Topbar() {
   const user = useCurrentUser();
   const health = useOperationalHealth();
-  const runtimeStatus = health.data?.dependencies.ai_runtime?.status ?? "unknown";
+  const hermesStatus = health.data?.dependencies.ai_runtime?.status ?? "unknown";
+  const workerStatus = health.data?.dependencies.ai_worker?.status;
+  const runtimeStatus = workerStatus && workerStatus !== "healthy"
+    ? workerStatus
+    : hermesStatus;
   const runtimePill = {
     status: runtimeStatus === "healthy" ? "good" : runtimeStatus === "degraded" ? "warning" : runtimeStatus === "unavailable" ? "critical" : "neutral",
     label: runtimeStatus === "healthy" ? "AI runtime ready" : runtimeStatus === "disabled" ? "AI analysis unavailable" : runtimeStatus === "degraded" ? "AI runtime degraded" : runtimeStatus === "unavailable" ? "AI runtime unavailable" : "AI runtime unknown",

@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     # queued. Keeping the default disabled preserves zero-config local tests.
     ai_runtime: Literal["disabled", "hermes"] = "disabled"
     hermes_base_url: str = "http://localhost:8642"
+    # The API checks the worker process separately from Hermes liveness. A
+    # containerized deployment should override this with the internal service
+    # name (for example http://ai-worker:8092/health); the local default is
+    # loopback because the development API runs on the host.
+    ai_worker_health_url: str = "http://localhost:8092/health"
     # Phase 2 remains explicitly gated. Enabling Hermes for log analysis must
     # not make the existing Daily Report endpoint enqueue jobs that the Phase
     # 1 worker cannot consume.

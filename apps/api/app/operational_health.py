@@ -103,6 +103,16 @@ def _check_hermes() -> dict:
     return _check_http_dependency(f"{listener_url}/health", name="hermes")
 
 
+def _check_ai_worker() -> dict:
+    """Check the application-side worker separately from Hermes liveness.
+
+    Hermes can be healthy while no consumer is claiming RabbitMQ jobs. This
+    check is diagnostic only; core API readiness still depends on PostgreSQL,
+    RabbitMQ, and MinIO rather than the optional AI pipeline.
+    """
+    return _check_http_dependency(settings.ai_worker_health_url, name="ai-worker")
+
+
 def _overall_status(dependencies: dict[str, dict]) -> str:
     # Disabled/not-applicable optional services do not make an otherwise
     # healthy installation unknown. Unknown still remains visible when a
@@ -130,6 +140,8 @@ def dependency_health() -> dict:
         checks["ollama"] = _check_ollama
     else:
         checks["ollama"] = lambda: {"status": "disabled", "detail": "local prefill AI is disabled by configuration"}
+    if settings.ai_runtime == "hermes":
+        checks["ai_worker"] = _check_ai_worker
 
     dependencies: dict[str, dict] = {}
     with ThreadPoolExecutor(max_workers=len(checks)) as executor:

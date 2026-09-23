@@ -154,7 +154,7 @@ paid-AI reservation fences.
 
 - `/health` is process liveness only.
 - `/health/dependencies` checks PostgreSQL, RabbitMQ (including ready/DLQ
-  counts), MinIO, the disabled AI runtime boundary, and optional Ollama.
+  counts), MinIO, Hermes and the AI Worker when configured, and optional Ollama.
 - `/health/readiness` returns HTTP 503 when PostgreSQL, RabbitMQ, or MinIO is
   unavailable.
 - Hermes and the AI Worker are optional to core readiness. Their degraded
@@ -194,7 +194,8 @@ remain inside the Hermes profile/setup.
 
 Required runtime settings are `AI_RUNTIME=hermes` for the API,
 `RUNTIME_HERMES_BASE_URL`, `RUNTIME_HERMES_API_KEY`, and the dedicated
-`RUNTIME_HERMES_PROFILE` for the worker. Do not set provider credentials such
+`RUNTIME_HERMES_PROFILE` for the worker. Set `AI_WORKER_HEALTH_URL` to the
+worker's internal health endpoint when the API runs in a container. Do not set provider credentials such
 as API keys in FastAPI or browser configuration. Pin `HERMES_IMAGE` and record
 the deployed image/version in the worker's `RUNTIME_HERMES_VERSION` for
 provenance.

@@ -22,6 +22,25 @@ def test_dependency_health_does_not_report_false_green(client, monkeypatch):
     assert response.json()["dependencies"]["rabbitmq"]["status"] == "unavailable"
 
 
+def test_hermes_health_reports_worker_separately_without_affecting_core_readiness(client, monkeypatch):
+    monkeypatch.setattr(operational_health.settings, "ai_runtime", "hermes")
+    monkeypatch.setattr(operational_health, "_check_database", lambda: {"status": "healthy"})
+    monkeypatch.setattr(operational_health, "_check_rabbitmq", lambda: {"status": "healthy"})
+    monkeypatch.setattr(operational_health, "_check_minio", lambda: {"status": "healthy"})
+    monkeypatch.setattr(operational_health, "_check_hermes", lambda: {"status": "healthy"})
+    monkeypatch.setattr(operational_health, "_check_ai_worker", lambda: {"status": "unavailable"})
+
+    dependencies = client.get("/health/dependencies")
+    assert dependencies.status_code == 200
+    body = dependencies.json()
+    assert body["dependencies"]["ai_runtime"]["status"] == "healthy"
+    assert body["dependencies"]["ai_worker"]["status"] == "unavailable"
+    assert body["status"] == "unavailable"
+
+    readiness = client.get("/health/readiness")
+    assert readiness.status_code == 200
+
+
 def test_readiness_returns_service_unavailable_when_core_dependency_is_down(client, monkeypatch):
     monkeypatch.setattr(operational_health, "_check_database", lambda: {"status": "healthy"})
     monkeypatch.setattr(operational_health, "_check_rabbitmq", lambda: {"status": "healthy"})

@@ -25,6 +25,10 @@ Hermes (`noc-log-analysis` profile)
 configured provider/model
 ```
 
+Operational health reports Hermes liveness and AI Worker process health as
+separate dependencies. AI degradation does not make the core API readiness
+endpoint fail; PostgreSQL, RabbitMQ, and MinIO remain the core readiness gate.
+
 The API owns application authentication/RBAC, incident and shift state,
 immutable evidence identity, SkillSnapshot and ReportSnapshot provenance,
 deterministic log preprocessing, and deterministic report composition. The AI
