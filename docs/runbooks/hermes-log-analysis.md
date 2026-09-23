@@ -2,7 +2,7 @@
 
 ## Start
 
-From the repository root, set a strong internal key and start the Phase 1
+From the repository root, set a strong internal key and start the Hermes
 services:
 
 ```bash
@@ -57,6 +57,19 @@ Hermes terminal execution is configured for the Docker backend as defense in
 depth, but the deployment intentionally does not mount the Docker socket and
 the NOC profile disables terminal tools.
 
+The second isolated profile is `noc-daily-report`, which auto-loads the
+repository-controlled `daily-alert-report` skill:
+
+```bash
+docker exec -it noc-report-hermes hermes -p noc-daily-report model
+docker exec -it noc-report-hermes hermes -p noc-daily-report status
+```
+
+The daily profile returns only a validated bilingual narrative plan. The
+worker resolves incident/evidence references from the frozen `ReportSnapshot`
+and renders the DOCX itself; Hermes never receives application credentials or
+creates report artifacts directly.
+
 ## Verify the flow
 
 1. Confirm `/health/dependencies` reports the AI runtime separately from core
@@ -93,6 +106,13 @@ needed.
   the provider credential in the Hermes profile is invalid or expired. Repair
   it inside Hermes' profile/provider setup and restart the worker; do not copy
   the provider key into the NOC application.
+- `DAILY_REPORT_RUNTIME_UNAVAILABLE`: confirm `AI_RUNTIME=hermes` and
+  `DAILY_REPORT_AI_ENABLED=true` in the API environment. The feature is
+  intentionally disabled by default.
+- Daily report worker failures: inspect `docker logs noc-report-ai-worker` and
+  verify both profiles at startup. A report job requires the
+  `daily-alert-report` SkillSnapshot and one checksum-verified ReportSnapshot
+  object reference.
 - `GET /v1/skills` must return successfully before enabling live profile skill
   discovery. If it fails, stop at the worker's frozen SkillSnapshot path and
   pin/upgrade Hermes to a compatible image before relying on auto-loaded
@@ -104,12 +124,28 @@ needed.
 - Checksum/version failure: treat the job as an evidence identity problem;
   do not rerun against a different object version.
 
-## Quality gate
+## Log-analysis quality gate
 
-Phase 2 is blocked until multiple representative real logs have passed the
-complete UI → RabbitMQ → AI Worker → Hermes → validation → AnalysisRun → UI
-flow. Evaluate Java exceptions, HTTP failures, dependency timeouts, database
-and third-party failures, authentication errors, repeated high-volume errors,
-multiple clusters, and mostly-INFO noise. Confirm Chinese translation,
-main-error selection, concise operational language, no unsupported causal
-claims, and exact deterministic counts.
+Daily Report Phase 2 should only be enabled after multiple representative real
+logs have passed the complete UI → RabbitMQ → AI Worker → Hermes → validation →
+AnalysisRun → UI flow. Evaluate Java exceptions, HTTP failures, dependency
+timeouts, database and third-party failures, authentication errors, repeated
+high-volume errors, multiple clusters, and mostly-INFO noise. Confirm Chinese
+translation, main-error selection, concise operational language, no unsupported
+causal claims, and exact deterministic counts.
+
+## Daily Alert Report flow
+
+After the gate passes, set `DAILY_REPORT_AI_ENABLED=true` on the API and use
+the normal **Generate Report** action. The flow is:
+
+```text
+ReportSnapshot → outbox → RabbitMQ daily_report → AI Worker
+→ Hermes noc-daily-report → validated narrative plan
+→ deterministic ReportDocument/DOCX composition → Report artifacts
+```
+
+The API still owns report section order, evidence, screenshots, links,
+filenames, pagination, and artifact identity. A Hermes outage affects report
+generation only; existing incidents, evidence, and historical reports remain
+available.

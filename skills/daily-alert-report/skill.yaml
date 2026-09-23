@@ -13,19 +13,17 @@ output_schema:
   file: output.schema.json
 input_projection:
   fields:
-    shift_starts_at: shift_starts_at
-    shift_ends_at: shift_ends_at
+    shift_name: shift.name
+    shift_timezone: shift.timezone
   collections:
     incidents:
       source: incidents
       fields:
-        display_id: display_id
+        incident_number: incident_number
         title: title
         status: status
         service: service
         environment: environment
-        starts_at: triggered_at
-        ends_at: recovered_at
         report_fragment: report_fragment
 renderer_profile: report-document-v1
 composition_profile: noc-daily-report-v1

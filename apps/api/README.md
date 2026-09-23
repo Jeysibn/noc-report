@@ -65,7 +65,7 @@ python3 -m pytest -q
 Models use Postgres-only UUID types and evidence tests PUT/GET real objects,
 so SQLite/mocked-S3 substitutes are not valid stand-ins.
 
-### Phase 1 Hermes runtime
+### Hermes runtime
 
 The API remains the application boundary. Set `AI_RUNTIME=hermes` only when
 the separately deployed `ai-worker` and Hermes service are available; otherwise
@@ -73,7 +73,7 @@ the safe default is `AI_RUNTIME=disabled`. The API does not receive provider
 credentials. The worker receives only its internal Hermes API key and the
 application credentials needed to verify evidence and update job artifacts.
 
-Start the local Phase 1 runtime from the repository root:
+Start the local Hermes runtime from the repository root:
 
 ```bash
 HERMES_API_KEY='replace-with-a-long-random-value' \
@@ -86,3 +86,14 @@ FastAPI configuration. The AI worker exposes loopback-only operator health on
 port `8092`; set `AI_WORKER_HEALTH_URL` to the internal worker service URL when
 the API itself runs in a container. Hermes exposes `/health` only on the
 internal Docker network.
+
+The worker has two isolated profiles:
+
+- `noc-log-analysis` → `log-triage-summary` for incident log analysis.
+- `noc-daily-report` → `daily-alert-report` for bilingual narrative only.
+
+The Daily Alert Report route remains disabled unless the Phase 1 quality gate
+has passed and the API is started with `DAILY_REPORT_AI_ENABLED=true`. The
+application still freezes the ReportSnapshot and owns report section order,
+evidence, screenshots, links, preview JSON, and DOCX rendering. Hermes only
+supplies the validated semantic summary.

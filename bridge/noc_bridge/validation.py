@@ -243,6 +243,39 @@ def validate_log_triage_result(result: dict, *, label: str = "log_triage output"
     _validate_causation_language(result, label=label)
 
 
+def validate_daily_report_result(result: dict, *, label: str = "daily_report output") -> None:
+    """Validate the semantic-only Daily Report plan beyond JSON Schema.
+
+    The model may supply only the bilingual general summary. Application-owned
+    identifiers and storage coordinates must never leak into that narrative;
+    composition resolves all report coverage and evidence deterministically.
+    """
+    if not isinstance(result, dict) or set(result) != {"general_summary"}:
+        raise OutputValidationError(f"{label} must contain only general_summary")
+    summary = result.get("general_summary")
+    if not isinstance(summary, dict):
+        raise OutputValidationError(f"{label}.general_summary must be an object")
+    for language in ("zh", "en"):
+        value = summary.get(language)
+        if not isinstance(value, str) or not value.strip():
+            raise OutputValidationError(f"{label}.general_summary.{language} must be non-empty")
+        if len(value) > 1600:
+            raise OutputValidationError(f"{label}.general_summary.{language} is too long")
+        lowered = value.casefold()
+        if any(marker in lowered for marker in ("object_key", "analysis_run_id", "bucket", "minio", "s3://")):
+            raise OutputValidationError(
+                f"{label}.general_summary.{language} contains application storage/provenance metadata"
+            )
+        if re.search(
+            r"https?://|INC-\d+|[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
+            value,
+            re.I,
+        ):
+            raise OutputValidationError(
+                f"{label}.general_summary.{language} contains an application identifier or URL"
+            )
+
+
 def validate_against_schema(output: dict, schema: dict, *, label: str = "output") -> None:
     """Generic JSON Schema validation, wrapping jsonschema's own exception
     in OutputValidationError so callers (and noc_bridge.failures'

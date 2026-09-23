@@ -7,6 +7,7 @@ authenticated HTTP boundary.
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import pathlib
 import tempfile
@@ -29,7 +30,15 @@ from noc_bridge.db import (
     renew_job_lease,
 )
 from noc_bridge.failures import TERMINAL, classify_failure
+from noc_bridge.failures import EvidenceIntegrityError
 from noc_bridge.hermes import HermesClient, HermesInvalidResponse
+from noc_bridge.daily_report import (
+    build_daily_report_input,
+    compose_and_render,
+    existing_report_artifacts,
+    load_saved_plan,
+    report_object_keys,
+)
 from noc_bridge.queue_topology import (
     DLX_EXCHANGE,
     JOBS_EXCHANGE,
@@ -46,8 +55,14 @@ from noc_bridge.storage import (
     get_client,
     object_exists,
     upload_artifact,
+    upload_artifact_metadata,
 )
-from noc_bridge.validation import OutputValidationError, validate_against_schema, validate_log_triage_result
+from noc_bridge.validation import (
+    OutputValidationError,
+    validate_against_schema,
+    validate_daily_report_result,
+    validate_log_triage_result,
+)
 from preprocessing import build_hermes_input, preprocess_log, reconcile_result
 
 
@@ -284,7 +299,7 @@ def _error_detail(exc: BaseException) -> tuple[str, str]:
     return str(getattr(exc, "error_code", "WORKER_FAILURE")), type(exc).__name__
 
 
-def process_message(
+def _process_log_triage_message(
     message: dict,
     *,
     settings,
@@ -293,7 +308,7 @@ def process_message(
 ) -> dict:
     """Process one claimed job; separated from RabbitMQ for contract tests."""
     if message.get("job_type") != "log_triage":
-        raise WorkerInputError("Phase 1 worker only accepts log_triage jobs")
+        raise WorkerInputError("log triage processor received an unsupported job type")
     if message.get("skill_name") != "log-triage-summary":
         raise SkillConfigurationError("unsupported analysis skill")
 
@@ -406,6 +421,243 @@ def process_message(
         db_conn.close()
 
 
+def _process_daily_report_message(
+    message: dict,
+    *,
+    settings,
+    metrics: WorkerMetrics | None = None,
+    hermes_client_factory=None,
+) -> dict:
+    if message.get("job_type") != "daily_report":
+        raise WorkerInputError("daily report processor received an unsupported job type")
+    if message.get("skill_name") != "daily-alert-report":
+        raise SkillConfigurationError("unsupported daily report skill")
+    refs = message.get("object_refs") or []
+    if message.get("incident_id") is not None or len(refs) != 1:
+        raise WorkerInputError("daily report requires one frozen report snapshot")
+
+    db_conn = get_db_connection(settings.database_url)
+    storage_client = get_client(settings)
+    try:
+        with tempfile.TemporaryDirectory(prefix=f"noc-report-{message['job_id']}-") as scratch:
+            scratch_path = pathlib.Path(scratch)
+            skill_root = scratch_path / "skills"
+            materialize_snapshot(
+                db_conn,
+                message["skill_name"],
+                message.get("skill_hash"),
+                snapshot_id=message.get("skill_snapshot_id"),
+                execution_hash=message.get("skill_execution_hash"),
+                dest_root=skill_root,
+            )
+            skill_dir = skill_root / message["skill_name"]
+            skill_md = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
+            schema = json.loads((skill_dir / "output.schema.json").read_text(encoding="utf-8"))
+
+            ref = refs[0]
+            snapshot_path = scratch_path / "snapshot.json"
+            download_object(
+                storage_client,
+                bucket=ref["bucket"],
+                object_key=ref["key"],
+                dest_path=snapshot_path,
+                expected_sha256=ref.get("sha256"),
+                version_id=ref.get("version_id"),
+            )
+            try:
+                snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise EvidenceIntegrityError("report snapshot is not valid JSON") from exc
+            payload = build_daily_report_input(snapshot)
+            report_bucket = settings.minio_bucket_reports
+            keys = report_object_keys(message["job_id"])
+
+            plan = load_saved_plan(
+                storage_client,
+                bucket=settings.minio_bucket_job_artifacts,
+                job_id=message["job_id"],
+            )
+            telemetry = None
+            if plan is not None:
+                validate_against_schema(plan, schema, label="stored daily report plan")
+                validate_daily_report_result(plan, label="stored daily report plan")
+            else:
+                runtime = (hermes_client_factory or HermesClient)(
+                    settings,
+                    profile=settings.hermes_daily_report_profile,
+                )
+                output_attempts = max(1, int(settings.hermes_max_output_attempts))
+                started = time.monotonic()
+                for output_attempt in range(output_attempts):
+                    try:
+                        response = runtime.analyze(
+                            payload=payload,
+                            skill_md=skill_md,
+                            output_schema=schema,
+                            task="daily_report",
+                        )
+                        plan = response.result
+                        validate_against_schema(plan, schema, label="Hermes daily report plan")
+                        validate_daily_report_result(plan, label="Hermes daily report plan")
+                        telemetry = {
+                            **response.telemetry,
+                            "hermes_version": settings.hermes_version,
+                            "runtime_version": settings.hermes_version,
+                            "runtime_profile": settings.hermes_daily_report_profile,
+                            "input_hash": ref.get("sha256"),
+                            "snapshot_sha256": ref.get("sha256"),
+                            "schema_version": payload["schema_version"],
+                            "output_attempts": output_attempt + 1,
+                            "duration_ms": round((time.monotonic() - started) * 1000),
+                        }
+                        break
+                    except HermesInvalidResponse:
+                        if output_attempt + 1 >= output_attempts:
+                            raise
+                    except (OutputValidationError, ValueError) as exc:
+                        if output_attempt + 1 >= output_attempts:
+                            raise HermesInvalidResponse("Hermes returned invalid daily report output") from exc
+                if plan is None:
+                    raise HermesInvalidResponse("Hermes returned no daily report plan")
+                plan_path = scratch_path / "report-plan.json"
+                plan_path.write_text(json.dumps(plan, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+                upload_artifact(
+                    storage_client,
+                    bucket=settings.minio_bucket_job_artifacts,
+                    object_key=keys["plan"],
+                    src_path=plan_path,
+                )
+                if telemetry is not None:
+                    telemetry_path = scratch_path / "report-telemetry.json"
+                    telemetry_path.write_text(json.dumps(telemetry, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+                    upload_artifact(
+                        storage_client,
+                        bucket=settings.minio_bucket_job_artifacts,
+                        object_key=keys["telemetry"],
+                        src_path=telemetry_path,
+                    )
+
+            existing = existing_report_artifacts(storage_client, bucket=report_bucket, job_id=message["job_id"])
+            if existing is not None:
+                return {
+                    "output": plan,
+                    "telemetry": telemetry or {},
+                    "artifact_metadata": {
+                        "report": existing["report"],
+                        "document": existing["document"],
+                        "screenshots": existing["screenshots"],
+                        "provenance": {
+                            "runtime_name": "hermes",
+                            "runtime_version": settings.hermes_version,
+                            "runtime_profile": settings.hermes_daily_report_profile,
+                            "provider": (telemetry or {}).get("provider"),
+                            "runtime_model": (telemetry or {}).get("runtime_model"),
+                            "input_manifest_sha256": ref.get("sha256"),
+                            "output_sha256": hashlib.sha256(
+                                json.dumps(plan, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+                            ).hexdigest(),
+                            "input_tokens": (telemetry or {}).get("input_tokens"),
+                            "output_tokens": (telemetry or {}).get("output_tokens"),
+                            "duration_ms": (telemetry or {}).get("duration_ms"),
+                        },
+                    },
+                }
+
+            docx_path = scratch_path / "report.docx"
+
+            def screenshot_fetcher(bucket, object_key, version_id=None, expected_sha256=None):
+                params = {"Bucket": bucket, "Key": object_key}
+                if version_id:
+                    params["VersionId"] = version_id
+                body = storage_client.get_object(**params)["Body"].read()
+                if expected_sha256 and hashlib.sha256(body).hexdigest() != expected_sha256:
+                    raise EvidenceIntegrityError(f"screenshot checksum mismatch: {object_key}")
+                return body
+
+            preview, screenshots = compose_and_render(
+                plan,
+                snapshot,
+                docx_path=docx_path,
+                screenshot_fetcher=screenshot_fetcher,
+            )
+            preview_path = scratch_path / "document.json"
+            preview_path.write_text(json.dumps(preview, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+            screenshots_path = scratch_path / "document.screenshots.json"
+            screenshots_path.write_text(json.dumps(screenshots, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+
+            report_metadata = upload_artifact_metadata(
+                storage_client,
+                bucket=report_bucket,
+                object_key=keys["report"],
+                src_path=docx_path,
+                content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+            document_metadata = upload_artifact_metadata(
+                storage_client,
+                bucket=report_bucket,
+                object_key=keys["document"],
+                src_path=preview_path,
+                content_type="application/json",
+            )
+            screenshots_metadata = upload_artifact_metadata(
+                storage_client,
+                bucket=report_bucket,
+                object_key=keys["screenshots"],
+                src_path=screenshots_path,
+                content_type="application/json",
+            )
+            return {
+                "output": plan,
+                "telemetry": telemetry or {},
+                "artifact_metadata": {
+                    "report": report_metadata,
+                    "document": document_metadata,
+                    "screenshots": screenshots_metadata,
+                    "provenance": {
+                        "runtime_name": "hermes",
+                        "runtime_version": settings.hermes_version,
+                        "runtime_profile": settings.hermes_daily_report_profile,
+                        "provider": (telemetry or {}).get("provider"),
+                        "runtime_model": (telemetry or {}).get("runtime_model"),
+                        "input_manifest_sha256": ref.get("sha256"),
+                        "output_sha256": hashlib.sha256(
+                            json.dumps(plan, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+                        ).hexdigest(),
+                        "input_tokens": (telemetry or {}).get("input_tokens"),
+                        "output_tokens": (telemetry or {}).get("output_tokens"),
+                        "duration_ms": (telemetry or {}).get("duration_ms"),
+                    },
+                },
+            }
+    finally:
+        db_conn.close()
+
+
+def process_message(
+    message: dict,
+    *,
+    settings,
+    metrics: WorkerMetrics | None = None,
+    hermes_client_factory=None,
+) -> dict:
+    """Dispatch one provider-neutral job to its task-specific contract."""
+    if message.get("job_type") == "log_triage":
+        return _process_log_triage_message(
+            message,
+            settings=settings,
+            metrics=metrics,
+            hermes_client_factory=hermes_client_factory,
+        )
+    if message.get("job_type") == "daily_report":
+        return _process_daily_report_message(
+            message,
+            settings=settings,
+            metrics=metrics,
+            hermes_client_factory=hermes_client_factory,
+        )
+    raise WorkerInputError(f"unsupported job type: {message.get('job_type')!r}")
+
+
 class Worker:
     def __init__(self, settings, metrics: WorkerMetrics | None = None):
         self.settings = settings
@@ -450,22 +702,25 @@ class Worker:
 
     def _update_queue_depth(self, channel) -> None:
         try:
-            count = channel.queue_declare(queue_names("log_triage")["main"], passive=True).method.message_count
+            count = sum(
+                channel.queue_declare(queue_names(job_type)["main"], passive=True).method.message_count
+                for job_type in ("log_triage", "daily_report")
+            )
             self.metrics.set_value("queue_depth", count)
         except Exception:
             LOG.debug("unable to sample log-triage queue depth", exc_info=True)
 
-    def handle_delivery(self, channel, method, _properties, body: bytes) -> None:
+    def handle_delivery(self, channel, method, _properties, body: bytes, expected_job_type: str = "log_triage") -> None:
         try:
             message = json.loads(body.decode("utf-8"))
             _validate_job_message(message)
         except Exception as exc:
-            send_raw_to_dlq(channel, job_type="log_triage", body=body, reason=f"invalid job message: {type(exc).__name__}")
+            send_raw_to_dlq(channel, job_type=expected_job_type, body=body, reason=f"invalid job message: {type(exc).__name__}")
             channel.basic_ack(method.delivery_tag)
             return
 
-        if message["job_type"] != "log_triage":
-            send_to_dlq(channel, job_type="log_triage", body=message)
+        if message["job_type"] != expected_job_type:
+            send_to_dlq(channel, job_type=expected_job_type, body=message)
             channel.basic_ack(method.delivery_tag)
             return
 
@@ -502,47 +757,57 @@ class Worker:
             # Crash reconciliation: an artifact written before a worker died
             # is the durable result for this immutable job and must not trigger
             # another provider call.
-            db_conn = get_db_connection(self.settings.database_url)
-            try:
-                incident, evidence = _incident_and_evidence(db_conn, message)
-                with tempfile.TemporaryDirectory() as scratch:
-                    skill_root = pathlib.Path(scratch) / "skills"
-                    materialize_snapshot(
-                        db_conn,
-                        message["skill_name"],
-                        message.get("skill_hash"),
-                        snapshot_id=message.get("skill_snapshot_id"),
-                        execution_hash=message.get("skill_execution_hash"),
-                        dest_root=skill_root,
-                    )
-                    schema = json.loads((skill_root / message["skill_name"] / "output.schema.json").read_text())
-                    evidence_path = pathlib.Path(scratch) / "reconcile-evidence.log"
-                    download_object(
-                        self.storage_client,
-                        bucket=evidence["bucket"],
-                        object_key=evidence["key"],
-                        dest_path=evidence_path,
-                        expected_sha256=evidence["sha256"],
-                        version_id=evidence["content_version"],
-                    )
-                    statistics = preprocess_log(evidence_path.read_text(encoding="utf-8"))
-                    if _artifact_exists_and_valid(self.storage_client, bucket=self.settings.minio_bucket_job_artifacts, key=artifact_key, schema=schema, statistics=statistics):
-                        done_conn = get_db_connection(self.settings.database_url)
-                        try:
-                            if not mark_completed(done_conn, job_id, claim_token=message["_claim_token"]):
-                                raise JobLeaseError("job lease was lost during artifact reconciliation")
-                        finally:
-                            done_conn.close()
-                        channel.basic_ack(method.delivery_tag)
-                        self.metrics.increment("jobs_completed")
-                        return
-            finally:
-                db_conn.close()
+            if message["job_type"] == "log_triage":
+                db_conn = get_db_connection(self.settings.database_url)
+                try:
+                    incident, evidence = _incident_and_evidence(db_conn, message)
+                    with tempfile.TemporaryDirectory() as scratch:
+                        skill_root = pathlib.Path(scratch) / "skills"
+                        materialize_snapshot(
+                            db_conn,
+                            message["skill_name"],
+                            message.get("skill_hash"),
+                            snapshot_id=message.get("skill_snapshot_id"),
+                            execution_hash=message.get("skill_execution_hash"),
+                            dest_root=skill_root,
+                        )
+                        schema = json.loads((skill_root / message["skill_name"] / "output.schema.json").read_text())
+                        evidence_path = pathlib.Path(scratch) / "reconcile-evidence.log"
+                        download_object(
+                            self.storage_client,
+                            bucket=evidence["bucket"],
+                            object_key=evidence["key"],
+                            dest_path=evidence_path,
+                            expected_sha256=evidence["sha256"],
+                            version_id=evidence["content_version"],
+                        )
+                        statistics = preprocess_log(evidence_path.read_text(encoding="utf-8"))
+                        if _artifact_exists_and_valid(self.storage_client, bucket=self.settings.minio_bucket_job_artifacts, key=artifact_key, schema=schema, statistics=statistics):
+                            done_conn = get_db_connection(self.settings.database_url)
+                            try:
+                                if not mark_completed(done_conn, job_id, claim_token=message["_claim_token"]):
+                                    raise JobLeaseError("job lease was lost during artifact reconciliation")
+                            finally:
+                                done_conn.close()
+                            channel.basic_ack(method.delivery_tag)
+                            self.metrics.increment("jobs_completed")
+                            return
+                finally:
+                    db_conn.close()
 
-            process_message({key: value for key, value in message.items() if not key.startswith("_")}, settings=self.settings, metrics=self.metrics)
+            outcome = process_message(
+                {key: value for key, value in message.items() if not key.startswith("_")},
+                settings=self.settings,
+                metrics=self.metrics,
+            )
             done_conn = get_db_connection(self.settings.database_url)
             try:
-                if not mark_completed(done_conn, job_id, claim_token=message["_claim_token"]):
+                if not mark_completed(
+                    done_conn,
+                    job_id,
+                    claim_token=message["_claim_token"],
+                    artifact_metadata=outcome.get("artifact_metadata"),
+                ):
                     raise JobLeaseError("job lease was lost before completion")
             finally:
                 done_conn.close()
@@ -572,11 +837,30 @@ class Worker:
                 declare_topology(channel)
                 self._update_queue_depth(channel)
                 self.metrics.set_runtime_ready(False)
-                HermesClient(self.settings).verify_restricted_toolsets()
+                HermesClient(self.settings, profile=self.settings.hermes_profile).verify_restricted_toolsets()
+                HermesClient(self.settings, profile=self.settings.hermes_daily_report_profile).verify_restricted_toolsets()
                 self.metrics.set_runtime_ready(True)
                 channel.basic_qos(prefetch_count=1)
-                channel.basic_consume(queue_names("log_triage")["main"], self.handle_delivery, auto_ack=False)
-                LOG.info("AI Worker ready profile=%s concurrency=%s", self.settings.hermes_profile, self.settings.max_concurrency)
+                channel.basic_consume(
+                    queue_names("log_triage")["main"],
+                    lambda ch, method, properties, body: self.handle_delivery(
+                        ch, method, properties, body, "log_triage"
+                    ),
+                    auto_ack=False,
+                )
+                channel.basic_consume(
+                    queue_names("daily_report")["main"],
+                    lambda ch, method, properties, body: self.handle_delivery(
+                        ch, method, properties, body, "daily_report"
+                    ),
+                    auto_ack=False,
+                )
+                LOG.info(
+                    "AI Worker ready profiles=%s,%s concurrency=%s",
+                    self.settings.hermes_profile,
+                    self.settings.hermes_daily_report_profile,
+                    self.settings.max_concurrency,
+                )
                 channel.start_consuming()
             except KeyboardInterrupt:
                 return

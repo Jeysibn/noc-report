@@ -44,11 +44,12 @@ field mapping. Suggestions require operator review before an Incident is
 created. See [`docs/phase-12-local-ai.md`](docs/phase-12-local-ai.md).
 
 The semantic runtime is provider-neutral. Local API development defaults to
-`AI_RUNTIME=disabled`; the Phase 1 Compose stack enables the separate Hermes
-service and `ai-worker` for log analysis only. The worker owns evidence
-verification, deterministic preprocessing, RabbitMQ settlement, and result
-validation; Hermes owns model/provider execution. Historical analyses and
-reports remain readable regardless of runtime availability.
+`AI_RUNTIME=disabled`; the Compose stack enables the separate Hermes service
+and `ai-worker` for log analysis and the opt-in Daily Alert Report flow. The
+worker owns evidence verification, deterministic preprocessing, RabbitMQ
+settlement, deterministic report rendering, and result validation; Hermes owns
+model/provider execution. Historical analyses and reports remain readable
+regardless of runtime availability.
 
 ```bash
 HERMES_API_KEY='replace-with-a-long-random-value' \
@@ -59,9 +60,12 @@ docker compose -f infrastructure/docker-compose.dev.yml up -d postgres minio rab
 using a shared development credential. For production, also set
 `RUNTIME_ENVIRONMENT=production` so the worker rejects missing or short keys.
 
-Configure the provider inside the dedicated Hermes profile before submitting a
-real analysis. See [`docs/architecture/provider-neutral-ai-runtime.md`](docs/architecture/provider-neutral-ai-runtime.md),
+Configure the provider inside the dedicated Hermes profiles before submitting a
+real analysis or report. Set `DAILY_REPORT_AI_ENABLED=true` on the API only
+after the log-analysis quality gate has passed. See
+[`docs/architecture/provider-neutral-ai-runtime.md`](docs/architecture/provider-neutral-ai-runtime.md),
 [`docs/adr/0029-hermes-runtime-integration.md`](docs/adr/0029-hermes-runtime-integration.md),
+[`docs/adr/0030-hermes-daily-alert-report.md`](docs/adr/0030-hermes-daily-alert-report.md),
 and [`docs/runbooks/hermes-log-analysis.md`](docs/runbooks/hermes-log-analysis.md).
 
 The release checks are intentionally component-scoped because the API fixture

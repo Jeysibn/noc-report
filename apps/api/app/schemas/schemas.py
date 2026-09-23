@@ -430,6 +430,16 @@ class ReportOut(BaseModel):
     skill_snapshot_id: uuid.UUID | None = None
     skill_hash: str | None = None
     skill_execution_hash: str | None = None
+    runtime_name: str | None = None
+    runtime_version: str | None = None
+    runtime_profile: str | None = None
+    provider: str | None = None
+    runtime_model: str | None = None
+    input_manifest_sha256: str | None = None
+    output_sha256: str | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    duration_ms: int | None = None
     generated_by: uuid.UUID | None
     generated_at: datetime | None
     error_message: str | None

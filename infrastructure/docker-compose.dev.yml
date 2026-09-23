@@ -126,6 +126,19 @@ services:
         if ! grep -q '^API_SERVER_KEY=' "$$profile_dir/.env" 2>/dev/null; then
           printf '\nAPI_SERVER_KEY=%s\n' "$$API_SERVER_KEY" >> "$$profile_dir/.env"
         fi
+        daily_profile_dir=/opt/data/profiles/noc-daily-report
+        daily_created=0
+        if [ ! -f "$$daily_profile_dir/SOUL.md" ]; then
+          hermes profile create noc-daily-report
+          daily_created=1
+        fi
+        cp /opt/noc-report/hermes/noc-daily-report/config.yaml "$$daily_profile_dir/config.yaml"
+        if [ "$$daily_created" = 1 ] && [ -f "$$profile_dir/.env" ]; then
+          cp "$$profile_dir/.env" "$$daily_profile_dir/.env"
+        fi
+        if ! grep -q '^API_SERVER_KEY=' "$$daily_profile_dir/.env" 2>/dev/null; then
+          printf '\nAPI_SERVER_KEY=%s\n' "$$API_SERVER_KEY" >> "$$daily_profile_dir/.env"
+        fi
         exec hermes gateway run
     environment:
       API_SERVER_ENABLED: "true"
@@ -139,6 +152,7 @@ services:
       - noc-report-hermes-data:/opt/data
       - ./hermes/noc-log-analysis/config.yaml:/opt/data/config.yaml:ro
       - ./hermes/noc-log-analysis/config.yaml:/opt/noc-report/hermes/noc-log-analysis/config.yaml:ro
+      - ./hermes/noc-daily-report/config.yaml:/opt/noc-report/hermes/noc-daily-report/config.yaml:ro
       - ../skills:/opt/noc-report/skills:ro
     networks:
       - hermes-internal
@@ -157,7 +171,7 @@ services:
       retries: 5
 
   # The worker is the only component allowed to hold application credentials
-  # and the Hermes API key. It consumes log_triage only in Phase 1.
+  # and the Hermes API key. It consumes log_triage and daily_report jobs.
   ai-worker:
     build:
       context: ..
@@ -174,6 +188,7 @@ services:
       RUNTIME_HERMES_BASE_URL: http://hermes:8642/p/noc-log-analysis
       RUNTIME_HERMES_API_KEY: ${HERMES_API_KEY:?Set HERMES_API_KEY before starting the Hermes stack}
       RUNTIME_HERMES_PROFILE: noc-log-analysis
+      RUNTIME_HERMES_DAILY_REPORT_PROFILE: noc-daily-report
       RUNTIME_HERMES_VERSION: ${HERMES_VERSION:-v0.21.4-2026.9.21}
       RUNTIME_ENVIRONMENT: ${RUNTIME_ENVIRONMENT:-development}
       RUNTIME_HEALTH_PORT: "8092"

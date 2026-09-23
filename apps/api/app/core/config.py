@@ -53,9 +53,8 @@ class Settings(BaseSettings):
     # name (for example http://ai-worker:8092/health); the local default is
     # loopback because the development API runs on the host.
     ai_worker_health_url: str = "http://localhost:8092/health"
-    # Phase 2 remains explicitly gated. Enabling Hermes for log analysis must
-    # not make the existing Daily Report endpoint enqueue jobs that the Phase
-    # 1 worker cannot consume.
+    # Phase 2 remains opt-in. The separate Hermes daily-report profile and
+    # worker path must be deliberately enabled after the Phase 1 quality gate.
     daily_report_ai_enabled: bool = False
 
     # Skill Runtime mission Phase 12: whether the outbox dispatcher runs as

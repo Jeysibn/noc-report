@@ -22,9 +22,10 @@ non-empty strings. It may concisely mention supported recurring themes, but
 must not create a separate cross-incident findings section.
 
 The semantic runtime owns only the Chinese and English shift summary
-and operational assessment. Do not emit incident IDs, AnalysisRun IDs,
-screenshots, bucket/object keys, URLs, log filenames, timestamps, or copied
-incident metadata.
+and operational assessment. Do not emit incident IDs (including `INC-...`
+values), AnalysisRun IDs, screenshots, bucket/object keys, URLs, log filenames,
+timestamps, or copied incident metadata. Refer to incidents by service or
+failure theme only when necessary.
 
 Report Composition derives the mandatory incident and analysis coverage from
 the frozen `ReportSnapshot`. It owns canonical section order, numbering,

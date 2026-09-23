@@ -86,6 +86,7 @@ def mark_completed(
     """Also releases the claim/lease (Reliability mission Batch A) — a
     COMPLETED job is a terminal state, so there's nothing left to protect
     a lease against, and clearing it keeps `fetch_job_row` output tidy."""
+    completed_at = datetime.now(timezone.utc)
     with conn.cursor() as cur:
         where = "WHERE id = %s" if claim_token is None else "WHERE id = %s AND claim_token = %s"
         where_params = (str(job_id),) if claim_token is None else (str(job_id), claim_token)
@@ -94,7 +95,7 @@ def mark_completed(
                 "UPDATE jobs SET status = %s, completed_at = %s, error_code = NULL, "
                 "error_message = NULL, claimed_at = NULL, "
                 "claim_token = NULL, lease_expires_at = NULL " + where,
-                ("COMPLETED", datetime.now(timezone.utc), *where_params),
+                ("COMPLETED", completed_at, *where_params),
             )
         else:
             cur.execute(
@@ -103,7 +104,7 @@ def mark_completed(
                 "claim_token = NULL, lease_expires_at = NULL " + where,
                 (
                     "COMPLETED",
-                    datetime.now(timezone.utc),
+                    completed_at,
                     *where_params,
                 ),
             )
@@ -136,6 +137,30 @@ def mark_completed(
                         document.get("byte_size"), document.get("content_type"), screenshots.get("object_key"),
                         screenshots.get("version_id"), screenshots.get("sha256"), screenshots.get("byte_size"),
                         screenshots.get("content_type"), str(job_id),
+                    ),
+                )
+            provenance = artifact_metadata.get("provenance")
+            if provenance:
+                cur.execute(
+                    "UPDATE reports SET runtime_name = %s, runtime_version = %s, "
+                    "runtime_profile = %s, provider = %s, runtime_model = %s, "
+                    "input_manifest_sha256 = %s, output_sha256 = %s, "
+                    "input_tokens = %s, output_tokens = %s, duration_ms = %s, "
+                    "generated_at = COALESCE(generated_at, %s) "
+                    "WHERE job_id = %s",
+                    (
+                        provenance.get("runtime_name"),
+                        provenance.get("runtime_version"),
+                        provenance.get("runtime_profile"),
+                        provenance.get("provider"),
+                        provenance.get("runtime_model"),
+                        provenance.get("input_manifest_sha256"),
+                        provenance.get("output_sha256"),
+                        provenance.get("input_tokens"),
+                        provenance.get("output_tokens"),
+                        provenance.get("duration_ms"),
+                        completed_at,
+                        str(job_id),
                     ),
                 )
     conn.commit()

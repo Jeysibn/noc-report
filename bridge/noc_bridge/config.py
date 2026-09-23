@@ -1,7 +1,7 @@
 """Provider-neutral runtime support configuration.
 
 This package contains the provider-neutral protocol, storage, validation, and
-runtime settings used by the separately deployed Phase 1 AI Worker. Provider
+runtime settings used by the separately deployed AI Worker. Provider
 credentials remain inside Hermes; this package only holds the worker's
 application and internal-runtime connection settings.
 """
@@ -32,6 +32,7 @@ class RuntimeSettings(BaseSettings):
     hermes_base_url: str = "http://hermes:8642"
     hermes_api_key: str = ""
     hermes_profile: str = "noc-log-analysis"
+    hermes_daily_report_profile: str = "noc-daily-report"
     hermes_version: str = "unknown"
     hermes_timeout_seconds: float = 900.0
     hermes_max_output_attempts: int = 2

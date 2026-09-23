@@ -1,13 +1,15 @@
 # 0029 — Hermes as the provider-independent AI runtime
 
-- Status: **accepted for Phase 1**
+- Status: **accepted; Phase 1 and Phase 2 log/report runtime**
 - Date: 2026-09-23
 
 ## Decision
 
 Use Hermes Agent as a separately deployed, provider-independent reasoning
 runtime behind the NOC application's existing AI runtime boundary. The first
-profile is `noc-log-analysis` and the first task is `log-triage-summary` only.
+profile is `noc-log-analysis` and the first task is `log-triage-summary`. The
+gated second profile is `noc-daily-report` for the `daily-alert-report`
+narrative-only task.
 The application-side AI Worker consumes the existing RabbitMQ `log_triage`
 job, verifies immutable evidence and SkillSnapshot identity, performs
 deterministic preprocessing, calls Hermes over authenticated internal HTTP,
@@ -57,8 +59,7 @@ provenance.
 
 ## Gate
 
-Daily Alert Report integration is a separate future phase. It may begin only
-after multiple representative real log files pass the complete UI → RabbitMQ
-→ worker → Hermes → validation → AnalysisRun → UI flow with acceptable
-Chinese-first output, exact counts, useful root-cause reasoning, and tested
-prompt-injection fixtures.
+Daily Alert Report is implemented as the separately gated Phase 2 path. It is
+enabled only after the log-analysis gate and uses the dedicated
+`noc-daily-report` profile; see ADR 0030 for its narrative-only contract and
+deterministic renderer boundary.

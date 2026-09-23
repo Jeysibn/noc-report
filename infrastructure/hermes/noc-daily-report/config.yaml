@@ -1,0 +1,68 @@
+# Dedicated Hermes profile for Daily Alert Report narrative generation.
+# Provider credentials remain in Hermes' profile/auth store.
+
+platform_toolsets:
+  api_server: []
+
+toolsets: []
+
+agent:
+  max_turns: 4
+  api_max_retries: 1
+  auto_recovery_cycles: 0
+  disabled_toolsets:
+    - terminal
+    - process
+    - file
+    - browser
+    - web
+    - search
+    - vision
+    - image_gen
+    - tts
+    - todo
+    - memory
+    - session_search
+    - cronjob
+    - code_execution
+    - delegation
+    - clarify
+    - homeassistant
+    - messaging
+    - connections
+    - skills
+    - coding
+    - debugging
+    - safe
+    - computer_use
+  reasoning_effort: minimal
+
+skills:
+  external_dirs:
+    - /opt/noc-report/skills
+  auto_load:
+    - daily-alert-report
+  create_dir: /opt/data/skills
+  write_approval: false
+
+memory:
+  memory_enabled: false
+  user_profile_enabled: false
+
+terminal:
+  backend: docker
+  docker_forward_env: []
+  docker_mount_cwd_to_workspace: false
+  container_persistent: false
+
+gateway:
+  multiplex_profiles: true
+  api_server:
+    max_concurrent_runs: 1
+    history_tool_output_max_chars: 20000
+
+model:
+  default: claude-haiku-4-5-20251001
+  provider: anthropic
+
+_config_version: 45

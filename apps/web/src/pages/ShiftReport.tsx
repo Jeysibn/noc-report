@@ -36,10 +36,6 @@ const jobPill: Record<
 
 const IN_FLIGHT: ReportJobStatus[] = ["QUEUED", "PROCESSING", "RETRYING"];
 const POLL_INTERVAL_MS = 3000;
-// Phase 2 is intentionally not exposed until the Phase 1 Hermes log-quality
-// gate passes. The backend enforces the same gate; this prevents an operator
-// from submitting a job that the current worker cannot consume.
-const DAILY_REPORT_ENABLED = false;
 
 function readinessFor(incident: IncidentReadinessRow): IncidentReadiness {
   if (!incident.hasLog) return "NO_LOG";
@@ -309,7 +305,8 @@ export function ShiftReport() {
           {canGenerateReport && (
             <>
               <p className="text-sm text-muted">
-                Daily Alert Report generation is not enabled until Hermes log-analysis quality has passed its Phase 1 gate.
+                Hermes supplies the bilingual narrative; the application keeps
+                report evidence, ordering, and DOCX composition deterministic.
               </p>
               <p className="text-sm text-muted">
                 Skill: Daily Alert Report (fixed)
@@ -321,7 +318,7 @@ export function ShiftReport() {
                 </p>
               )}
               <div className="flex items-center gap-3">
-                <Button onClick={generateReport} disabled={isBusy || !shift || !DAILY_REPORT_ENABLED}>
+                <Button onClick={generateReport} disabled={isBusy || !shift}>
                   {isBusy ? "Generating..." : "Generate report"}
                 </Button>
                 {current && (

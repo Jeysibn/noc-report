@@ -167,13 +167,21 @@ paid-AI reservation fences.
 The web dashboard polls dependency health every 30 seconds. `unknown` is a
 neutral state, not a green state.
 
-## Hermes Phase 1 deployment
+## Hermes deployment
 
-The Phase 1 semantic path is:
+The log-analysis semantic path is:
 
 ```text
 API → transactional outbox → RabbitMQ log_triage → AI Worker → Hermes →
 validated result/telemetry artifacts → API AnalysisRun reconciliation
+```
+
+The Phase 2 Daily Alert Report path is:
+
+```text
+API → transactional outbox → RabbitMQ daily_report → AI Worker →
+Hermes noc-daily-report → validated narrative plan → deterministic
+ReportDocument/DOCX renderer → versioned report artifacts → API Report
 ```
 
 The worker runs with RabbitMQ prefetch and Hermes concurrency set to one. It
@@ -200,9 +208,20 @@ as API keys in FastAPI or browser configuration. Pin `HERMES_IMAGE` and record
 the deployed image/version in the worker's `RUNTIME_HERMES_VERSION` for
 provenance.
 
-`DAILY_REPORT_AI_ENABLED` remains false until the Phase 1 log-analysis quality
-gate passes. The Phase 1 worker consumes `log_triage` only; enabling Hermes for
-log analysis must not create unserviceable `daily_report` jobs.
+`DAILY_REPORT_AI_ENABLED` remains false by default. After the Phase 1
+log-analysis quality gate passes, set it to `true` to allow the report route to
+freeze a `ReportSnapshot` and enqueue `daily_report`. The worker validates the
+`daily-alert-report` SkillSnapshot, calls only the `noc-daily-report` profile,
+and rejects narrative output containing application IDs, storage coordinates,
+URLs, or report layout instructions. A corrupt or incomplete report plan is
+never persisted as a successful report.
+
+The daily profile writes a durable narrative-plan artifact before rendering.
+DOCX, preview JSON, and screenshot-index artifacts are uploaded only after
+deterministic composition succeeds. The report row records Hermes/profile,
+provider/model when returned, snapshot hash, plan hash, token usage, and
+duration. A redelivered job reuses the saved plan and complete versioned
+artifact set rather than invoking the provider again.
 
 The current profile disables terminal/process execution, filesystem mutation,
 browser/web/search, messaging, code execution, delegation, memory, image/TTS,

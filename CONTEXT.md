@@ -22,10 +22,10 @@ This glossary is the shared vocabulary for maintainers and coding agents.
   Chinese first, then `Short Summary`, `Key Finds`, and `Secondary Finds` in
   both languages. Key Finds carry the substantive evidence; Secondary Finds
   remain brief. Cause/action fields are legacy compatibility only.
-- **ReportPlan** — the future runtime’s narrative-only bilingual shift summary. It does not repeat mandatory incident or AnalysisRun references and does not define report layout or navigation.
+- **ReportPlan** — the `noc-daily-report` runtime’s narrative-only bilingual shift summary. It does not repeat mandatory incident or AnalysisRun references and does not define report layout or navigation.
 - **ReportSnapshot** — frozen Shift, Incident, evidence, AnalysisRun, provenance, report policy, and IANA operational timezone for one report generation.
 - **ReportDocument** — renderer-neutral semantic blocks consumed by both Web Preview and DOCX. Its active Daily Alert Report structure is Alerts, General Summary, then Log Analysis; it separates visible metadata from audit provenance.
-- **Job** — the durable unit processed through the outbox/RabbitMQ pipeline. Phase 1 `log_triage` jobs are consumed by the separate AI Worker when `AI_RUNTIME=hermes`; Daily Alert Report jobs remain outside the Hermes milestone gate.
+- **Job** — the durable unit processed through the outbox/RabbitMQ pipeline. `log_triage` and opt-in `daily_report` jobs are consumed by the separate AI Worker when `AI_RUNTIME=hermes`; Daily Report generation remains explicitly feature-gated until the Phase 1 quality gate has passed.
 - **Job Protocol** — the versioned RabbitMQ wire contract and topology in `packages/contracts/job_message.schema.json` and `job_protocol.json`, consumed by the API and runtime-support package.
 - **Report Composition** — the deterministic authority that derives coverage from the frozen snapshot, validates narrative requirements, controls canonical section order, and materializes the final ReportDocument.
 - **OCRExtraction** — persisted PaddleOCR output containing raw and normalized text, line confidence/coordinates, engine metadata, and screenshot provenance.
@@ -51,4 +51,4 @@ This glossary is the shared vocabulary for maintainers and coding agents.
 - **Operator Remote-Read State** — Dashboard Current Shift and Log Analysis history expose loading, success/empty, and failure states separately. Polling failures preserve the last-known-good analysis and show stale/retrying status instead of “Not analyzed.”
 - **Hermes Runtime** — the provider-independent external reasoning service. It receives a prepared, untrusted-data analysis request and cannot access PostgreSQL, MinIO, RabbitMQ, application JWTs, or mutable repository skills.
 - **AI Worker** — the thin application-side RabbitMQ consumer that claims leases, verifies immutable evidence and SkillSnapshot identity, performs deterministic preprocessing, calls Hermes, validates/reconciles structured output, and writes durable job artifacts.
-- **Phase 1 Gate** — Hermes log analysis must pass multiple representative real-log evaluations through UI → RabbitMQ → worker → Hermes → validation → AnalysisRun → UI before Daily Alert Report integration begins.
+- **Phase 1 Gate** — Hermes log analysis must pass multiple representative real-log evaluations through UI → RabbitMQ → worker → Hermes → validation → AnalysisRun → UI before the Daily Alert Report feature flag is enabled.

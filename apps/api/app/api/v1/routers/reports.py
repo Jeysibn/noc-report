@@ -1,8 +1,9 @@
 """Daily report API with immutable snapshots and a provider-neutral runtime.
 
 Report generation freezes incident, evidence, and analysis provenance before
-dispatch. With no semantic runtime configured, new requests fail before a
-job is created; historical reports remain readable and downloadable.
+dispatch. With no semantic runtime or explicit Daily Report feature flag,
+new requests fail before a job is created; historical reports remain readable
+and downloadable.
 """
 import json
 import mimetypes
@@ -240,6 +241,16 @@ def _to_out(report: Report, job: Job) -> ReportOut:
         skill_snapshot_id=report.skill_snapshot_id,
         skill_hash=report.skill_hash,
         skill_execution_hash=report.skill_execution_hash,
+        runtime_name=report.runtime_name,
+        runtime_version=report.runtime_version,
+        runtime_profile=report.runtime_profile,
+        provider=report.provider,
+        runtime_model=report.runtime_model,
+        input_manifest_sha256=report.input_manifest_sha256,
+        output_sha256=report.output_sha256,
+        input_tokens=report.input_tokens,
+        output_tokens=report.output_tokens,
+        duration_ms=report.duration_ms,
         generated_by=report.generated_by,
         generated_at=report.generated_at,
         error_message=job.error_message,
@@ -307,15 +318,16 @@ def generate_report(
 ) -> ReportOut:
     shift = _lock_shift_or_404(db, shift_id)
 
-    # Do not freeze, upload, or enqueue anything while the semantic runtime
-    # is absent. This keeps the outbox free of unserviceable work.
+    # Do not freeze, upload, or enqueue anything while the semantic runtime or
+    # explicit Phase 2 feature flag is absent. This keeps the outbox free of
+    # unserviceable work.
     require_ai_runtime()
     if not settings.daily_report_ai_enabled:
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={
                 "code": "DAILY_REPORT_RUNTIME_UNAVAILABLE",
-                "message": "Daily Alert Report AI generation is not enabled yet; log analysis must pass its quality gate first.",
+                "message": "Daily Alert Report AI generation is disabled; enable it after the log-analysis quality gate.",
             },
         )
 
@@ -345,12 +357,13 @@ def generate_report(
     # same object_refs path Milestone 13 already built — no separate
     # "small JSON inline in the queue message" code path to maintain.
     snapshot_key = f"snapshots/{shift.id}/{snapshot.id}.json"
-    get_client().put_object(
+    snapshot_upload = get_client().put_object(
         Bucket=settings.minio_bucket_reports,
         Key=snapshot_key,
         Body=snapshot_bytes,
         ContentType="application/json",
     )
+    snapshot_version_id = snapshot_upload.get("VersionId")
 
     # Skill Registry (Reliability mission Batch B): resolves/creates the
     # immutable SkillSnapshot for this skill's current on-disk content —
@@ -371,7 +384,12 @@ def generate_report(
         requested_by=current_user.id,
         incident_id=None,
         object_refs=[
-            {"bucket": settings.minio_bucket_reports, "key": snapshot_key, "sha256": snapshot_sha256}
+            {
+                "bucket": settings.minio_bucket_reports,
+                "key": snapshot_key,
+                "sha256": snapshot_sha256,
+                **({"version_id": snapshot_version_id} if snapshot_version_id else {}),
+            }
         ],
         model=None,
         effort=None,

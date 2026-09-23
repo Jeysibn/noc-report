@@ -45,7 +45,7 @@ afterEach(() => {
 });
 
 describe("ShiftReport", () => {
-  it("renders incident readiness and keeps Phase 2 report generation gated", async () => {
+  it("renders incident readiness and submits a Daily Alert Report job", async () => {
     generateReport.mockResolvedValue({
       id: "report-1",
       shiftId: "shift-1",
@@ -76,10 +76,10 @@ describe("ShiftReport", () => {
     fireEvent.click(screen.getByRole("button", { name: /generate report/i }));
     await act(async () => {});
 
-    expect(generateReport).not.toHaveBeenCalled();
+    expect(generateReport).toHaveBeenCalledWith("shift-1", {});
   });
 
-  it("does not expose a report request before the Phase 1 gate", async () => {
+  it("allows the report request after the Phase 1 quality gate", async () => {
     generateReport.mockResolvedValue({
       id: "report-2", shiftId: "shift-1", snapshotId: "snap-2", jobId: "job-2",
       version: 1, status: "QUEUED", model: "historical-runtime", effort: null,
@@ -90,7 +90,7 @@ describe("ShiftReport", () => {
     await act(async () => {});
     fireEvent.click(screen.getByRole("button", { name: /generate report/i }));
     await act(async () => {});
-    expect(generateReport).not.toHaveBeenCalled();
+    expect(generateReport).toHaveBeenCalledWith("shift-1", {});
   });
 
   it("shows a download button once a report is downloadable", async () => {
