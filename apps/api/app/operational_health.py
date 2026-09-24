@@ -133,6 +133,19 @@ def _worker_reports_hermes_healthy(worker: dict) -> bool:
     """
     detail = worker.get("detail")
     runtime_detail = detail.get("metrics", detail) if isinstance(detail, dict) else {}
+    dependencies = (
+        detail.get("dependencies", runtime_detail.get("dependencies", {}))
+        if isinstance(detail, dict)
+        else {}
+    )
+    if isinstance(dependencies, dict) and dependencies:
+        return (
+            dependencies.get("hermes") == "healthy"
+            and dependencies.get("hermes_profile") == "healthy"
+        )
+
+    # Backward compatibility while older workers are being rolled during an
+    # upgrade. New workers provide explicit dependency statuses above.
     return (
         worker.get("status") == "healthy"
         and isinstance(detail, dict)

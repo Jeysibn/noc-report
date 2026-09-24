@@ -26,6 +26,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: npm run check:coherence
+      - name: Test conditional Hermes profile bootstrap
+        run: python3 -m unittest discover -s infrastructure/tests -v
       - name: Validate the Hermes Compose contract
         run: HERMES_API_KEY=ci-only-not-a-runtime-secret docker compose -f infrastructure/docker-compose.dev.yml config --quiet
 
@@ -37,6 +39,7 @@ jobs:
       - name: Boot the pinned Hermes runtime and check its HTTP contract
         env:
           HERMES_API_KEY: ci-hermes-contract-token-with-no-provider-credentials
+          DAILY_REPORT_AI_ENABLED: "true"
         run: |
           set -euo pipefail
           compose=(docker compose --project-name hermes-contract -f infrastructure/docker-compose.dev.yml --profile hermes-contract)

@@ -281,50 +281,16 @@ def test_storage_status_requires_permission(client, db_session, seeded):
     assert resp.status_code == 403
 
 
-def test_get_system_config_seeded_defaults(client, db_session, seeded):
+def test_legacy_worker_configuration_controls_are_not_exposed(client, db_session, seeded):
     make_user(db_session, "root", "Admin")
     headers = auth_headers(client, "root")
 
-    resp = client.get("/api/v1/admin/system-config", headers=headers)
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["job_timeout_seconds"] == 300
-    assert body["max_concurrent_jobs"] == 1
-
-
-def test_update_system_config_requires_permission(client, db_session, seeded):
-    make_user(db_session, "operator1", "NOC")
-    headers = auth_headers(client, "operator1")
-
-    resp = client.patch(
-        "/api/v1/admin/system-config", json={"max_concurrent_jobs": 1}, headers=headers
-    )
-    assert resp.status_code == 403
-
-
-def test_update_system_config(client, db_session, seeded):
-    make_user(db_session, "root", "Admin")
-    headers = auth_headers(client, "root")
-
-    invalid_capacity = client.patch(
-        "/api/v1/admin/system-config",
-        json={"max_concurrent_jobs": 4},
-        headers=headers,
-    )
-    assert invalid_capacity.status_code == 422
-
-    resp = client.patch(
+    assert client.get("/api/v1/admin/system-config", headers=headers).status_code == 404
+    assert client.patch(
         "/api/v1/admin/system-config",
         json={"job_timeout_seconds": 420, "max_concurrent_jobs": 1},
         headers=headers,
-    )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["job_timeout_seconds"] == 420
-    assert body["max_concurrent_jobs"] == 1
-
-    audit = client.get("/api/v1/admin/audit", headers=headers).json()
-    assert any(e["action"] == "system_config.update" for e in audit)
+    ).status_code == 404
 
 
 def test_list_skills_requires_permission(client, db_session, seeded):

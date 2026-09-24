@@ -9,16 +9,9 @@ Usage: python -m app.seed
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-import uuid
-
 from app.core.security import hash_password
 from app.db.session import Base, SessionLocal, engine
-from app.models.models import Permission, Role, ShiftDefinition, SystemConfig, User
-
-# Milestone 17 gap follow-up (AI Configuration): system_config is a
-# single-row table — this fixed id is how `seed()`/the admin endpoint
-# both locate that one row without a separate "is this the row" flag.
-SYSTEM_CONFIG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+from app.models.models import Permission, Role, ShiftDefinition, User
 
 # Milestone 17 gap follow-up (Shift Configuration): the three shifts named
 # in the master plan's Dashboard mock (§9.2) and the old Admin.tsx mock
@@ -129,11 +122,6 @@ def seed(db: Session) -> None:
         if existing is None:
             db.add(ShiftDefinition(timezone="Asia/Manila", enabled=True, **defn))
     db.commit()
-
-    if db.get(SystemConfig, SYSTEM_CONFIG_ID) is None:
-        db.add(SystemConfig(id=SYSTEM_CONFIG_ID))
-        db.commit()
-
 
 if __name__ == "__main__":
     Base.metadata.create_all(bind=engine)  # no-op once Alembic migrations are current

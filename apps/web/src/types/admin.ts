@@ -92,18 +92,6 @@ export interface StorageBucketStatus {
   totalBytes: number;
 }
 
-/** Generic worker configuration retained outside provider selection. */
-export interface SystemConfig {
-  jobTimeoutSeconds: number;
-  maxConcurrentJobs: number;
-  updatedAt: string;
-}
-
-export interface SystemConfigUpdate {
-  jobTimeoutSeconds?: number;
-  maxConcurrentJobs?: number;
-}
-
 export interface RuntimeStatus {
   checked_at: string;
   runtime: string;

@@ -435,7 +435,7 @@ def _process_daily_report_message(
             else:
                 runtime = (hermes_client_factory or HermesClient)(
                     settings,
-                    profile=settings.hermes_daily_report_profile,
+                    profile=settings.hermes_profile,
                 )
                 output_attempts = max(1, int(settings.hermes_max_output_attempts))
                 started = time.monotonic()
@@ -454,7 +454,7 @@ def _process_daily_report_message(
                             **response.telemetry,
                             "hermes_version": settings.hermes_version,
                             "runtime_version": settings.hermes_version,
-                            "runtime_profile": settings.hermes_daily_report_profile,
+                            "runtime_profile": settings.hermes_profile,
                             "input_hash": ref.get("sha256"),
                             "snapshot_sha256": ref.get("sha256"),
                             "schema_version": payload["schema_version"],
@@ -500,7 +500,7 @@ def _process_daily_report_message(
                         "provenance": {
                             "runtime_name": "hermes",
                             "runtime_version": settings.hermes_version,
-                            "runtime_profile": settings.hermes_daily_report_profile,
+                            "runtime_profile": settings.hermes_profile,
                             "provider": (telemetry or {}).get("provider"),
                             "runtime_model": (telemetry or {}).get("runtime_model"),
                             "input_manifest_sha256": ref.get("sha256"),
@@ -567,7 +567,7 @@ def _process_daily_report_message(
                     "provenance": {
                         "runtime_name": "hermes",
                         "runtime_version": settings.hermes_version,
-                        "runtime_profile": settings.hermes_daily_report_profile,
+                        "runtime_profile": settings.hermes_profile,
                         "provider": (telemetry or {}).get("provider"),
                         "runtime_model": (telemetry or {}).get("runtime_model"),
                         "input_manifest_sha256": ref.get("sha256"),
@@ -824,21 +824,20 @@ class Worker:
     def run_forever(self) -> None:
         while True:
             connection = None
+            self.metrics.set_runtime_ready(False)
+            self.metrics.set_value("rabbitmq_ready", False)
+            self.metrics.set_value("hermes_profile_ready", False)
             try:
                 connection = get_rabbit_connection(self.settings.rabbitmq_url)
                 channel = connection.channel()
                 declare_topology(channel)
+                self.metrics.set_value("rabbitmq_ready", True)
                 self._update_queue_depth(channel)
-                self.metrics.set_runtime_ready(False)
-                profile = (
-                    self.settings.hermes_profile
-                    if self.settings.worker_kind == "log_triage"
-                    else self.settings.hermes_daily_report_profile
-                )
+                profile = self.settings.hermes_profile
                 LOG.info("Hermes profile verification started worker_kind=%s profile=%s", self.settings.worker_kind, profile)
                 HermesClient(self.settings, profile=profile).verify_restricted_toolsets()
                 LOG.info("Hermes profile verified worker_kind=%s profile=%s", self.settings.worker_kind, profile)
-                self.metrics.set_runtime_ready(True)
+                self.metrics.set_value("hermes_profile_ready", True)
                 channel.basic_qos(prefetch_count=1)
                 job_type = self.settings.worker_kind
                 channel.basic_consume(
@@ -848,17 +847,25 @@ class Worker:
                     ),
                     auto_ack=False,
                 )
+                self.metrics.set_runtime_ready(True)
                 LOG.info(
-                    "AI Worker ready worker_kind=%s profile=%s concurrency=%s",
+                    "AI Worker ready worker_kind=%s profile=%s concurrency=1",
                     job_type,
                     profile,
-                    self.settings.max_concurrency,
                 )
                 channel.start_consuming()
             except KeyboardInterrupt:
                 return
             except Exception as exc:
                 self.metrics.set_runtime_ready(False)
+                # A failed profile check does not imply that RabbitMQ itself is
+                # down. Preserve that distinction while the connection remains
+                # usable; the next loop iteration starts all gates closed.
+                self.metrics.set_value(
+                    "rabbitmq_ready",
+                    bool(connection is not None and not connection.is_closed),
+                )
+                self.metrics.set_value("hermes_profile_ready", False)
                 LOG.error(
                     "worker degraded worker_kind=%s error_type=%s reconnect_seconds=5",
                     self.settings.worker_kind,
@@ -866,6 +873,9 @@ class Worker:
                 )
                 time.sleep(5)
             finally:
+                self.metrics.set_runtime_ready(False)
+                self.metrics.set_value("rabbitmq_ready", False)
+                self.metrics.set_value("hermes_profile_ready", False)
                 if connection is not None and not connection.is_closed:
                     connection.close()
 

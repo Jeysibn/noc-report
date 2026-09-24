@@ -65,6 +65,13 @@ docker exec -it noc-report-hermes hermes -p noc-daily-report model
 docker exec -it noc-report-hermes hermes -p noc-daily-report status
 ```
 
+The shared Hermes bootstrap always requires `noc-log-analysis`. It provisions
+`noc-daily-report` only when `DAILY_REPORT_AI_ENABLED=true` is passed to the
+Compose environment as well as the API environment. If enabled-profile
+provisioning fails, the error is logged and Hermes continues for log analysis;
+the Daily worker remains not-ready until its profile passes verification. When
+Daily AI is disabled, the optional profile is not touched or required.
+
 The daily profile returns only a validated bilingual narrative plan. The
 worker resolves incident/evidence references from the frozen `ReportSnapshot`
 and renders the DOCX itself; Hermes never receives application credentials or
@@ -109,8 +116,10 @@ needed.
 - `DAILY_REPORT_RUNTIME_UNAVAILABLE`: confirm `AI_RUNTIME=hermes` and
   `DAILY_REPORT_AI_ENABLED=true` in the API environment. The feature is
   intentionally disabled by default.
-- Daily report worker failures: inspect `docker logs noc-report-ai-worker` and
-  verify both profiles at startup. A report job requires the
+- Daily report worker failures: inspect the `daily-report-worker` Compose
+  service logs and its `/health/ready` dependency details. The shared Hermes startup always
+  requires the log profile and provisions the Daily profile only when its
+  feature gate is enabled. A report job requires the
   `daily-alert-report` SkillSnapshot and one checksum-verified ReportSnapshot
   object reference.
 - `GET /v1/skills` must return successfully before enabling live profile skill

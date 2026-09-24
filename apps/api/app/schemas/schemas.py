@@ -3,8 +3,6 @@ from datetime import datetime, time
 from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from app.ai_policy import CONCURRENCY_MAX, CONCURRENCY_MIN, TIMEOUT_MAX, TIMEOUT_MIN
-
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
@@ -505,24 +503,6 @@ class AnalyticsSummaryOut(BaseModel):
     analysis_job_outcomes: list[DonutSliceOut]
     top_recurring_alert_titles: list[TopAlertTitleOut]
     report_generation_counts: ReportGenerationCountsOut
-
-
-class SystemConfigOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    job_timeout_seconds: int
-    max_concurrent_jobs: int
-    updated_at: datetime
-
-
-class SystemConfigUpdate(BaseModel):
-    """Milestone 17 gap follow-up (AI Configuration). All fields optional —
-    partial-update semantics via `exclude_unset`, same as ShiftDefinitionUpdate."""
-
-    job_timeout_seconds: int | None = Field(default=None, ge=TIMEOUT_MIN, le=TIMEOUT_MAX)
-    max_concurrent_jobs: int | None = Field(
-        default=None, ge=CONCURRENCY_MIN, le=CONCURRENCY_MAX
-    )
 
 
 class StorageBucketStatusOut(BaseModel):

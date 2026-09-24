@@ -9,8 +9,6 @@ import type {
   ShiftDefinition,
   ShiftDefinitionUpdate,
   StorageBucketStatus,
-  SystemConfig,
-  SystemConfigUpdate,
   RuntimeStatus,
 } from "@/types/admin";
 import { mockUsers, mockAuditLog } from "@/mock/fixtures/admin";
@@ -98,12 +96,6 @@ const MOCK_STORAGE_STATUS: StorageBucketStatus[] = [
   },
 ];
 
-const MOCK_SYSTEM_CONFIG: SystemConfig = {
-  jobTimeoutSeconds: 300,
-  maxConcurrentJobs: 1,
-  updatedAt: new Date().toISOString(),
-};
-
 /** Client-only test double — mirrors the real service's semantics closely
  * enough for component tests: an in-memory copy of the fixture users so
  * enable/disable actually mutates what listUsers next returns. */
@@ -113,7 +105,6 @@ export class MockAdminService implements AdminService {
   private shiftDefinitions: ShiftDefinition[] = MOCK_SHIFT_DEFINITIONS.map(
     (d) => ({ ...d }),
   );
-  private systemConfig: SystemConfig = { ...MOCK_SYSTEM_CONFIG };
 
   async listDlqStatus(): Promise<DlqQueueStatus[]> {
     return JOB_TYPES.map((jobType) => ({
@@ -198,10 +189,6 @@ export class MockAdminService implements AdminService {
     return MOCK_STORAGE_STATUS.map((b) => ({ ...b }));
   }
 
-  async getSystemConfig(): Promise<SystemConfig> {
-    return { ...this.systemConfig };
-  }
-
   async getRuntimeStatus(): Promise<RuntimeStatus> {
     return {
       checked_at: new Date().toISOString(),
@@ -231,14 +218,4 @@ export class MockAdminService implements AdminService {
     };
   }
 
-  async updateSystemConfig(update: SystemConfigUpdate): Promise<SystemConfig> {
-    this.systemConfig = {
-      ...this.systemConfig,
-      ...Object.fromEntries(
-        Object.entries(update).filter(([, v]) => v !== undefined),
-      ),
-      updatedAt: new Date().toISOString(),
-    };
-    return { ...this.systemConfig };
-  }
 }

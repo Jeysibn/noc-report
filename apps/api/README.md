@@ -89,8 +89,11 @@ The Hermes API is internal-only in Compose. Provider login/model selection is a
 manual Hermes setup step; do not commit provider credentials or copy them into
 FastAPI configuration. The log worker exposes loopback-only diagnostics on
 port `8092`; the Daily Report worker uses port `8093`. Workers expose
-`/health/live` for process liveness and `/health/ready` for broker and assigned
-profile readiness. Set `AI_WORKER_HEALTH_URL` and
+`/health/live` for process liveness and `/health/ready` for RabbitMQ, assigned
+Hermes profile policy, PostgreSQL, and required MinIO bucket readiness. Those
+dependency probes are bounded and short-cached; MinIO readiness uses only
+bucket HEAD requests, never object listings or mutations (this checks bucket
+reachability, not every object-level permission). Set `AI_WORKER_HEALTH_URL` and
 `DAILY_REPORT_WORKER_HEALTH_URL` to the internal readiness URLs when the API
 runs in a container. Hermes exposes `/health` only on the internal Docker
 network.
@@ -101,7 +104,10 @@ The worker processes use two isolated profiles:
 - `noc-daily-report` → `daily-alert-report` for bilingual narrative only.
 
 The Daily Alert Report route remains disabled unless the Phase 1 quality gate
-has passed and the API is started with `DAILY_REPORT_AI_ENABLED=true`. The
+has passed and the API is started with `DAILY_REPORT_AI_ENABLED=true`. Pass
+the same gate value to Compose so the optional Hermes profile is provisioned.
+The log profile remains mandatory; a Daily profile bootstrap error is
+non-fatal to the shared gateway but leaves the Daily worker not-ready. The
 application still freezes the ReportSnapshot and owns report section order,
 evidence, screenshots, links, preview JSON, and DOCX rendering. Hermes only
 supplies the validated semantic summary.

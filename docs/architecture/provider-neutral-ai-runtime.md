@@ -66,9 +66,14 @@ Hermes is configured with two task-specific profiles: `noc-log-analysis`
 loads `log-triage-summary`, and `noc-daily-report` loads `daily-alert-report`.
 Both use the repository's skills through a read-only mount, allow one active
 run, and expose no general-purpose toolsets. Each worker consumes only its
-assigned queue and validates only its assigned profile, so a Daily Report
-profile failure cannot prevent log analysis from starting. The model is never
-asked to choose a skill.
+assigned queue and validates only its assigned profile. The shared Hermes
+bootstrap always requires the log profile; it provisions the Daily profile
+only when `DAILY_REPORT_AI_ENABLED=true`. A Daily profile bootstrap failure is
+logged and leaves the Daily worker not-ready, but does not prevent the gateway
+from starting for log analysis. The API and Compose must use the same feature
+gate value. Because the runtime is shared, a Hermes gateway/container failure
+itself remains a common failure domain for both capabilities. The model is
+never asked to choose a skill.
 
 For Daily Alert Reports, Hermes returns only a bilingual narrative
 `ReportPlan`. The worker validates it, stores the plan for crash recovery, and

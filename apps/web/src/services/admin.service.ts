@@ -8,8 +8,6 @@ import type {
   ShiftDefinition,
   ShiftDefinitionUpdate,
   StorageBucketStatus,
-  SystemConfig,
-  SystemConfigUpdate,
   RuntimeStatus,
 } from "@/types/admin";
 
@@ -37,8 +35,5 @@ export interface AdminService {
   ): Promise<ShiftDefinition>;
   listStorageStatus(): Promise<StorageBucketStatus[]>;
 
-  /** Generic worker configuration retained outside provider selection. */
-  getSystemConfig(): Promise<SystemConfig>;
-  updateSystemConfig(update: SystemConfigUpdate): Promise<SystemConfig>;
   getRuntimeStatus(): Promise<RuntimeStatus>;
 }

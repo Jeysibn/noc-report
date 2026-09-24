@@ -47,3 +47,40 @@ def test_production_worker_accepts_explicit_real_service_credentials():
 def test_worker_rejects_unknown_environment(environment):
     with pytest.raises(ValidationError):
         RuntimeSettings(environment=environment)
+
+
+@pytest.mark.parametrize(
+    ("worker_kind", "hermes_profile"),
+    [
+        ("log_triage", "noc-daily-report"),
+        ("daily_report", "noc-log-analysis"),
+    ],
+)
+def test_worker_rejects_profile_not_owned_by_worker_kind(worker_kind, hermes_profile):
+    with pytest.raises(ValidationError, match="RUNTIME_HERMES_PROFILE"):
+        RuntimeSettings(worker_kind=worker_kind, hermes_profile=hermes_profile)
+
+
+def test_worker_rejects_unsupported_hermes_profile():
+    with pytest.raises(ValidationError):
+        RuntimeSettings(hermes_profile="unknown-profile")
+
+
+def test_worker_accepts_daily_profile_when_worker_is_daily_report():
+    settings = RuntimeSettings(worker_kind="daily_report", hermes_profile="noc-daily-report")
+    assert settings.hermes_profile == "noc-daily-report"
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"lease_seconds": 0},
+        {"max_attempts": 0},
+        {"hermes_timeout_seconds": 0},
+        {"hermes_max_output_attempts": 0},
+        {"health_port": 65536},
+    ],
+)
+def test_worker_rejects_invalid_operational_limits(values):
+    with pytest.raises(ValidationError):
+        RuntimeSettings(**values)

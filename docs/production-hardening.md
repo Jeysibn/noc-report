@@ -161,10 +161,16 @@ paid-AI reservation fences.
   counts), MinIO, Hermes and the AI Worker when configured, and optional Ollama.
 - `/health/readiness` returns HTTP 503 when PostgreSQL, RabbitMQ, or MinIO is
   unavailable.
-- Each worker exposes `/health/live` (process only) and `/health/ready`
-  (broker connected and assigned Hermes profile policy verified). Container
-  healthchecks use readiness, while liveness stays green during runtime
-  outages so the process can reconnect.
+- Each worker exposes `/health/live` (process only) and `/health/ready`.
+  Readiness requires the assigned RabbitMQ consumer lifecycle, Hermes gateway
+  and assigned profile policy, PostgreSQL (`SELECT 1`), and the worker's
+  required MinIO bucket reachability via bounded `HEAD` requests. Dependency
+  probes are bounded/cached and never enumerate or mutate storage. Bucket
+  `HEAD` does not prove every object-level read/write permission; real job
+  operations remain authoritative and fail through existing retry/settlement
+  handling if those permissions are wrong. Container healthchecks use
+  readiness, while liveness stays green during dependency outages so the
+  process can recover.
 - Hermes and the AI Worker are optional to core readiness. Their degraded
   state is reported separately so incidents, evidence, and historical reports
   remain usable during a provider/runtime outage.
@@ -198,13 +204,18 @@ Hermes noc-daily-report → validated narrative plan → deterministic
 ReportDocument/DOCX renderer → versioned report artifacts → API Report
 ```
 
-Each worker runs with RabbitMQ prefetch and Hermes concurrency set to one. The
-log worker consumes only `log_triage` and verifies `noc-log-analysis`; the
+Each worker runs serially with RabbitMQ prefetch fixed at one; concurrency is
+not a mutable runtime setting. The log worker consumes only `log_triage` and
+verifies `noc-log-analysis`; the
 Daily Report worker consumes only `daily_report` and verifies
 `noc-daily-report`. The latter is an opt-in Compose profile and has its own
-health port and `DAILY_REPORT_HERMES_TIMEOUT_SECONDS`. A failure in one
-worker/profile does not block the other. Each worker
-claims the PostgreSQL Job lease, renews that lease during long inference,
+health port and `DAILY_REPORT_HERMES_TIMEOUT_SECONDS`. Hermes always
+bootstraps the required log profile and provisions the Daily profile only
+when `DAILY_REPORT_AI_ENABLED=true`. A Daily profile provisioning failure is
+reported and leaves the Daily worker not-ready while the shared gateway can
+still serve log analysis. The API and Compose must use the same feature-gate
+value; a Hermes process/runtime failure remains a shared failure domain. Each
+worker claims the PostgreSQL Job lease, renews that lease during long inference,
 verifies the exact evidence version and SHA-256, materializes the immutable
 SkillSnapshot, and acknowledges only after durable artifact persistence and a
 conditional Job completion update. Temporary Hermes/provider failures use the
@@ -225,15 +236,29 @@ Postgres, MinIO, RabbitMQ, or Docker-socket mount. The worker is the only
 component holding application credentials, and Hermes provider credentials
 remain inside the Hermes profile/setup.
 
-Required runtime settings are `AI_RUNTIME=hermes` for the API,
-`RUNTIME_HERMES_BASE_URL`, `RUNTIME_HERMES_API_KEY`, and the dedicated
-`RUNTIME_HERMES_PROFILE`, `RUNTIME_WORKER_KIND`, and worker-specific
-`RUNTIME_HERMES_TIMEOUT_SECONDS`. Set `AI_WORKER_HEALTH_URL` and
-`DAILY_REPORT_WORKER_HEALTH_URL` to the workers' internal readiness endpoints
-when the API runs in a container. Do not set provider credentials such
-as API keys in FastAPI or browser configuration. Pin `HERMES_IMAGE` and record
-the deployed image/version in the worker's `RUNTIME_HERMES_VERSION` for
-provenance.
+The worker configuration source of truth is deployment environment/Compose,
+not the database:
+
+| Control | Owner / source |
+| --- | --- |
+| Worker kind | `RUNTIME_WORKER_KIND` (`log_triage` or `daily_report`); Compose assigns one kind per service. |
+| Queue | Derived from worker kind; no separate queue override. |
+| Hermes profile | One `RUNTIME_HERMES_PROFILE` per worker, constrained to the profile matching its worker kind. |
+| Concurrency | Fixed to one in the consumer (`basic_qos(prefetch_count=1)`); not configurable. |
+| Lease | `RUNTIME_LEASE_SECONDS`, forwarded to both Compose workers (default 900 seconds). |
+| Hermes timeout | In-container `RUNTIME_HERMES_TIMEOUT_SECONDS`; Compose host override is `LOG_HERMES_TIMEOUT_SECONDS` for log analysis and `DAILY_REPORT_HERMES_TIMEOUT_SECONDS` for reports (both default 900 seconds). |
+| Feature gate | `AI_RUNTIME=hermes` enables log analysis; `DAILY_REPORT_AI_ENABLED` must match in API and Hermes Compose. `--profile daily-report` separately starts the optional report worker. |
+| Health port | `RUNTIME_HEALTH_PORT`; development Compose assigns 8092 to log and 8093 to Daily. |
+
+Each worker also needs `RUNTIME_HERMES_BASE_URL` and `RUNTIME_HERMES_API_KEY`.
+There is no database-backed worker timeout/capacity control: the retired
+`/admin/system-config` endpoint and `system_config` table did not affect
+execution. A new migration removes that unused table. Set
+`AI_WORKER_HEALTH_URL` and `DAILY_REPORT_WORKER_HEALTH_URL` to the workers'
+internal readiness endpoints when the API runs in a container. Do not set
+provider credentials such as API keys in FastAPI or browser configuration. Pin
+`HERMES_IMAGE` and record the deployed image/version in the worker's
+`RUNTIME_HERMES_VERSION` for provenance.
 
 `DAILY_REPORT_AI_ENABLED` remains false by default. After the Phase 1
 log-analysis quality gate passes, set it to `true` to allow the report route to
@@ -264,7 +289,7 @@ infrastructure dependencies and must use deployment-specific credentials.
 Only `development`, `test`, and `production` are accepted environment values.
 Production startup rejects known development JWT, PostgreSQL, RabbitMQ, MinIO,
 and Hermes credentials and requires HTTPS CORS origins. Each AI worker remains
-separately deployed, least-privileged, and serial (`max_concurrency=1` per
+separately deployed, least-privileged, and serial (`prefetch_count=1` per
 worker); scale each workload by adding its own worker replicas.
 
 For production, set `ENVIRONMENT=production` for FastAPI and
@@ -276,7 +301,13 @@ Workers also need `RUNTIME_DATABASE_URL`, `RUNTIME_RABBITMQ_URL`, and
 `RUNTIME_MINIO_*` credentials. `AI_RUNTIME=hermes` enables the log-analysis
 queue gate; `DAILY_REPORT_AI_ENABLED=true` separately enables report jobs.
 Provider credentials stay inside Hermes. Never put them in FastAPI or browser
-configuration.
+configuration. Runtime polling is performed only while the Admin Runtime tab
+is active (and the page visible); Storage bucket totals are loaded only when
+the Storage tab opens and are refreshed on demand to avoid unnecessary full
+object listings. The storage endpoint still computes object totals with a live
+listing; if the dataset grows enough to make this costly, trustworthy MinIO
+admin telemetry/metrics can replace that calculation without adding a second
+monitoring stack.
 
 Expired open upload intents are swept by the existing evidence purge worker.
 The sweep locks each intent against completion, reconstructs and verifies its

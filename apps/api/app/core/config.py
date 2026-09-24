@@ -1,7 +1,7 @@
 from typing import Literal
 from urllib.parse import urlparse
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -58,6 +58,17 @@ class Settings(BaseSettings):
     # Phase 2 remains opt-in. The separate Hermes daily-report profile and
     # worker path must be deliberately enabled after the Phase 1 quality gate.
     daily_report_ai_enabled: bool = False
+
+    @field_validator("daily_report_ai_enabled", mode="before")
+    @classmethod
+    def parse_daily_report_gate(cls, value):
+        if isinstance(value, bool):
+            return value
+        if value == "true":
+            return True
+        if value == "false":
+            return False
+        raise ValueError("DAILY_REPORT_AI_ENABLED must be exactly true or false")
 
     # Skill Runtime mission Phase 12: whether the outbox dispatcher runs as
     # a background thread embedded in this API process ("embedded", the

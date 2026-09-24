@@ -56,11 +56,20 @@ HERMES_API_KEY='replace-with-a-long-random-value' \
 docker compose -f infrastructure/docker-compose.dev.yml up -d postgres minio rabbitmq hermes ai-worker
 ```
 
-Start the batch worker only when Daily Report AI is enabled:
+Daily Report is disabled by default. When enabling it, use the same gate value
+for the API and Compose so Hermes provisions the optional profile; then start
+the batch worker:
 
 ```bash
-docker compose -f infrastructure/docker-compose.dev.yml --profile daily-report up -d daily-report-worker
+DAILY_REPORT_AI_ENABLED=true HERMES_API_KEY='replace-with-a-long-random-value' \
+  docker compose -f infrastructure/docker-compose.dev.yml --profile daily-report up -d hermes daily-report-worker
 ```
+
+The shared Hermes gateway always requires the `noc-log-analysis` profile. It
+only provisions `noc-daily-report` when `DAILY_REPORT_AI_ENABLED=true`. A
+Daily profile provisioning error is logged and leaves the Daily worker
+not-ready without preventing the gateway from serving log analysis. The API
+and Compose must receive the same feature-gate value.
 
 `HERMES_API_KEY` is required; Compose intentionally fails closed rather than
 using a shared development credential. For production, set `ENVIRONMENT=production`

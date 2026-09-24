@@ -132,7 +132,7 @@ def test_daily_report_worker_calls_dedicated_profile_and_returns_renderer_artifa
         database_url="postgresql://test",
         minio_bucket_reports="noc-reports",
         minio_bucket_job_artifacts="noc-job-artifacts",
-        hermes_daily_report_profile="noc-daily-report",
+        hermes_profile="noc-daily-report",
         hermes_max_output_attempts=1,
         hermes_version="test-hermes",
     )

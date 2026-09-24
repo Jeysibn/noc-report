@@ -10,8 +10,6 @@ import type {
   ShiftDefinition,
   ShiftDefinitionUpdate,
   StorageBucketStatus,
-  SystemConfig,
-  SystemConfigUpdate,
   RuntimeStatus,
 } from "@/types/admin";
 import { httpRequest } from "@/lib/http";
@@ -96,21 +94,6 @@ interface RawStorageBucketStatusOut {
   versioning_enabled: boolean;
   object_count: number;
   total_bytes: number;
-}
-
-interface RawSystemConfigOut {
-  id: string;
-  job_timeout_seconds: number;
-  max_concurrent_jobs: number;
-  updated_at: string;
-}
-
-function toSystemConfig(raw: RawSystemConfigOut): SystemConfig {
-  return {
-    jobTimeoutSeconds: raw.job_timeout_seconds,
-    maxConcurrentJobs: raw.max_concurrent_jobs,
-    updatedAt: raw.updated_at,
-  };
 }
 
 function toAdminUser(raw: RawUserOut): AdminUser {
@@ -261,28 +244,7 @@ export class ApiAdminService implements AdminService {
     }));
   }
 
-  async getSystemConfig(): Promise<SystemConfig> {
-    const raw = await httpRequest<RawSystemConfigOut>(
-      "/api/v1/admin/system-config",
-    );
-    return toSystemConfig(raw);
-  }
-
   async getRuntimeStatus(): Promise<RuntimeStatus> {
     return httpRequest<RuntimeStatus>("/api/v1/admin/runtime");
-  }
-
-  async updateSystemConfig(update: SystemConfigUpdate): Promise<SystemConfig> {
-    const raw = await httpRequest<RawSystemConfigOut>(
-      "/api/v1/admin/system-config",
-      {
-        method: "PATCH",
-        body: {
-          job_timeout_seconds: update.jobTimeoutSeconds,
-          max_concurrent_jobs: update.maxConcurrentJobs,
-        },
-      },
-    );
-    return toSystemConfig(raw);
   }
 }

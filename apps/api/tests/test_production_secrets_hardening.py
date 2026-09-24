@@ -17,6 +17,17 @@ def test_unknown_environment_is_rejected(environment):
         Settings(environment=environment)
 
 
+@pytest.mark.parametrize("value", ["yes", "1", "on", "TRUE", "production"])
+def test_daily_report_gate_accepts_only_compose_supported_boolean_values(value):
+    with pytest.raises(ValidationError, match="DAILY_REPORT_AI_ENABLED"):
+        Settings(daily_report_ai_enabled=value)
+
+
+def test_daily_report_gate_accepts_exact_true_false_values():
+    assert Settings(daily_report_ai_enabled="true").daily_report_ai_enabled is True
+    assert Settings(daily_report_ai_enabled="false").daily_report_ai_enabled is False
+
+
 def test_production_with_all_defaults_still_in_place_raises():
     config = Settings(environment="production")
     with pytest.raises(RuntimeError, match="jwt_secret"):

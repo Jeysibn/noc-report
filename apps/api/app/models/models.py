@@ -162,28 +162,6 @@ class Shift(Base):
     definition: Mapped["ShiftDefinition"] = relationship()
 
 
-# --- Runtime worker configuration -------------------------------------------
-#
-# This single-row table retains generic worker limits for asynchronous
-# infrastructure. Hermes/provider selection is intentionally not modeled here;
-# provider credentials and model selection belong to Hermes.
-
-
-class SystemConfig(Base):
-    __tablename__ = "system_config"
-    __table_args__ = (
-        CheckConstraint("job_timeout_seconds > 0", name="ck_system_config_job_timeout_positive"),
-        CheckConstraint("max_concurrent_jobs = 1", name="ck_system_config_serial_worker_capacity"),
-    )
-
-    id: Mapped[uuid.UUID] = uuid_pk()
-    job_timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=300)
-    max_concurrent_jobs: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=True
-    )
-
-
 # --- Incidents (master plan §22.5, trimmed to Milestone 8 fields) ----------
 
 

@@ -64,7 +64,13 @@ def test_internal_hermes_is_reported_from_healthy_worker_probe(client, monkeypat
                 "runtime": "hermes",
                 "profile": "noc-log-analysis",
                 "runtime_ready": True,
-                "runtime_reachable": True,
+                "dependencies": {
+                    "rabbitmq": "healthy",
+                    "hermes": "healthy",
+                    "hermes_profile": "healthy",
+                    "postgresql": "healthy",
+                    "minio": "healthy",
+                },
             },
         },
     )
@@ -76,6 +82,32 @@ def test_internal_hermes_is_reported_from_healthy_worker_probe(client, monkeypat
     assert body["dependencies"]["ai_runtime"]["status"] == "healthy"
     assert body["dependencies"]["ai_runtime"]["detail"]["source"] == "ai-worker"
     assert body["dependencies"]["ai_runtime"]["detail"]["direct_probe"]["status"] == "unavailable"
+
+
+def test_worker_hermes_dependency_failure_is_not_hidden_by_ready_worker_status(monkeypatch):
+    worker = {
+        "status": "healthy",
+        "detail": {
+            "metrics": {"runtime_ready": True},
+            "dependencies": {"hermes": "healthy", "hermes_profile": "unavailable"},
+        },
+    }
+    assert not operational_health._worker_reports_hermes_healthy(worker)
+
+
+def test_worker_readiness_degraded_for_database_does_not_hide_healthy_hermes():
+    worker = {
+        "status": "degraded",
+        "detail": {
+            "metrics": {"runtime_ready": True},
+            "dependencies": {
+                "hermes": "healthy",
+                "hermes_profile": "healthy",
+                "postgresql": "unavailable",
+            },
+        },
+    }
+    assert operational_health._worker_reports_hermes_healthy(worker)
 
 
 def test_readiness_returns_service_unavailable_when_core_dependency_is_down(client, monkeypatch):

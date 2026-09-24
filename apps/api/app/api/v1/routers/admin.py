@@ -20,7 +20,7 @@ from app.core.security import hash_password
 from app.core.storage import ALL_BUCKETS, bucket_status
 from app.db.session import get_db
 from app.deps import require_permission
-from app.models.models import AuditLog, Job, Permission, Role, ShiftDefinition, SystemConfig, User
+from app.models.models import AuditLog, Job, Permission, Role, ShiftDefinition, User
 from app.models.models import AnalysisRun, Report
 from app.operational_health import _check_http_dependency, dependency_health
 from app.schemas.schemas import (
@@ -34,13 +34,10 @@ from app.schemas.schemas import (
     ShiftDefinitionUpdate,
     SkillSnapshotOut,
     StorageBucketStatusOut,
-    SystemConfigOut,
-    SystemConfigUpdate,
     UserCreate,
     UserOut,
     UserUpdate,
 )
-from app.seed import SYSTEM_CONFIG_ID
 from app.skills.registry import (
     SkillVersionNotFound,
     get_or_create_snapshot,
@@ -227,27 +224,6 @@ def update_shift_definition(
     return definition
 
 
-def _get_or_create_system_config(db: Session) -> SystemConfig:
-    config = db.get(SystemConfig, SYSTEM_CONFIG_ID)
-    if config is None:
-        # Should already exist via app/seed.py, but don't 500 a fresh DB
-        # that skipped seeding — create the same default row on first read.
-        config = SystemConfig(id=SYSTEM_CONFIG_ID)
-        db.add(config)
-        db.commit()
-        db.refresh(config)
-    return config
-
-
-@router.get("/system-config", response_model=SystemConfigOut)
-def get_system_config(
-    db: Session = Depends(get_db),
-    _: User = Depends(require_permission("system.read")),
-) -> SystemConfigOut:
-    """Return generic worker capacity and timeout settings."""
-    return _get_or_create_system_config(db)
-
-
 @router.get("/runtime")
 def get_runtime_status(
     db: Session = Depends(get_db),
@@ -326,30 +302,6 @@ def get_runtime_status(
             for name in ("postgresql", "rabbitmq", "minio")
         },
     }
-
-
-@router.patch("/system-config", response_model=SystemConfigOut)
-def update_system_config(
-    body: SystemConfigUpdate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(require_permission("system.configure")),
-) -> SystemConfigOut:
-    config = _get_or_create_system_config(db)
-    data = body.model_dump(exclude_unset=True)
-    for field, value in data.items():
-        setattr(config, field, value)
-
-    record_audit(
-        db,
-        actor_user_id=current_user.id,
-        action="system_config.update",
-        resource_type="system_config",
-        resource_id=str(config.id),
-        metadata=data,
-    )
-    db.commit()
-    db.refresh(config)
-    return config
 
 
 @router.get("/storage", response_model=list[StorageBucketStatusOut])

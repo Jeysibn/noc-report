@@ -1,4 +1,5 @@
 import { Card, CardTitle } from "@/components/ui/Card";
+import { Button } from "@/components/ui/Button";
 import { StatusPill } from "@/components/ui/StatusPill";
 import { formatTime } from "@/lib/incidentStatus";
 import type { RuntimeStatus } from "@/types/admin";
@@ -23,15 +24,35 @@ function RuntimeState({ label, value }: { label: string; value: string }) {
 export function RuntimePanel({
   status,
   error,
+  loading,
+  lastSuccessfulRefresh,
+  onRefresh,
 }: {
   status: RuntimeStatus | null;
   error: string | null;
+  loading: boolean;
+  lastSuccessfulRefresh: string | null;
+  onRefresh: () => void;
 }) {
   return (
     <Card className="flex flex-col gap-4">
-      <CardTitle>AI Runtime</CardTitle>
-      {error && <p className="text-sm text-danger" role="alert">{error}</p>}
-      {status === null && !error && <p className="text-sm text-muted">Loading runtime status…</p>}
+      <div className="flex items-center justify-between gap-3">
+        <CardTitle>AI Runtime</CardTitle>
+        <Button onClick={onRefresh} disabled={loading}>
+          {loading ? "Refreshing…" : "Refresh"}
+        </Button>
+      </div>
+      {error && (
+        <p className="text-sm text-danger" role="alert">
+          {status ? `Stale data: ${error} Showing the last successful result.` : error}
+        </p>
+      )}
+      {status === null && loading && (
+        <p className="text-sm text-muted" role="status">Loading runtime status…</p>
+      )}
+      {status === null && !loading && !error && (
+        <p className="text-sm text-muted">Runtime status has not been checked yet.</p>
+      )}
       {status && (
         <>
           <div className="grid gap-5 lg:grid-cols-2">
@@ -62,7 +83,13 @@ export function RuntimePanel({
                 Last successful job: {status.last_successful_job.job_type.replace(/_/g, " ")} · {status.last_successful_job.provider ?? "provider unknown"} / {status.last_successful_job.model ?? "model unknown"} · {formatTime(status.last_successful_job.completed_at)}
               </>
             ) : "No successful AI job recorded"}
-            <span className="ml-2">Checked {formatTime(status.checked_at)}</span>
+            <span className="ml-2">Runtime checked {formatTime(status.checked_at)}</span>
+            {lastSuccessfulRefresh && (
+              <span className="ml-2">
+                · Last successful refresh {formatTime(lastSuccessfulRefresh)}
+              </span>
+            )}
+            {loading && <span className="ml-2">· Refreshing…</span>}
           </div>
         </>
       )}

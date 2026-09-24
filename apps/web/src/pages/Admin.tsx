@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Card, CardTitle } from "@/components/ui/Card";
 import { RequireRole } from "@/components/layout/RequireRole";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/Tabs";
@@ -35,6 +35,7 @@ const roleDescriptions: Record<string, string> = {
  * scope table. Runtime status is a safe, aggregated server-side view.
  */
 export function Admin() {
+  const [activeTab, setActiveTab] = useState("users");
   const [dlqStatus, setDlqStatus] = useState<DlqQueueStatus[] | null>(null);
   const [dlqError, setDlqError] = useState<string | null>(null);
   const [dlqActionPending, setDlqActionPending] = useState<string | null>(null);
@@ -77,9 +78,16 @@ export function Admin() {
     StorageBucketStatus[] | null
   >(null);
   const [storageError, setStorageError] = useState<string | null>(null);
+  const [storageLoading, setStorageLoading] = useState(false);
+  const storageRequestInFlight = useRef(false);
 
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null);
   const [runtimeStatusError, setRuntimeStatusError] = useState<string | null>(
+    null,
+  );
+  const [runtimeLoading, setRuntimeLoading] = useState(false);
+  const runtimeRequestInFlight = useRef(false);
+  const [lastRuntimeRefresh, setLastRuntimeRefresh] = useState<string | null>(
     null,
   );
 
@@ -103,6 +111,40 @@ export function Admin() {
       .catch(() => setShiftError("Could not load shift definitions."));
   }, []);
 
+  const loadStorageStatus = useCallback(async () => {
+    if (storageRequestInFlight.current) return;
+    storageRequestInFlight.current = true;
+    setStorageLoading(true);
+    try {
+      const rows = await adminService.listStorageStatus();
+      setStorageStatus(rows);
+      setStorageError(null);
+    } catch {
+      setStorageError("Could not load storage status.");
+    } finally {
+      storageRequestInFlight.current = false;
+      setStorageLoading(false);
+    }
+  }, []);
+
+  const loadRuntimeStatus = useCallback(async () => {
+    if (runtimeRequestInFlight.current) return;
+    runtimeRequestInFlight.current = true;
+    setRuntimeLoading(true);
+    try {
+      const runtime = await adminService.getRuntimeStatus();
+      setRuntimeStatus(runtime);
+      setRuntimeStatusError(null);
+      setLastRuntimeRefresh(new Date().toISOString());
+    } catch {
+      // Keep the last successful snapshot visible and clearly mark it stale.
+      setRuntimeStatusError("Could not refresh runtime status.");
+    } finally {
+      runtimeRequestInFlight.current = false;
+      setRuntimeLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     loadUsers();
     adminService
@@ -117,21 +159,26 @@ export function Admin() {
       })
       .catch(() => setAuditError("Could not load audit log."));
     loadShiftDefinitions();
-    adminService
-      .listStorageStatus()
-      .then((rows) => {
-        setStorageStatus(rows);
-        setStorageError(null);
-      })
-      .catch(() => setStorageError("Could not load storage status."));
-    adminService
-      .getRuntimeStatus()
-      .then((runtime) => {
-        setRuntimeStatus(runtime);
-        setRuntimeStatusError(null);
-      })
-      .catch(() => setRuntimeStatusError("Could not load runtime status."));
   }, [loadUsers, loadShiftDefinitions]);
+
+  useEffect(() => {
+    if (activeTab !== "ai") return;
+
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") void loadRuntimeStatus();
+    };
+    refreshWhenVisible();
+    const interval = window.setInterval(refreshWhenVisible, 20_000);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
+  }, [activeTab, loadRuntimeStatus]);
+
+  useEffect(() => {
+    if (activeTab === "storage") void loadStorageStatus();
+  }, [activeTab, loadStorageStatus]);
 
   async function handleToggleShift(def: ShiftDefinition) {
     setShiftActionPending(def.id);
@@ -263,7 +310,7 @@ export function Admin() {
           </p>
         </div>
 
-        <Tabs defaultValue="users">
+        <Tabs value={activeTab} onValueChange={setActiveTab}>
           <TabsList>
             <TabsTrigger value="users">Users</TabsTrigger>
             <TabsTrigger value="roles">Roles</TabsTrigger>
@@ -608,15 +655,31 @@ export function Admin() {
           </TabsContent>
 
           <TabsContent value="ai">
-            <RuntimePanel status={runtimeStatus} error={runtimeStatusError} />
+            <RuntimePanel
+              status={runtimeStatus}
+              error={runtimeStatusError}
+              loading={runtimeLoading}
+              lastSuccessfulRefresh={lastRuntimeRefresh}
+              onRefresh={loadRuntimeStatus}
+            />
           </TabsContent>
 
           <TabsContent value="storage">
             <Card className="flex flex-col gap-4">
               <CardTitle>Storage (MinIO)</CardTitle>
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-xs text-muted">
+                  Refreshed on demand; this status may take time to calculate.
+                </p>
+                <Button onClick={() => void loadStorageStatus()} disabled={storageLoading}>
+                  {storageLoading ? "Refreshing…" : "Refresh"}
+                </Button>
+              </div>
               {storageError && (
                 <p className="text-sm text-danger" role="alert">
-                  {storageError}
+                  {storageStatus
+                    ? `${storageError} Showing the last successful result.`
+                    : storageError}
                 </p>
               )}
               {storageStatus === null && !storageError && (

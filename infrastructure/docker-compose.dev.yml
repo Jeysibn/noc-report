@@ -110,41 +110,15 @@ services:
     image: ${HERMES_IMAGE:-nousresearch/hermes-agent@sha256:d0fec5607ee4abb603921f93419f937c690cd036e24cb87a0d8dae493dfe2fcc}
     container_name: noc-report-hermes
     restart: unless-stopped
-    command:
-      - sh
-      - -ec
-      - |
-        profile_dir=/opt/data/profiles/noc-log-analysis
-        if [ ! -f "$$profile_dir/SOUL.md" ]; then
-          hermes profile create noc-log-analysis
-        fi
-        # Profile config is repository-owned and must refresh on each image or
-        # skill-policy upgrade. Provider credentials remain in the profile
-        # .env and are intentionally preserved.
-        cp /opt/noc-report/hermes/noc-log-analysis/config.yaml "$$profile_dir/config.yaml"
-        touch "$$profile_dir/.noc-report-seeded"
-        if ! grep -q '^API_SERVER_KEY=' "$$profile_dir/.env" 2>/dev/null; then
-          printf '\nAPI_SERVER_KEY=%s\n' "$$API_SERVER_KEY" >> "$$profile_dir/.env"
-        fi
-        daily_profile_dir=/opt/data/profiles/noc-daily-report
-        daily_created=0
-        if [ ! -f "$$daily_profile_dir/SOUL.md" ]; then
-          hermes profile create noc-daily-report
-          daily_created=1
-        fi
-        cp /opt/noc-report/hermes/noc-daily-report/config.yaml "$$daily_profile_dir/config.yaml"
-        if [ "$$daily_created" = 1 ] && [ -f "$$profile_dir/.env" ]; then
-          cp "$$profile_dir/.env" "$$daily_profile_dir/.env"
-        fi
-        if ! grep -q '^API_SERVER_KEY=' "$$daily_profile_dir/.env" 2>/dev/null; then
-          printf '\nAPI_SERVER_KEY=%s\n' "$$API_SERVER_KEY" >> "$$daily_profile_dir/.env"
-        fi
-        exec hermes gateway run
+    command: ["sh", "/opt/noc-report/hermes/bootstrap-profiles.sh"]
     environment:
       API_SERVER_ENABLED: "true"
       API_SERVER_HOST: "0.0.0.0"
       API_SERVER_PORT: "8642"
       API_SERVER_KEY: ${HERMES_API_KEY:?Set HERMES_API_KEY before starting the Hermes stack}
+      # Keep aligned with the API feature gate. The log profile is mandatory;
+      # Daily provisioning is conditional and isolated from gateway startup.
+      DAILY_REPORT_AI_ENABLED: ${DAILY_REPORT_AI_ENABLED:-false}
       # The per-profile .env is created by the command above; this variable is
       # also present for the first profile bootstrap/setup invocation.
       HERMES_SKIP_CONFIG_MIGRATION: "1"
@@ -153,6 +127,7 @@ services:
       - ./hermes/noc-log-analysis/config.yaml:/opt/data/config.yaml:ro
       - ./hermes/noc-log-analysis/config.yaml:/opt/noc-report/hermes/noc-log-analysis/config.yaml:ro
       - ./hermes/noc-daily-report/config.yaml:/opt/noc-report/hermes/noc-daily-report/config.yaml:ro
+      - ./hermes/bootstrap-profiles.sh:/opt/noc-report/hermes/bootstrap-profiles.sh:ro
       - ../skills:/opt/noc-report/skills:ro
     networks:
       - hermes-internal
@@ -188,9 +163,10 @@ services:
       RUNTIME_HERMES_BASE_URL: http://hermes:8642/p/noc-log-analysis
       RUNTIME_HERMES_API_KEY: ${HERMES_API_KEY:?Set HERMES_API_KEY before starting the Hermes stack}
       RUNTIME_HERMES_PROFILE: noc-log-analysis
-      RUNTIME_HERMES_DAILY_REPORT_PROFILE: noc-daily-report
       RUNTIME_WORKER_KIND: log_triage
       RUNTIME_WORKER_ID: ${LOG_WORKER_ID:-noc-log-worker}
+      RUNTIME_LEASE_SECONDS: ${RUNTIME_LEASE_SECONDS:-900}
+      RUNTIME_HERMES_TIMEOUT_SECONDS: ${LOG_HERMES_TIMEOUT_SECONDS:-900}
       RUNTIME_HERMES_VERSION: ${HERMES_VERSION:-v0.21.4-2026.9.21}
       RUNTIME_ENVIRONMENT: ${RUNTIME_ENVIRONMENT:-development}
       RUNTIME_HEALTH_PORT: "8092"
@@ -251,9 +227,9 @@ services:
       RUNTIME_HERMES_BASE_URL: http://hermes:8642/p/noc-daily-report
       RUNTIME_HERMES_API_KEY: ${HERMES_API_KEY:?Set HERMES_API_KEY before starting the Hermes stack}
       RUNTIME_HERMES_PROFILE: noc-daily-report
-      RUNTIME_HERMES_DAILY_REPORT_PROFILE: noc-daily-report
       RUNTIME_WORKER_KIND: daily_report
       RUNTIME_WORKER_ID: ${DAILY_REPORT_WORKER_ID:-noc-daily-report-worker}
+      RUNTIME_LEASE_SECONDS: ${RUNTIME_LEASE_SECONDS:-900}
       RUNTIME_HERMES_TIMEOUT_SECONDS: ${DAILY_REPORT_HERMES_TIMEOUT_SECONDS:-900}
       RUNTIME_HERMES_VERSION: ${HERMES_VERSION:-v0.21.4-2026.9.21}
       RUNTIME_ENVIRONMENT: ${RUNTIME_ENVIRONMENT:-development}
