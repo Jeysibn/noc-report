@@ -12,6 +12,7 @@ from preprocessing import (
     compact_log_triage_narrative,
     preprocess_log,
     reconcile_result,
+    _reconcile_entry_grouped_result,
 )
 
 
@@ -253,6 +254,35 @@ def test_reconciliation_adds_one_compact_bucket_for_unassigned_records():
     fallback = reconciled["secondary_finds"][-1]
     assert fallback["id"] == "other-observed-log-activity"
     assert fallback["count"] == 2
+
+
+def test_reconciliation_promotes_known_unassigned_operational_families():
+    facts = preprocess_log(
+        "\n".join(
+            [
+                "2026-09-10T14:00:00Z WARN /thirdapi/FC/login HTTP 400 ResourceAccessException SSLException",
+                "2026-09-10T14:00:01Z ERROR UserWithdrawService checkStatus=null uWithdraw=null",
+                "2026-09-10T14:00:02Z ERROR ExportTaskService 删除文件失败",
+            ]
+        )
+    )
+    result = {
+        "total_entries": 0,
+        "summary_en": "The selected finding does not cover every operational event.",
+        "summary_zh": "选定故障未覆盖所有运行事件。",
+        "key_finds": [],
+        "secondary_finds": [],
+        "severity_signal": "high",
+        "confidence": 0.8,
+    }
+    reconciled = _reconcile_entry_grouped_result(result, facts)
+    findings = reconciled["key_finds"] + reconciled["secondary_finds"]
+    assert sum(f["count"] for f in findings) == facts["total_entries"]
+    assert {f["id"] for f in findings} == {
+        "recovered-third-party-game-api",
+        "recovered-withdrawal-order-status",
+        "recovered-export-file-missing",
+    }
 
 
 def test_reconciliation_replaces_model_numbers_and_retains_omitted_patterns():

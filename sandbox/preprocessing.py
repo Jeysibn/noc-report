@@ -13,7 +13,7 @@ from collections import Counter, defaultdict
 from datetime import datetime
 
 
-PREPROCESSOR_VERSION = "17"
+PREPROCESSOR_VERSION = "20"
 MAX_DIRECT_LOG_CHARS = 2_000_000
 _TIMESTAMP = re.compile(r"\b(\d{4}-\d{2}-\d{2}T[^\s]+|\d{4}-\d{2}-\d{2}[^\s]+)")
 _LEVEL = re.compile(r"\b(DEBUG|INFO|WARN|WARNING|ERROR|CRITICAL|FATAL)\b", re.IGNORECASE)
@@ -156,9 +156,19 @@ def _cause_family(template: str) -> tuple[str, str]:
         ("clickhouse-sql", ("clickhouse", "sql"), "ClickHouse SQL failure"),
         ("face-compare-timeout", ("facecompare", "timeout"), "Face comparison timeout"),
         ("payment-order-missing", ("payment", "does not exist"), "Payment order lookup failure"),
-        ("sms-opted-out", ("sms", "optout"), "SMS recipient opted out"),
-        ("sms-invalid-destination", ("sms", "invalid"), "SMS destination validation failure"),
+        ("sms-opted-out", ("optout",), "SMS recipient opted out"),
+        ("sms-invalid-destination", ("msisdn", "invalid"), "SMS destination validation failure"),
+        ("sms-invalid-destination", ("destination value",), "SMS destination validation failure"),
         ("sms-command-failure", ("sms", "command_not_recognised"), "SMS provider command failure"),
+        ("sms-command-failure", ("command_not_recognised",), "SMS provider command failure"),
+        ("sms-missing-phone", ("电话号码为空",), "SMS user phone number missing"),
+        ("login-account-empty", ("loginservice", "登录用户检查为空"), "Login account validation empty"),
+        ("google-login-null", ("googleutil", "null"), "Google login returned null"),
+        ("third-party-game-api", ("/thirdapi/fc/login",), "Third-party FC game API failure"),
+        ("third-party-game-api", ("/thirdapi/evo/login",), "Third-party EVO game API failure"),
+        ("withdrawal-order-status", ("userwithdrawservice", "checkstatus", "uwithdraw"), "Withdrawal order status unavailable"),
+        ("export-file-missing", ("exporttaskservice", "文件失败"), "Export file operation failure"),
+        ("export-file-missing", ("exportservice", "文件不存在"), "Export file operation failure"),
     )
     for family_key, required, label in rules:
         if all(token in value for token in required):
@@ -243,7 +253,11 @@ def preprocess_log(log_text: str, *, max_patterns: int = 80, max_samples: int = 
         pattern_id = _pattern_id(template)
         pattern_counts[pattern_id] += 1
         pattern_templates[pattern_id] = template
-        pattern_families[pattern_id] = _cause_family(template)
+        # Family classification uses the untruncated source line so an
+        # exception or endpoint near the end of a long record is not lost
+        # merely because the human-facing physical template is bounded.
+        family_source = _WHITESPACE.sub(" ", line).strip()[:2000]
+        pattern_families[pattern_id] = _cause_family(family_source)
         entry_manifest.append({
             "id": entry_id,
             "level": level,
@@ -462,6 +476,82 @@ def _occurrence_count(entry_ids: list[int], entry_by_id: dict[int, dict]) -> int
     })
 
 
+_RECOVERABLE_FAMILY_PRESENTATIONS = {
+    "sms-opted-out": (
+        "SMS recipient opted out",
+        "短信因收件人在退订名单中而失败",
+        "The recipient was on the provider opt-out list; this is a business rejection rather than an infrastructure failure.",
+        "收件人在短信服务商退订名单中；这是业务拒绝而非基础设施故障。",
+    ),
+    "sms-invalid-destination": (
+        "SMS destination validation failure",
+        "短信目标号码格式校验失败",
+        "The SMS provider rejected the destination format, so delivery could not proceed.",
+        "短信服务商拒绝了目标号码格式，因此无法继续发送。",
+    ),
+    "sms-command-failure": (
+        "SMS provider command failure",
+        "短信服务商命令失败",
+        "The SMS provider returned a command or destination error while processing delivery.",
+        "短信服务商在处理发送时返回了命令或目标错误。",
+    ),
+    "sms-missing-phone": (
+        "SMS user phone number missing",
+        "短信用户手机号缺失",
+        "The application could not send the marketing message because the user record had no phone number.",
+        "由于用户记录缺少手机号，应用无法发送营销短信。",
+    ),
+    "face-compare-timeout": (
+        "Face comparison timeout",
+        "人脸比对超时",
+        "The face-comparison fast path timed out and the service fell back to the alternate RunPod path.",
+        "人脸比对快速路径超时，服务降级到备用RunPod路径。",
+    ),
+    "login-account-empty": (
+        "Login account validation empty",
+        "登录账号校验为空",
+        "The login request did not resolve to an existing account; the log does not establish a broader service outage.",
+        "登录请求未匹配到现有账号；日志无法证明这是更广泛的服务故障。",
+    ),
+    "google-login-null": (
+        "Google login returned null",
+        "谷歌登录返回空结果",
+        "The Google login validation returned a null result and the file does not show the underlying cause.",
+        "谷歌登录校验返回空结果，日志未说明具体原因。",
+    ),
+    "generic:zipexception": (
+        "Export archive creation failure",
+        "导出压缩文件生成失败",
+        "An export job could not create its archive because the input file list was empty.",
+        "导出任务因输入文件列表为空而无法生成压缩文件。",
+    ),
+    "third-party-game-api": (
+        "Third-party game API failure",
+        "第三方游戏接口异常",
+        "A third-party FC/EVO game API request returned an error response; the file does not establish a shared cause with the other findings.",
+        "第三方FC/EVO游戏接口返回错误；日志无法证明其与其他故障共享同一根因。",
+    ),
+    "withdrawal-order-status": (
+        "Withdrawal order status unavailable",
+        "提现订单状态不可用",
+        "Withdrawal workers could not resolve the payment order status and received a null withdrawal record.",
+        "提现异步任务无法解析支付订单状态，返回的提现记录为空。",
+    ),
+    "export-file-missing": (
+        "Export file operation failure",
+        "导出文件操作失败",
+        "An export task reported a missing output file after attempting to complete the export.",
+        "导出任务完成后未找到预期的输出文件。",
+    ),
+    "generic:resourceaccessexception:sslexception": (
+        "Third-party game API transport failure",
+        "第三方游戏接口传输失败",
+        "A third-party game API request failed during transport with a resource-access/SSL exception.",
+        "第三方游戏接口请求在传输阶段因资源访问或SSL异常失败。",
+    ),
+}
+
+
 def _reconcile_entry_grouped_result(result: dict, statistics: dict) -> dict:
     """Reconcile semantic selections against exact physical evidence.
 
@@ -541,21 +631,49 @@ def _reconcile_entry_grouped_result(result: dict, statistics: dict) -> dict:
     # inventing a separate operator finding for every unclassified template.
     unclaimed = sorted(set(entry_by_id).difference(claimed))
     if unclaimed:
-        fallback = {
-            "id": "other-observed-log-activity",
-            "label_en": "Other observed log activity",
-            "label_zh": "其他日志活动",
-            "count": len(unclaimed),
-            "percentage": round((len(unclaimed) / total_entries) * 100, 2) if total_entries else 0.0,
-            "physical_entry_count": len(unclaimed),
-            "occurrence_count": _occurrence_count(unclaimed, entry_by_id),
-            "pattern_ids": [],
-            "evidence_entry_ids": unclaimed,
-            "detail_en": "These records were not assigned to a named semantic cause, so they remain included for complete evidence accounting.",
-            "detail_zh": "这些记录未被分配到已命名的语义故障，但仍保留在结果中以确保完整证据统计。",
-        }
-        fallback["pattern_ids"] = [_semantic_pattern_id(fallback)]
-        result.setdefault("secondary_finds", []).append(fallback)
+        entries_by_family: dict[str, list[int]] = defaultdict(list)
+        for entry_id in unclaimed:
+            entries_by_family[entry_by_id[entry_id].get("family_id", "other")].append(entry_id)
+
+        remaining: list[int] = []
+        for family_id, family_entry_ids in sorted(entries_by_family.items()):
+            presentation = _RECOVERABLE_FAMILY_PRESENTATIONS.get(family_id)
+            if presentation is None:
+                remaining.extend(family_entry_ids)
+                continue
+            label_en, label_zh, detail_en, detail_zh = presentation
+            fallback = {
+                "id": f"recovered-{family_id}",
+                "label_en": label_en,
+                "label_zh": label_zh,
+                "count": len(family_entry_ids),
+                "percentage": round((len(family_entry_ids) / total_entries) * 100, 2) if total_entries else 0.0,
+                "physical_entry_count": len(family_entry_ids),
+                "occurrence_count": _occurrence_count(family_entry_ids, entry_by_id),
+                "pattern_ids": [],
+                "evidence_entry_ids": family_entry_ids,
+                "detail_en": detail_en,
+                "detail_zh": detail_zh,
+            }
+            fallback["pattern_ids"] = [_semantic_pattern_id(fallback)]
+            result.setdefault("secondary_finds", []).append(fallback)
+
+        if remaining:
+            fallback = {
+                "id": "other-observed-log-activity",
+                "label_en": "Other observed log activity",
+                "label_zh": "其他日志活动",
+                "count": len(remaining),
+                "percentage": round((len(remaining) / total_entries) * 100, 2) if total_entries else 0.0,
+                "physical_entry_count": len(remaining),
+                "occurrence_count": _occurrence_count(remaining, entry_by_id),
+                "pattern_ids": [],
+                "evidence_entry_ids": remaining,
+                "detail_en": "These records were not assigned to a named semantic cause, so they remain included for complete evidence accounting.",
+                "detail_zh": "这些记录未被分配到已命名的语义故障，但仍保留在结果中以确保完整证据统计。",
+            }
+            fallback["pattern_ids"] = [_semantic_pattern_id(fallback)]
+            result.setdefault("secondary_finds", []).append(fallback)
 
     result["total_entries"] = total_entries
     return result
