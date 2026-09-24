@@ -18,11 +18,10 @@ statistics. It does not send the physical pattern manifest or family catalogue.
 Hermes groups entries by semantic operational cause and returns
 `evidence_entry_ids`. The worker validates that IDs exist and are not assigned
 to multiple findings, expands each semantic anchor through the deterministic
-cause family assigned during preprocessing, deduplicates entries sharing the
-same request correlation identity, then computes exact occurrence counts and
-percentages from the expanded evidence. It retains the raw physical-record
-count as `physical_entry_count` and assigns stable `semantic-*` finding
-identities after reconciliation.
+cause family assigned during preprocessing, then computes exact physical-record
+counts and percentages from the expanded evidence. It also records correlated
+occurrence counts separately and adds one compact unassigned bucket so the
+finding counts reconcile to the complete log-entry total.
 
 Existing physical-pattern reconciliation remains for immutable historical
 SkillSnapshots and compatibility test doubles. It is not the active Hermes

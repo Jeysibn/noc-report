@@ -44,9 +44,10 @@ not AI formatting decisions.
 Log Analysis uses the active versioned `LogAnalysisResult` contract from
 `skills/log-triage-summary`: Hermes groups normalized log entries through exact
 `evidence_entry_ids`, while the worker expands those semantic anchors through
-deterministic cause families, deduplicates correlated records, and computes
-matching occurrence counts and percentages after inference. Raw physical-entry
-counts remain available for audit. The physical pattern manifest remains an
+deterministic cause families and computes matching physical-entry counts and
+percentages after inference. Correlated occurrence counts remain available
+separately, and a compact unassigned bucket preserves complete total-entry
+accounting. The physical pattern manifest remains an
 internal deterministic fallback and is not sent to Hermes. One finding object
 owns both language presentations and its Key/Secondary classification. Runtime
 validation rejects duplicate identities or entry assignments, missing bilingual

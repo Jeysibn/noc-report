@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$comment": "Active canonical LogAnalysisResult contract. The semantic runtime groups annotated evidence_entry_ids; the worker then expands equivalent evidence, deduplicates correlated records into operational occurrences, and supplies authoritative counts and stable finding identities. physical_entry_count preserves the audited raw-record count. Chinese and English are presentations of the same finding object. Historical snapshots may retain the legacy cause/action fields under their frozen schema.",
+  "$comment": "Active canonical LogAnalysisResult contract. The semantic runtime groups annotated evidence_entry_ids; the worker then expands equivalent evidence, retains physical-record counts for complete coverage, and exposes correlated occurrence counts separately. Chinese and English are presentations of the same finding object. Historical snapshots may retain the legacy cause/action fields under their frozen schema.",
   "type": "object",
   "properties": {
     "total_entries": {"type": "integer", "minimum": 0},
@@ -33,6 +33,7 @@
         "count": {"type": ["integer", "null"], "minimum": 0},
         "percentage": {"type": ["number", "null"], "minimum": 0, "maximum": 100},
         "physical_entry_count": {"type": "integer", "minimum": 0},
+        "occurrence_count": {"type": "integer", "minimum": 0},
         "pattern_ids": {
           "type": "array",
           "items": {"type": "string"},

@@ -158,10 +158,10 @@ def validate_log_triage_result(result: dict, *, label: str = "log_triage output"
 
     JSON Schema checks field shape. This second seam checks the invariants that
     Schema cannot express portably: one bilingual finding object owns one
-    identity/classification, counts are correlated operational occurrences,
-    physical_entry_count preserves the matching raw log-record count, and a
-    percentage agrees with the occurrence count and total after deterministic
-    runtime reconciliation.
+    identity/classification, counts are matching physical log records,
+    occurrence_count preserves the deduplicated request-level count,
+    physical_entry_count preserves the same raw-record count for audit, and a
+    percentage agrees with count and total after deterministic reconciliation.
 
     Legacy snapshots may still contain cause/action fields. The caller keeps
     those immutable rows on the historical adapter and only invokes this
@@ -230,11 +230,17 @@ def validate_log_triage_result(result: dict, *, label: str = "log_triage output"
             count = finding.get("count")
             percentage = finding.get("percentage")
             physical_entry_count = finding.get("physical_entry_count")
+            occurrence_count = finding.get("occurrence_count")
             if physical_entry_count is not None:
                 if not isinstance(physical_entry_count, int) or isinstance(physical_entry_count, bool) or physical_entry_count < 0:
                     raise OutputValidationError(f"{path}.physical_entry_count must be a non-negative integer")
                 if physical_entry_count > total:
                     raise OutputValidationError(f"{path}.physical_entry_count cannot exceed total_entries")
+            if occurrence_count is not None:
+                if not isinstance(occurrence_count, int) or isinstance(occurrence_count, bool) or occurrence_count < 0:
+                    raise OutputValidationError(f"{path}.occurrence_count must be a non-negative integer")
+                if physical_entry_count is not None and occurrence_count > physical_entry_count:
+                    raise OutputValidationError(f"{path}.occurrence_count cannot exceed physical_entry_count")
             is_unquantified = pattern_ids == ["unquantified"]
             if is_unquantified:
                 if count is not None or percentage is not None:

@@ -13,7 +13,7 @@ from collections import Counter, defaultdict
 from datetime import datetime
 
 
-PREPROCESSOR_VERSION = "16"
+PREPROCESSOR_VERSION = "17"
 MAX_DIRECT_LOG_CHARS = 2_000_000
 _TIMESTAMP = re.compile(r"\b(\d{4}-\d{2}-\d{2}T[^\s]+|\d{4}-\d{2}-\d{2}[^\s]+)")
 _LEVEL = re.compile(r"\b(DEBUG|INFO|WARN|WARNING|ERROR|CRITICAL|FATAL)\b", re.IGNORECASE)
@@ -452,6 +452,16 @@ def _semantic_pattern_id(finding: dict) -> str:
     return f"semantic-{digest}"
 
 
+def _occurrence_count(entry_ids: list[int], entry_by_id: dict[int, dict]) -> int:
+    """Count correlated operational occurrences represented by physical IDs."""
+    return len({
+        f"trace:{entry_by_id[entry_id]['trace_id']}"
+        if entry_by_id[entry_id].get("trace_id")
+        else f"entry:{entry_id}"
+        for entry_id in entry_ids
+    })
+
+
 def _reconcile_entry_grouped_result(result: dict, statistics: dict) -> dict:
     """Reconcile semantic selections against exact physical evidence.
 
@@ -511,28 +521,41 @@ def _reconcile_entry_grouped_result(result: dict, statistics: dict) -> dict:
             expanded = sorted(expanded_ids)
             claimed.update(expanded)
 
-            # A single request is often logged by several layers. Preserve
-            # every physical record for audit, but count one operational
-            # occurrence per correlation identity. Records without a usable
-            # correlation ID remain individually countable because the worker
-            # cannot safely prove that they are duplicates.
-            occurrence_keys = {
-                f"trace:{entry_by_id[entry_id]['trace_id']}"
-                if entry_by_id[entry_id].get("trace_id")
-                else f"entry:{entry_id}"
-                for entry_id in expanded
-            }
-
             if expanded:
                 finding["pattern_ids"] = [_semantic_pattern_id(finding)]
                 finding["evidence_entry_ids"] = expanded
                 finding["physical_entry_count"] = len(expanded)
-                finding["count"] = len(occurrence_keys)
-                finding["percentage"] = round((len(occurrence_keys) / total_entries) * 100, 2) if total_entries else 0.0
+                finding["occurrence_count"] = _occurrence_count(expanded, entry_by_id)
+                # `count` is the auditable physical-record count so all
+                # finding counts can reconcile exactly to total_entries.
+                finding["count"] = len(expanded)
+                finding["percentage"] = round((len(expanded) / total_entries) * 100, 2) if total_entries else 0.0
             else:
                 finding["pattern_ids"] = ["unquantified"]
                 finding["count"] = None
                 finding["percentage"] = None
+
+    # Hermes may intentionally omit routine INFO and low-signal records to
+    # keep the semantic result concise. They still belong in the deterministic
+    # evidence accounting. Preserve them as one transparent bucket rather than
+    # inventing a separate operator finding for every unclassified template.
+    unclaimed = sorted(set(entry_by_id).difference(claimed))
+    if unclaimed:
+        fallback = {
+            "id": "other-observed-log-activity",
+            "label_en": "Other observed log activity",
+            "label_zh": "其他日志活动",
+            "count": len(unclaimed),
+            "percentage": round((len(unclaimed) / total_entries) * 100, 2) if total_entries else 0.0,
+            "physical_entry_count": len(unclaimed),
+            "occurrence_count": _occurrence_count(unclaimed, entry_by_id),
+            "pattern_ids": [],
+            "evidence_entry_ids": unclaimed,
+            "detail_en": "These records were not assigned to a named semantic cause, so they remain included for complete evidence accounting.",
+            "detail_zh": "这些记录未被分配到已命名的语义故障，但仍保留在结果中以确保完整证据统计。",
+        }
+        fallback["pattern_ids"] = [_semantic_pattern_id(fallback)]
+        result.setdefault("secondary_finds", []).append(fallback)
 
     result["total_entries"] = total_entries
     return result

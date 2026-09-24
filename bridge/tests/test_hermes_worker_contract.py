@@ -148,7 +148,8 @@ def test_reconciliation_does_not_expand_into_an_unrelated_cause_family():
         "confidence": 0.8,
     }
     reconciled = reconcile_result(result, facts)
-    assert reconciled["secondary_finds"] == []
+    assert reconciled["secondary_finds"][0]["id"] == "other-observed-log-activity"
+    assert reconciled["secondary_finds"][0]["count"] == 1
     assert reconciled["key_finds"][0]["count"] == 1
 
 
@@ -215,8 +216,43 @@ def test_reconciliation_counts_one_occurrence_for_correlated_layer_logs():
     finding = reconciled["key_finds"][0]
     assert finding["evidence_entry_ids"] == [0, 1]
     assert finding["physical_entry_count"] == 2
-    assert finding["count"] == 1
-    assert finding["percentage"] == 50.0
+    assert finding["count"] == 2
+    assert finding["physical_entry_count"] == 2
+    assert finding["occurrence_count"] == 1
+    assert finding["percentage"] == 100.0
+
+
+def test_reconciliation_adds_one_compact_bucket_for_unassigned_records():
+    facts = preprocess_log(
+        "2026-09-10T14:00:00Z WARN trace_id=t-1 NdrpApiService HTTP 503 Service Unavailable\n"
+        "2026-09-10T14:00:01Z INFO scheduler heartbeat\n"
+        "2026-09-10T14:00:02Z INFO scheduler heartbeat\n"
+    )
+    result = {
+        "total_entries": 0,
+        "summary_en": "The log contains an NDRP failure and routine activity.",
+        "summary_zh": "日志包含NDRP故障和常规活动。",
+        "key_finds": [{
+            "id": "ndrp",
+            "label_en": "NDRP unavailable",
+            "label_zh": "NDRP不可用",
+            "count": None,
+            "percentage": None,
+            "pattern_ids": ["unquantified"],
+            "evidence_entry_ids": [0],
+            "detail_en": "NDRP returned an unavailable response.",
+            "detail_zh": "NDRP返回不可用响应。",
+        }],
+        "secondary_finds": [],
+        "severity_signal": "high",
+        "confidence": 0.8,
+    }
+    reconciled = reconcile_result(result, facts)
+    findings = reconciled["key_finds"] + reconciled["secondary_finds"]
+    assert sum(f["count"] for f in findings) == facts["total_entries"]
+    fallback = reconciled["secondary_finds"][-1]
+    assert fallback["id"] == "other-observed-log-activity"
+    assert fallback["count"] == 2
 
 
 def test_reconciliation_replaces_model_numbers_and_retains_omitted_patterns():
