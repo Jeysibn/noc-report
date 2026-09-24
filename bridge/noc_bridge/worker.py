@@ -14,8 +14,6 @@ import tempfile
 import threading
 import time
 import uuid
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib import request as urllib_request
 
 import jsonschema
 
@@ -63,6 +61,12 @@ from noc_bridge.validation import (
     validate_daily_report_result,
     validate_log_triage_result,
 )
+from noc_bridge.worker_health import (
+    WorkerMetrics,
+    hermes_health_url,
+    hermes_is_reachable,
+    start_health_server,
+)
 from preprocessing import (
     build_hermes_input,
     compact_log_triage_narrative,
@@ -92,55 +96,6 @@ class SkillConfigurationError(WorkerInputError):
 class JobLeaseError(RuntimeError):
     retryable = True
     error_code = "JOB_LEASE_LOST"
-
-
-class WorkerMetrics:
-    def __init__(self):
-        self._lock = threading.Lock()
-        self.values = {
-            "jobs_queued": 0,
-            "jobs_processing": 0,
-            "jobs_completed": 0,
-            "jobs_failed": 0,
-            "retry_count": 0,
-            "schema_validation_failures": 0,
-            "provider_failures": 0,
-            "last_duration_ms": 0,
-            "last_preprocessing_duration_ms": 0,
-            "queue_depth": 0,
-            "runtime_ready": False,
-        }
-
-    def increment(self, name: str, value: int = 1) -> None:
-        with self._lock:
-            self.values[name] = self.values.get(name, 0) + value
-
-    def snapshot(self) -> dict:
-        with self._lock:
-            return dict(self.values)
-
-    def set_runtime_ready(self, ready: bool) -> None:
-        with self._lock:
-            self.values["runtime_ready"] = ready
-
-    def set_value(self, name: str, value) -> None:
-        with self._lock:
-            self.values[name] = value
-
-
-def hermes_health_url(base_url: str) -> str:
-    """Resolve a profile-scoped Hermes URL to the unauthenticated liveness endpoint."""
-    listener_url = base_url.rstrip("/").split("/p/", 1)[0]
-    return f"{listener_url}/health"
-
-
-def hermes_is_reachable(base_url: str, timeout_seconds: float) -> bool:
-    """Probe Hermes liveness without requiring provider credentials."""
-    try:
-        with urllib_request.urlopen(hermes_health_url(base_url), timeout=timeout_seconds) as response:
-            return 200 <= response.status < 300
-    except Exception:
-        return False
 
 
 class _LeaseRenewer:
@@ -176,59 +131,11 @@ class _LeaseRenewer:
                     self.lost = True
                     LOG.error("job lease lost job_id=%s", self.job_id)
                     return
-            except Exception:
-                LOG.exception("job lease renewal failed job_id=%s", self.job_id)
+            except Exception as exc:
+                LOG.error("job lease renewal failed job_id=%s error_type=%s", self.job_id, type(exc).__name__)
             finally:
                 if conn is not None:
                     conn.close()
-
-
-class _HealthHandler(BaseHTTPRequestHandler):
-    metrics: WorkerMetrics | None = None
-    runtime_profile: str = "noc-log-analysis"
-    runtime_base_url: str = "http://hermes:8642"
-    runtime_health_timeout_seconds: float = 2.0
-
-    def do_GET(self):  # noqa: N802 - stdlib HTTP handler API
-        if self.path not in {"/health", "/metrics"}:
-            self.send_response(404)
-            self.end_headers()
-            return
-        metrics = self.metrics.snapshot() if self.metrics else {}
-        runtime_reachable = hermes_is_reachable(
-            self.runtime_base_url,
-            self.runtime_health_timeout_seconds,
-        )
-        metrics["runtime_reachable"] = runtime_reachable
-        payload = {
-            "status": "healthy" if (metrics.get("runtime_ready", False) and runtime_reachable) else "degraded",
-            "component": "ai-worker",
-            "runtime": "hermes",
-            "profile": self.runtime_profile,
-            "metrics": metrics,
-        }
-        body = json.dumps(payload).encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def log_message(self, *_args):
-        return
-
-
-def start_health_server(settings, metrics: WorkerMetrics):
-    handler = type("WorkerHealthHandler", (_HealthHandler,), {
-        "metrics": metrics,
-        "runtime_profile": settings.hermes_profile,
-        "runtime_base_url": settings.hermes_base_url,
-        "runtime_health_timeout_seconds": min(5.0, max(0.5, settings.hermes_timeout_seconds)),
-    })
-    server = ThreadingHTTPServer((settings.health_host, settings.health_port), handler)
-    thread = threading.Thread(target=server.serve_forever, name="ai-worker-health", daemon=True)
-    thread.start()
-    return server
 
 
 def _validate_job_message(message: dict) -> None:
@@ -731,6 +638,13 @@ class Worker:
                 )
                 mark_retrying(conn, job_id, error_code=error_code, error_message=safe_message)
                 self.metrics.increment("retry_count")
+                LOG.warning(
+                    "retry scheduled job_id=%s job_type=%s next_attempt=%s error_code=%s",
+                    job_id,
+                    message["job_type"],
+                    attempt + 1,
+                    error_code,
+                )
             else:
                 send_to_dlq(channel, job_type=message["job_type"], body={
                     "job_id": message["job_id"],
@@ -740,19 +654,28 @@ class Worker:
                     "error": safe_message,
                 })
                 self.metrics.increment("jobs_failed")
+                LOG.error(
+                    "job moved to DLQ job_id=%s job_type=%s attempt=%s error_code=%s",
+                    job_id,
+                    message["job_type"],
+                    attempt,
+                    error_code,
+                )
             channel.basic_ack(delivery_tag)
         finally:
             conn.close()
 
     def _update_queue_depth(self, channel) -> None:
         try:
-            count = sum(
-                channel.queue_declare(queue_names(job_type)["main"], passive=True).method.message_count
-                for job_type in ("log_triage", "daily_report")
-            )
+            job_type = self.settings.worker_kind
+            count = channel.queue_declare(queue_names(job_type)["main"], passive=True).method.message_count
             self.metrics.set_value("queue_depth", count)
-        except Exception:
-            LOG.debug("unable to sample log-triage queue depth", exc_info=True)
+        except Exception as exc:
+            LOG.warning(
+                "queue depth sample failed worker_kind=%s error_type=%s",
+                self.settings.worker_kind,
+                type(exc).__name__,
+            )
 
     def handle_delivery(self, channel, method, _properties, body: bytes, expected_job_type: str = "log_triage") -> None:
         try:
@@ -769,6 +692,13 @@ class Worker:
             return
 
         job_id = uuid.UUID(message["job_id"])
+        LOG.info(
+            "job received job_id=%s job_type=%s worker_kind=%s attempt=%s",
+            job_id,
+            message["job_type"],
+            self.settings.worker_kind,
+            message.get("attempt", 1),
+        )
         conn = get_db_connection(self.settings.database_url)
         try:
             claimed = claim_job(
@@ -785,6 +715,13 @@ class Worker:
                 return
             message["_claim_token"] = claimed["claim_token"]
             bump_attempt(conn, job_id, int(message.get("attempt", 1)))
+            LOG.info(
+                "job lease obtained job_id=%s job_type=%s worker_id=%s lease_seconds=%s",
+                job_id,
+                message["job_type"],
+                self.settings.worker_id,
+                self.settings.lease_seconds,
+            )
         finally:
             conn.close()
 
@@ -857,9 +794,21 @@ class Worker:
                 done_conn.close()
             channel.basic_ack(method.delivery_tag)
             self.metrics.increment("jobs_completed")
+            LOG.info(
+                "job completed job_id=%s job_type=%s duration_ms=%s",
+                job_id,
+                message["job_type"],
+                round((time.monotonic() - started) * 1000),
+            )
         except Exception as exc:
             if hasattr(exc, "error_code") and getattr(exc, "error_code") == "HERMES_INVALID_OUTPUT":
                 self.metrics.increment("schema_validation_failures")
+                LOG.error(
+                    "result validation failed job_id=%s job_type=%s error_code=%s",
+                    job_id,
+                    message["job_type"],
+                    getattr(exc, "error_code", "unknown"),
+                )
             if (
                 type(exc).__name__.startswith("Hermes")
                 and getattr(exc, "error_code", None) != "HERMES_INVALID_OUTPUT"
@@ -881,35 +830,40 @@ class Worker:
                 declare_topology(channel)
                 self._update_queue_depth(channel)
                 self.metrics.set_runtime_ready(False)
-                HermesClient(self.settings, profile=self.settings.hermes_profile).verify_restricted_toolsets()
-                HermesClient(self.settings, profile=self.settings.hermes_daily_report_profile).verify_restricted_toolsets()
+                profile = (
+                    self.settings.hermes_profile
+                    if self.settings.worker_kind == "log_triage"
+                    else self.settings.hermes_daily_report_profile
+                )
+                LOG.info("Hermes profile verification started worker_kind=%s profile=%s", self.settings.worker_kind, profile)
+                HermesClient(self.settings, profile=profile).verify_restricted_toolsets()
+                LOG.info("Hermes profile verified worker_kind=%s profile=%s", self.settings.worker_kind, profile)
                 self.metrics.set_runtime_ready(True)
                 channel.basic_qos(prefetch_count=1)
+                job_type = self.settings.worker_kind
                 channel.basic_consume(
-                    queue_names("log_triage")["main"],
+                    queue_names(job_type)["main"],
                     lambda ch, method, properties, body: self.handle_delivery(
-                        ch, method, properties, body, "log_triage"
-                    ),
-                    auto_ack=False,
-                )
-                channel.basic_consume(
-                    queue_names("daily_report")["main"],
-                    lambda ch, method, properties, body: self.handle_delivery(
-                        ch, method, properties, body, "daily_report"
+                        ch, method, properties, body, job_type
                     ),
                     auto_ack=False,
                 )
                 LOG.info(
-                    "AI Worker ready profiles=%s,%s concurrency=%s",
-                    self.settings.hermes_profile,
-                    self.settings.hermes_daily_report_profile,
+                    "AI Worker ready worker_kind=%s profile=%s concurrency=%s",
+                    job_type,
+                    profile,
                     self.settings.max_concurrency,
                 )
                 channel.start_consuming()
             except KeyboardInterrupt:
                 return
-            except Exception:
-                LOG.exception("AI Worker broker loop failed; reconnecting")
+            except Exception as exc:
+                self.metrics.set_runtime_ready(False)
+                LOG.error(
+                    "worker degraded worker_kind=%s error_type=%s reconnect_seconds=5",
+                    self.settings.worker_kind,
+                    type(exc).__name__,
+                )
                 time.sleep(5)
             finally:
                 if connection is not None and not connection.is_closed:

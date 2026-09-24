@@ -1,6 +1,7 @@
 """Reliability mission Phase 17: refuse to start with environment=production
 while any credential is still at its known-insecure local-dev default."""
 import pytest
+from pydantic import ValidationError
 
 from app.core.config import Settings, assert_production_secrets_are_safe
 
@@ -8,6 +9,12 @@ from app.core.config import Settings, assert_production_secrets_are_safe
 def test_development_environment_never_raises_regardless_of_defaults():
     config = Settings(environment="development")
     assert_production_secrets_are_safe(config)  # must not raise
+
+
+@pytest.mark.parametrize("environment", ["prod", "Production", "productionn"])
+def test_unknown_environment_is_rejected(environment):
+    with pytest.raises(ValidationError):
+        Settings(environment=environment)
 
 
 def test_production_with_all_defaults_still_in_place_raises():

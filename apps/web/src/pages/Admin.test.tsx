@@ -51,4 +51,24 @@ describe("Admin", () => {
       screen.queryByRole("dialog", { name: /add user/i }),
     ).not.toBeInTheDocument();
   });
+
+  it("shows aggregated runtime and disabled feature state", async () => {
+    __setCurrentUserForTests({
+      id: "test-user",
+      username: "admin",
+      displayName: "Admin User",
+      email: null,
+      roles: ["Admin"],
+      permissions: ["system.read"],
+    });
+    const user = userEvent.setup();
+    render(<Admin />);
+    await act(async () => {});
+
+    await user.click(screen.getByRole("tab", { name: /ai configuration/i }));
+    expect(await screen.findByText(/Profile: noc-log-analysis/)).toBeInTheDocument();
+    expect(screen.getAllByText("healthy").length).toBeGreaterThan(0);
+    expect(screen.getByText("disabled")).toBeInTheDocument();
+    expect(screen.queryByText(/no external ai runtime/i)).not.toBeInTheDocument();
+  });
 });

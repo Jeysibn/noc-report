@@ -82,7 +82,7 @@ services:
   # profile so the normal development stack never loads a model or consumes
   # VM memory. The API remains usable with LOCAL_PREFILL_AI_ENABLED=false.
   ollama:
-    image: ollama/ollama:latest
+    image: ollama/ollama@sha256:57d60e686821ea81a7748a3ec8141308c8b8f95b27105713954abf7a6529e700
     container_name: noc-report-ollama
     profiles: ["local-ai"]
     restart: unless-stopped
@@ -170,25 +170,27 @@ services:
       timeout: 5s
       retries: 5
 
-  # The worker is the only component allowed to hold application credentials
-  # and the Hermes API key. It consumes log_triage and daily_report jobs.
+  # The latency-sensitive log worker owns only the log_triage queue/profile.
+  # The API points its runtime check here; readiness means broker plus the
+  # assigned Hermes profile have both initialized successfully.
   ai-worker:
     build:
       context: ..
       dockerfile: bridge/Dockerfile
-    container_name: noc-report-ai-worker
     restart: unless-stopped
     command: ["python", "-m", "noc_bridge.worker"]
     environment:
-      RUNTIME_RABBITMQ_URL: amqp://noc:noc-rabbit-secret@rabbitmq:5672/
-      RUNTIME_DATABASE_URL: postgresql://noc:noc@postgres:5432/noc_report
-      RUNTIME_MINIO_ENDPOINT_URL: http://minio:9000
-      RUNTIME_MINIO_ACCESS_KEY: noc-minio
-      RUNTIME_MINIO_SECRET_KEY: noc-minio-secret
+      RUNTIME_RABBITMQ_URL: ${RUNTIME_RABBITMQ_URL:-amqp://noc:noc-rabbit-secret@rabbitmq:5672/}
+      RUNTIME_DATABASE_URL: ${RUNTIME_DATABASE_URL:-postgresql://noc:noc@postgres:5432/noc_report}
+      RUNTIME_MINIO_ENDPOINT_URL: ${RUNTIME_MINIO_ENDPOINT_URL:-http://minio:9000}
+      RUNTIME_MINIO_ACCESS_KEY: ${RUNTIME_MINIO_ACCESS_KEY:-noc-minio}
+      RUNTIME_MINIO_SECRET_KEY: ${RUNTIME_MINIO_SECRET_KEY:-noc-minio-secret}
       RUNTIME_HERMES_BASE_URL: http://hermes:8642/p/noc-log-analysis
       RUNTIME_HERMES_API_KEY: ${HERMES_API_KEY:?Set HERMES_API_KEY before starting the Hermes stack}
       RUNTIME_HERMES_PROFILE: noc-log-analysis
       RUNTIME_HERMES_DAILY_REPORT_PROFILE: noc-daily-report
+      RUNTIME_WORKER_KIND: log_triage
+      RUNTIME_WORKER_ID: ${LOG_WORKER_ID:-noc-log-worker}
       RUNTIME_HERMES_VERSION: ${HERMES_VERSION:-v0.21.4-2026.9.21}
       RUNTIME_ENVIRONMENT: ${RUNTIME_ENVIRONMENT:-development}
       RUNTIME_HEALTH_PORT: "8092"
@@ -215,20 +217,99 @@ services:
     cpus: 1.0
     pids_limit: 256
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8092/health', timeout=3)"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8092/health/ready', timeout=3)"]
       interval: 20s
       timeout: 5s
       retries: 3
     ports:
       # Loopback-only diagnostics for a host-run FastAPI process. The worker
       # remains unreachable from other machines; containerized API deployments
-      # should use http://ai-worker:8092/health on the internal network.
+      # should use http://ai-worker:8092/health/ready on the internal network.
       - "127.0.0.1:8092:8092"
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
+
+  # Batch reports have an independent consumer, Hermes profile, timeout,
+  # health port, and scaling/restart lifecycle. It is opt-in so a disabled
+  # report feature does not require this worker or profile to be healthy.
+  daily-report-worker:
+    profiles: ["daily-report"]
+    build:
+      context: ..
+      dockerfile: bridge/Dockerfile
+    restart: unless-stopped
+    command: ["python", "-m", "noc_bridge.worker"]
+    environment:
+      RUNTIME_RABBITMQ_URL: ${RUNTIME_RABBITMQ_URL:-amqp://noc:noc-rabbit-secret@rabbitmq:5672/}
+      RUNTIME_DATABASE_URL: ${RUNTIME_DATABASE_URL:-postgresql://noc:noc@postgres:5432/noc_report}
+      RUNTIME_MINIO_ENDPOINT_URL: ${RUNTIME_MINIO_ENDPOINT_URL:-http://minio:9000}
+      RUNTIME_MINIO_ACCESS_KEY: ${RUNTIME_MINIO_ACCESS_KEY:-noc-minio}
+      RUNTIME_MINIO_SECRET_KEY: ${RUNTIME_MINIO_SECRET_KEY:-noc-minio-secret}
+      RUNTIME_HERMES_BASE_URL: http://hermes:8642/p/noc-daily-report
+      RUNTIME_HERMES_API_KEY: ${HERMES_API_KEY:?Set HERMES_API_KEY before starting the Hermes stack}
+      RUNTIME_HERMES_PROFILE: noc-daily-report
+      RUNTIME_HERMES_DAILY_REPORT_PROFILE: noc-daily-report
+      RUNTIME_WORKER_KIND: daily_report
+      RUNTIME_WORKER_ID: ${DAILY_REPORT_WORKER_ID:-noc-daily-report-worker}
+      RUNTIME_HERMES_TIMEOUT_SECONDS: ${DAILY_REPORT_HERMES_TIMEOUT_SECONDS:-900}
+      RUNTIME_HERMES_VERSION: ${HERMES_VERSION:-v0.21.4-2026.9.21}
+      RUNTIME_ENVIRONMENT: ${RUNTIME_ENVIRONMENT:-development}
+      RUNTIME_HEALTH_PORT: "8093"
+      PYTHONPATH: /opt/noc-report/sandbox:/opt/noc-report/bridge
+    depends_on:
+      hermes:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    volumes:
+      - ../skills:/opt/noc-report/skills:ro
+    networks:
+      - default
+      - hermes-internal
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 768m
+    cpus: 1.0
+    pids_limit: 256
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8093/health/ready', timeout=3)"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+    ports:
+      # Host-run API diagnostics for the opt-in local profile. Remove this
+      # development-only publish when deploying/scaling the worker service.
+      - "127.0.0.1:8093:8093"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  hermes-contract:
+    profiles: ["hermes-contract"]
+    build:
+      context: ..
+      dockerfile: bridge/Dockerfile
+    command: ["python", "-m", "noc_bridge.hermes_contract"]
+    environment:
+      CONTRACT_HERMES_BASE_URL: http://hermes:8642
+      CONTRACT_HERMES_API_KEY: ${HERMES_API_KEY:?Set a temporary HERMES_API_KEY for the contract test}
+    depends_on:
+      hermes:
+        condition: service_healthy
+    networks:
+      - hermes-internal
+    restart: "no"
 
 volumes:
   noc-report-postgres-data:

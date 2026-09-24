@@ -7,10 +7,13 @@ NOC system, and the request contains one prepared immutable analysis input.
 from __future__ import annotations
 
 import json
+import logging
 import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+
+LOG = logging.getLogger("noc.hermes")
 
 
 class HermesError(RuntimeError):
@@ -241,6 +244,7 @@ class HermesClient:
         repair_hint: str | None = None,
     ) -> HermesResult:
         started = time.monotonic()
+        LOG.info("Hermes request started profile=%s task=%s timeout_seconds=%s", self.profile, task, self.timeout)
         response = self._request(
             "/v1/chat/completions",
             body={
@@ -319,4 +323,12 @@ class HermesClient:
             "duration_ms": round((time.monotonic() - started) * 1000),
             "num_turns": 1,
         }
+        LOG.info(
+            "Hermes request completed profile=%s task=%s duration_ms=%s provider=%s model=%s",
+            self.profile,
+            task,
+            telemetry["duration_ms"],
+            telemetry["provider"],
+            telemetry["model"],
+        )
         return HermesResult(result=result, telemetry=telemetry)

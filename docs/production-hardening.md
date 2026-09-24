@@ -161,6 +161,10 @@ paid-AI reservation fences.
   counts), MinIO, Hermes and the AI Worker when configured, and optional Ollama.
 - `/health/readiness` returns HTTP 503 when PostgreSQL, RabbitMQ, or MinIO is
   unavailable.
+- Each worker exposes `/health/live` (process only) and `/health/ready`
+  (broker connected and assigned Hermes profile policy verified). Container
+  healthchecks use readiness, while liveness stays green during runtime
+  outages so the process can reconnect.
 - Hermes and the AI Worker are optional to core readiness. Their degraded
   state is reported separately so incidents, evidence, and historical reports
   remain usable during a provider/runtime outage.
@@ -170,6 +174,12 @@ paid-AI reservation fences.
 
 The web dashboard polls dependency health every 30 seconds. `unknown` is a
 neutral state, not a green state.
+
+The Admin Runtime view reads one aggregated API response. `disabled` means a
+feature gate is off; `not_required` means no worker is expected; `not_configured`
+means a requested feature has no configured runtime; `degraded` means the
+process is reachable but not ready; `unavailable` means the dependency could
+not be reached; and `unknown` means the response could not be classified.
 
 ## Hermes deployment
 
@@ -183,12 +193,17 @@ validated result/telemetry artifacts → API AnalysisRun reconciliation
 The Phase 2 Daily Alert Report path is:
 
 ```text
-API → transactional outbox → RabbitMQ daily_report → AI Worker →
+API → transactional outbox → RabbitMQ daily_report → Daily Report Worker →
 Hermes noc-daily-report → validated narrative plan → deterministic
 ReportDocument/DOCX renderer → versioned report artifacts → API Report
 ```
 
-The worker runs with RabbitMQ prefetch and Hermes concurrency set to one. It
+Each worker runs with RabbitMQ prefetch and Hermes concurrency set to one. The
+log worker consumes only `log_triage` and verifies `noc-log-analysis`; the
+Daily Report worker consumes only `daily_report` and verifies
+`noc-daily-report`. The latter is an opt-in Compose profile and has its own
+health port and `DAILY_REPORT_HERMES_TIMEOUT_SECONDS`. A failure in one
+worker/profile does not block the other. Each worker
 claims the PostgreSQL Job lease, renews that lease during long inference,
 verifies the exact evidence version and SHA-256, materializes the immutable
 SkillSnapshot, and acknowledges only after durable artifact persistence and a
@@ -196,6 +211,12 @@ conditional Job completion update. Temporary Hermes/provider failures use the
 existing bounded RabbitMQ retry path; authentication, missing-skill,
 evidence-integrity, and invalid-output failures are surfaced as bounded job
 failures/DLQ records.
+
+The development Compose file binds worker diagnostics to loopback for a
+host-run API and therefore runs one replica per service. A deployed Compose
+configuration should remove those host port bindings and point the API health
+URLs at the internal service names; the worker services have no fixed
+container names and can then be scaled independently.
 
 Compose mounts `skills/` read-only into both the worker and Hermes. Hermes is
 on an internal network with no published API port; only the worker joins both
@@ -206,8 +227,10 @@ remain inside the Hermes profile/setup.
 
 Required runtime settings are `AI_RUNTIME=hermes` for the API,
 `RUNTIME_HERMES_BASE_URL`, `RUNTIME_HERMES_API_KEY`, and the dedicated
-`RUNTIME_HERMES_PROFILE` for the worker. Set `AI_WORKER_HEALTH_URL` to the
-worker's internal health endpoint when the API runs in a container. Do not set provider credentials such
+`RUNTIME_HERMES_PROFILE`, `RUNTIME_WORKER_KIND`, and worker-specific
+`RUNTIME_HERMES_TIMEOUT_SECONDS`. Set `AI_WORKER_HEALTH_URL` and
+`DAILY_REPORT_WORKER_HEALTH_URL` to the workers' internal readiness endpoints
+when the API runs in a container. Do not set provider credentials such
 as API keys in FastAPI or browser configuration. Pin `HERMES_IMAGE` and record
 the deployed image/version in the worker's `RUNTIME_HERMES_VERSION` for
 provenance.
@@ -238,9 +261,30 @@ layer.
 The API is an application-tier service. No external semantic runtime or
 provider credential is mounted into it. PostgreSQL, RabbitMQ, and MinIO are
 infrastructure dependencies and must use deployment-specific credentials.
-Production startup rejects known development secret defaults. The AI worker
-must remain separately deployed, least-privileged, and intentionally serial
-(`max_concurrent_jobs=1`); RabbitMQ prefetch is not worker parallelism.
+Only `development`, `test`, and `production` are accepted environment values.
+Production startup rejects known development JWT, PostgreSQL, RabbitMQ, MinIO,
+and Hermes credentials and requires HTTPS CORS origins. Each AI worker remains
+separately deployed, least-privileged, and serial (`max_concurrency=1` per
+worker); scale each workload by adding its own worker replicas.
+
+For production, set `ENVIRONMENT=production` for FastAPI and
+`RUNTIME_ENVIRONMENT=production` for each worker. Configure `JWT_SECRET` with
+at least 32 random characters, deployment-owned `DATABASE_URL`,
+`RABBITMQ_URL`, `MINIO_ACCESS_KEY`, and `MINIO_SECRET_KEY`, explicit HTTPS
+`CORS_ORIGINS`, and a random `HERMES_API_KEY` of at least 32 characters.
+Workers also need `RUNTIME_DATABASE_URL`, `RUNTIME_RABBITMQ_URL`, and
+`RUNTIME_MINIO_*` credentials. `AI_RUNTIME=hermes` enables the log-analysis
+queue gate; `DAILY_REPORT_AI_ENABLED=true` separately enables report jobs.
+Provider credentials stay inside Hermes. Never put them in FastAPI or browser
+configuration.
+
+Expired open upload intents are swept by the existing evidence purge worker.
+The sweep locks each intent against completion, reconstructs and verifies its
+server-owned bucket/key identity, skips any object referenced by Evidence,
+then deletes only versions and delete markers whose key exactly matches that
+intent. A successful or already-missing object becomes `CLEANED`; a storage or
+database error leaves the intent available for retry. A mismatched identity
+is logged and never touched.
 
 Set `CORS_ORIGINS` to the explicit comma-separated HTTPS web origin(s) in a
 deployed environment; the local Vite origins are development defaults only.
@@ -261,6 +305,8 @@ npm run check:coherence
 (cd apps/web && npm ci && npm run typecheck && npm run lint && npm test && npm run build)
 ```
 
-Normal CI uses mocked Hermes responses and does not require paid provider calls.
-Live-provider verification is an opt-in/manual operation after the operator
-completes Hermes profile/provider setup.
+CI boots the pinned Hermes container with a temporary API key and no provider
+credentials. It checks listener health, auth rejection, both NOC profile
+toolset policies, and chat request validation with a deliberately malformed request;
+no inference/provider call is made. Unit/integration suites continue using
+mocked Hermes responses.

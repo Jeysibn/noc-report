@@ -257,9 +257,10 @@ class Evidence(Base):
 class EvidenceUploadIntent(Base):
     """Server-owned identity for one direct-to-MinIO upload attempt.
 
-    The browser receives only ``id`` and a presigned URL.  Completion looks
+    The browser receives only ``id`` and a presigned URL. Completion looks
     up this row and therefore cannot redirect an upload to a client-selected
-    bucket or object key.
+    bucket or object key. ``EXPIRED`` intents remain eligible for storage
+    cleanup; ``CLEANED`` records an idempotently settled orphan cleanup.
     """
 
     __tablename__ = "evidence_upload_intents"

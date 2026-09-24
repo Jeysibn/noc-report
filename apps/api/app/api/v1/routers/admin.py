@@ -1,10 +1,12 @@
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.audit import record_audit
+from app.core.config import settings
 from app.core.queue import (
     JOB_TYPES,
     _queue_names,
@@ -19,6 +21,8 @@ from app.core.storage import ALL_BUCKETS, bucket_status
 from app.db.session import get_db
 from app.deps import require_permission
 from app.models.models import AuditLog, Job, Permission, Role, ShiftDefinition, SystemConfig, User
+from app.models.models import AnalysisRun, Report
+from app.operational_health import _check_http_dependency, dependency_health
 from app.schemas.schemas import (
     AuditLogOut,
     DlqActionResult,
@@ -240,12 +244,88 @@ def get_system_config(
     db: Session = Depends(get_db),
     _: User = Depends(require_permission("system.read")),
 ) -> SystemConfigOut:
-    """Return generic worker settings for the admin UI.
-
-    No external runtime is configured in the current phase; these settings
-    remain available for a future separately deployed runtime worker.
-    """
+    """Return generic worker capacity and timeout settings."""
     return _get_or_create_system_config(db)
+
+
+@router.get("/runtime")
+def get_runtime_status(
+    db: Session = Depends(get_db),
+    _: User = Depends(require_permission("system.read")),
+) -> dict:
+    """Return safe, aggregated operator status for the configured AI path."""
+    health = dependency_health()
+    dependencies = health["dependencies"]
+    runtime_enabled = settings.ai_runtime == "hermes"
+    log_worker = (
+        dependencies.get("ai_worker", {"status": "unknown"})
+        if runtime_enabled
+        else {"status": "not_required"}
+    )
+    daily_configured = settings.daily_report_ai_enabled
+    daily_enabled = runtime_enabled and daily_configured
+    if not daily_configured:
+        daily_worker = {"status": "not_required"}
+    elif not runtime_enabled:
+        daily_worker = {"status": "not_configured"}
+    else:
+        daily_worker = _check_http_dependency(
+            settings.daily_report_worker_health_url,
+            name="daily-report-worker",
+        )
+
+    successful_runs = []
+    log_run = db.execute(
+        select(AnalysisRun.provider, AnalysisRun.runtime_model, Job.completed_at)
+        .join(Job, Job.id == AnalysisRun.job_id)
+        .where(Job.status == "COMPLETED", Job.completed_at.is_not(None))
+        .order_by(Job.completed_at.desc())
+        .limit(1)
+    ).first()
+    if log_run is not None:
+        successful_runs.append((log_run.completed_at, "log_triage", log_run.provider, log_run.runtime_model))
+    report_run = db.execute(
+        select(Report.provider, Report.runtime_model, Job.completed_at)
+        .join(Job, Job.id == Report.job_id)
+        .where(Job.status == "COMPLETED", Job.completed_at.is_not(None))
+        .order_by(Job.completed_at.desc())
+        .limit(1)
+    ).first()
+    if report_run is not None:
+        successful_runs.append((report_run.completed_at, "daily_report", report_run.provider, report_run.runtime_model))
+    latest = max(successful_runs, key=lambda item: item[0]) if successful_runs else None
+
+    queues = dependencies.get("rabbitmq", {}).get("detail", {}).get("queues", {})
+    return {
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "runtime": "Hermes" if runtime_enabled else "disabled",
+        "api_gate": "enabled" if runtime_enabled else "disabled",
+        "hermes": dependencies.get("ai_runtime", {"status": "disabled"}),
+        "log_analysis": {
+            "status": "enabled" if runtime_enabled else "disabled",
+            "worker": log_worker,
+            "profile": "noc-log-analysis" if runtime_enabled else None,
+            "queue_depth": queues.get("log_triage", {}).get("ready"),
+            "dlq_depth": queues.get("log_triage", {}).get("dead_letter"),
+        },
+        "daily_report": {
+            "status": "enabled" if daily_enabled else ("not_configured" if daily_configured else "disabled"),
+            "worker": daily_worker,
+            "profile": "noc-daily-report" if daily_enabled else None,
+            "queue_depth": queues.get("daily_report", {}).get("ready"),
+            "dlq_depth": queues.get("daily_report", {}).get("dead_letter"),
+        },
+        "last_successful_job": None if latest is None else {
+            "job_type": latest[1],
+            "completed_at": latest[0].isoformat(),
+            "provider": latest[2],
+            "model": latest[3],
+        },
+        "dependencies": {
+            name: dependencies.get(name, {"status": "unknown"})
+            for name in ("postgresql", "rabbitmq", "minio")
+        },
+    }
 
 
 @router.patch("/system-config", response_model=SystemConfigOut)

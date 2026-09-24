@@ -10,15 +10,115 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 
 from app.core.config import settings
+from app.core.storage import delete_object_versions, evidence_object_key
 from app.db.session import SessionLocal
 from app.evidence_lifecycle import EvidencePurgePlan, purge_storage, references_for
-from app.models.models import Evidence
+from app.models.models import Evidence, EvidenceUploadIntent
 
 logger = logging.getLogger("app.evidence_purge_worker")
+
+
+def sweep_abandoned_upload_intents(db, *, limit: int = 50) -> int:
+    """Expire stale upload intents and remove only their exact server-owned object.
+
+    The row lock serializes this cleanup with `/complete`. A completion that
+    already holds the row lock wins; once this sweep owns an expired intent,
+    completion cannot create Evidence from the same upload while deletion is
+    in progress. Storage errors leave the intent retryable.
+    """
+    settled = 0
+    skipped_ids = set()
+    now = datetime.now(timezone.utc)
+    for _ in range(limit):
+        query = select(EvidenceUploadIntent).where(
+            EvidenceUploadIntent.state.in_(("OPEN", "EXPIRED")),
+            EvidenceUploadIntent.expires_at <= now,
+        )
+        if skipped_ids:
+            query = query.where(~EvidenceUploadIntent.id.in_(skipped_ids))
+        intent = db.scalar(
+            query.order_by(EvidenceUploadIntent.expires_at, EvidenceUploadIntent.created_at)
+            .with_for_update(skip_locked=True)
+            .limit(1)
+        )
+        if intent is None:
+            db.rollback()
+            break
+
+        identity_is_valid = (
+            intent.bucket == settings.minio_bucket_evidence
+            and intent.object_key
+            == evidence_object_key(
+                str(intent.incident_id),
+                intent.evidence_type,
+                intent.original_filename,
+                intent.id,
+            )
+        )
+        if intent.evidence_id is not None:
+            logger.warning(
+                "upload intent cleanup skipped intent_id=%s reason=%s",
+                intent.id,
+                "evidence_reference",
+            )
+            intent.state = "COMPLETED"
+            try:
+                db.commit()
+                settled += 1
+            except Exception:
+                db.rollback()
+                logger.exception("upload intent settlement failed intent_id=%s", intent.id)
+            continue
+        if not identity_is_valid:
+            logger.error("upload intent cleanup refused mismatched storage identity intent_id=%s", intent.id)
+            skipped_ids.add(intent.id)
+            intent.state = "EXPIRED"
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
+                logger.exception("mismatched upload intent could not be expired intent_id=%s", intent.id)
+            continue
+
+        referenced = db.scalar(
+            select(Evidence.id).where(
+                Evidence.bucket == intent.bucket,
+                Evidence.object_key == intent.object_key,
+            ).limit(1)
+        )
+        if referenced is not None:
+            logger.warning("upload intent cleanup skipped referenced object intent_id=%s", intent.id)
+            intent.state = "COMPLETED"
+            intent.evidence_id = referenced
+            try:
+                db.commit()
+                settled += 1
+            except Exception:
+                db.rollback()
+                logger.exception("upload intent settlement failed intent_id=%s", intent.id)
+            continue
+
+        try:
+            deleted_versions = delete_object_versions(intent.bucket, intent.object_key)
+            if deleted_versions:
+                logger.info(
+                    "orphan upload object removed intent_id=%s versions=%s",
+                    intent.id,
+                    deleted_versions,
+                )
+            intent.state = "CLEANED"
+            db.commit()
+            settled += 1
+        except Exception:
+            db.rollback()
+            skipped_ids.add(intent.id)
+            logger.exception("upload intent cleanup failed intent_id=%s; retrying later", intent.id)
+    return settled
 
 
 def sweep_pending_purges(db, *, limit: int = 50) -> int:
@@ -72,6 +172,7 @@ def run_forever(stop_event: threading.Event | None = None) -> None:
         db = SessionLocal()
         try:
             sweep_pending_purges(db)
+            sweep_abandoned_upload_intents(db)
         except Exception:
             db.rollback()
             logger.exception("pending evidence purge sweep failed")

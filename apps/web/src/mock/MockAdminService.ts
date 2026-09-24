@@ -11,6 +11,7 @@ import type {
   StorageBucketStatus,
   SystemConfig,
   SystemConfigUpdate,
+  RuntimeStatus,
 } from "@/types/admin";
 import { mockUsers, mockAuditLog } from "@/mock/fixtures/admin";
 
@@ -199,6 +200,35 @@ export class MockAdminService implements AdminService {
 
   async getSystemConfig(): Promise<SystemConfig> {
     return { ...this.systemConfig };
+  }
+
+  async getRuntimeStatus(): Promise<RuntimeStatus> {
+    return {
+      checked_at: new Date().toISOString(),
+      runtime: "Hermes",
+      api_gate: "enabled",
+      hermes: { status: "healthy" },
+      log_analysis: {
+        status: "enabled",
+        worker: { status: "healthy" },
+        profile: "noc-log-analysis",
+        queue_depth: 0,
+        dlq_depth: 0,
+      },
+      daily_report: {
+        status: "disabled",
+        worker: { status: "not_required" },
+        profile: null,
+        queue_depth: 0,
+        dlq_depth: 0,
+      },
+      last_successful_job: null,
+      dependencies: {
+        postgresql: { status: "healthy" },
+        rabbitmq: { status: "healthy" },
+        minio: { status: "healthy" },
+      },
+    };
   }
 
   async updateSystemConfig(update: SystemConfigUpdate): Promise<SystemConfig> {

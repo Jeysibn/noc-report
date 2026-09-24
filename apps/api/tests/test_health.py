@@ -1,4 +1,6 @@
 from app import operational_health
+from io import BytesIO
+from urllib.error import HTTPError
 
 
 def test_liveness_is_process_local(client):
@@ -137,3 +139,21 @@ def test_ollama_model_list_is_interpreted_as_health(monkeypatch):
     monkeypatch.setattr(operational_health.urllib.request, "urlopen", lambda *_args, **_kwargs: Response())
     monkeypatch.setattr(operational_health.settings, "local_prefill_model", "qwen2.5:3b-instruct-q4_K_M")
     assert operational_health._check_ollama()["status"] == "healthy"
+
+
+def test_worker_readiness_http_503_preserves_degraded_payload(monkeypatch):
+    def unavailable(*_args, **_kwargs):
+        raise HTTPError(
+            "http://worker/health/ready",
+            503,
+            "not ready",
+            {},
+            BytesIO(b'{"status":"degraded","component":"ai-worker"}'),
+        )
+
+    monkeypatch.setattr(operational_health.urllib.request, "urlopen", unavailable)
+    result = operational_health._check_http_dependency("http://worker/health/ready", name="ai-worker")
+    assert result == {
+        "status": "degraded",
+        "detail": {"status": "degraded", "component": "ai-worker"},
+    }

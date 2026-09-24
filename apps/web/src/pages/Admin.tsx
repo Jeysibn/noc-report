@@ -7,6 +7,7 @@ import { StatusPill } from "@/components/ui/StatusPill";
 import { FormField, Input, Select } from "@/components/ui/Form";
 import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/ui/Modal";
+import { RuntimePanel } from "@/components/admin/RuntimePanel";
 import { formatTime } from "@/lib/incidentStatus";
 import { hasPermission } from "@/lib/session";
 import { adminService } from "@/services";
@@ -18,7 +19,7 @@ import type {
   RoleInfo,
   ShiftDefinition,
   StorageBucketStatus,
-  SystemConfig,
+  RuntimeStatus,
 } from "@/types/admin";
 
 const roleDescriptions: Record<string, string> = {
@@ -31,9 +32,7 @@ const roleDescriptions: Record<string, string> = {
 /**
  * Admin: Users, Roles, Shift Configuration, AI Runtime status,
  * Storage, Queue, Audit — grouped as tabs on one page per the plan's Admin
- * scope table. Users/Roles/Shift Configuration/Storage/Queue/Audit are all
- * wired to real backend endpoints. The AI tab is intentionally read-only
- * while no external runtime is configured.
+ * scope table. Runtime status is a safe, aggregated server-side view.
  */
 export function Admin() {
   const [dlqStatus, setDlqStatus] = useState<DlqQueueStatus[] | null>(null);
@@ -79,8 +78,8 @@ export function Admin() {
   >(null);
   const [storageError, setStorageError] = useState<string | null>(null);
 
-  const [systemConfig, setSystemConfig] = useState<SystemConfig | null>(null);
-  const [systemConfigError, setSystemConfigError] = useState<string | null>(
+  const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null);
+  const [runtimeStatusError, setRuntimeStatusError] = useState<string | null>(
     null,
   );
 
@@ -126,12 +125,12 @@ export function Admin() {
       })
       .catch(() => setStorageError("Could not load storage status."));
     adminService
-      .getSystemConfig()
-      .then((config) => {
-        setSystemConfig(config);
-        setSystemConfigError(null);
+      .getRuntimeStatus()
+      .then((runtime) => {
+        setRuntimeStatus(runtime);
+        setRuntimeStatusError(null);
       })
-      .catch(() => setSystemConfigError("Could not load AI configuration."));
+      .catch(() => setRuntimeStatusError("Could not load runtime status."));
   }, [loadUsers, loadShiftDefinitions]);
 
   async function handleToggleShift(def: ShiftDefinition) {
@@ -609,33 +608,7 @@ export function Admin() {
           </TabsContent>
 
           <TabsContent value="ai">
-            <Card className="flex flex-col gap-4">
-              <CardTitle>AI Runtime</CardTitle>
-              {systemConfigError && (
-                <p className="text-sm text-danger" role="alert">
-                  {systemConfigError}
-                </p>
-              )}
-              {systemConfig === null && !systemConfigError && (
-                <p className="text-sm text-muted">Loading runtime status…</p>
-              )}
-              {systemConfig !== null && (
-                <>
-                  <p className="text-sm text-muted">
-                    No external AI runtime is currently configured. New log
-                    analysis and report generation fail clearly and do not
-                    create queue jobs.
-                  </p>
-                  <p className="text-sm text-muted">
-                    Worker timeout: {systemConfig.jobTimeoutSeconds}s ·
-                    capacity: {systemConfig.maxConcurrentJobs}
-                  </p>
-                  <div className="flex items-center gap-2 border-t border-border pt-4 text-sm text-muted">
-                    Last updated {formatTime(systemConfig.updatedAt)}
-                  </div>
-                </>
-              )}
-            </Card>
+            <RuntimePanel status={runtimeStatus} error={runtimeStatusError} />
           </TabsContent>
 
           <TabsContent value="storage">

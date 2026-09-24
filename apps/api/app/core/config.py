@@ -1,4 +1,5 @@
 from typing import Literal
+from urllib.parse import urlparse
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -17,7 +18,7 @@ class Settings(BaseSettings):
     # `assert_production_secrets_are_safe` below has something to gate on
     # (never enforced in development, where every insecure default here
     # exists on purpose for a zero-config local run).
-    environment: str = "development"
+    environment: Literal["development", "test", "production"] = "development"
 
     database_url: str = "postgresql+psycopg2://noc:noc@localhost:55432/noc_report"
     jwt_secret: str = "dev-only-secret-change-me"
@@ -50,9 +51,10 @@ class Settings(BaseSettings):
     hermes_base_url: str = "http://localhost:8642"
     # The API checks the worker process separately from Hermes liveness. A
     # containerized deployment should override this with the internal service
-    # name (for example http://ai-worker:8092/health); the local default is
+    # name (for example http://ai-worker:8092/health/ready); the local default is
     # loopback because the development API runs on the host.
-    ai_worker_health_url: str = "http://localhost:8092/health"
+    ai_worker_health_url: str = "http://localhost:8092/health/ready"
+    daily_report_worker_health_url: str = "http://localhost:8093/health/ready"
     # Phase 2 remains opt-in. The separate Hermes daily-report profile and
     # worker path must be deliberately enabled after the Phase 1 quality gate.
     daily_report_ai_enabled: bool = False
@@ -139,9 +141,27 @@ def assert_production_secrets_are_safe(config: Settings = settings) -> None:
         return
 
     still_default = [name for name, default in _INSECURE_DEFAULTS.items() if getattr(config, name) == default]
-    if not config.allowed_cors_origins or "*" in config.allowed_cors_origins:
+    if len(config.jwt_secret) < 32:
+        still_default.append("jwt_secret (must be at least 32 characters)")
+    database = urlparse(config.database_url)
+    if database.password == "noc":
+        still_default.append("database_url credentials")
+    rabbit = urlparse(config.rabbitmq_url)
+    if rabbit.password == "noc-rabbit-secret":
+        still_default.append("rabbitmq_url credentials")
+    if config.minio_access_key == "noc-minio" or config.minio_secret_key == "noc-minio-secret":
+        still_default.append("MinIO credentials")
+    if not config.allowed_cors_origins or any("*" in origin for origin in config.allowed_cors_origins):
         still_default.append("cors_origins")
-    if any(origin.startswith("http://localhost") or origin.startswith("http://127.0.0.1") for origin in config.allowed_cors_origins):
+    if any(
+        urlparse(origin).scheme != "https"
+        or not urlparse(origin).hostname
+        or urlparse(origin).path not in {"", "/"}
+        or urlparse(origin).params
+        or urlparse(origin).query
+        or urlparse(origin).fragment
+        for origin in config.allowed_cors_origins
+    ):
         still_default.append("cors_origins")
     if still_default:
         raise RuntimeError(

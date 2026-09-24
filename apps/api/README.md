@@ -80,14 +80,22 @@ HERMES_API_KEY='replace-with-a-long-random-value' \
 docker compose -f infrastructure/docker-compose.dev.yml up -d postgres minio rabbitmq hermes ai-worker
 ```
 
+The log worker consumes only `log_triage`. The Daily Report worker consumes
+only `daily_report` and starts separately with
+`--profile daily-report daily-report-worker`; it has its own health port and
+Hermes timeout.
+
 The Hermes API is internal-only in Compose. Provider login/model selection is a
 manual Hermes setup step; do not commit provider credentials or copy them into
-FastAPI configuration. The AI worker exposes loopback-only operator health on
-port `8092`; set `AI_WORKER_HEALTH_URL` to the internal worker service URL when
-the API itself runs in a container. Hermes exposes `/health` only on the
-internal Docker network.
+FastAPI configuration. The log worker exposes loopback-only diagnostics on
+port `8092`; the Daily Report worker uses port `8093`. Workers expose
+`/health/live` for process liveness and `/health/ready` for broker and assigned
+profile readiness. Set `AI_WORKER_HEALTH_URL` and
+`DAILY_REPORT_WORKER_HEALTH_URL` to the internal readiness URLs when the API
+runs in a container. Hermes exposes `/health` only on the internal Docker
+network.
 
-The worker has two isolated profiles:
+The worker processes use two isolated profiles:
 
 - `noc-log-analysis` → `log-triage-summary` for incident log analysis.
 - `noc-daily-report` → `daily-alert-report` for bilingual narrative only.

@@ -29,6 +29,21 @@ jobs:
       - name: Validate the Hermes Compose contract
         run: HERMES_API_KEY=ci-only-not-a-runtime-secret docker compose -f infrastructure/docker-compose.dev.yml config --quiet
 
+  hermes-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Boot the pinned Hermes runtime and check its HTTP contract
+        env:
+          HERMES_API_KEY: ci-hermes-contract-token-with-no-provider-credentials
+        run: |
+          set -euo pipefail
+          compose=(docker compose --project-name hermes-contract -f infrastructure/docker-compose.dev.yml --profile hermes-contract)
+          cleanup() { "${compose[@]}" down --volumes --remove-orphans; }
+          trap cleanup EXIT
+          "${compose[@]}" up --build --abort-on-container-exit --exit-code-from hermes-contract hermes-contract
+
   api:
     runs-on: ubuntu-latest
     services:

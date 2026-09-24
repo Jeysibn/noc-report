@@ -103,3 +103,31 @@ export interface SystemConfigUpdate {
   jobTimeoutSeconds?: number;
   maxConcurrentJobs?: number;
 }
+
+export interface RuntimeStatus {
+  checked_at: string;
+  runtime: string;
+  api_gate: string;
+  hermes: { status: string; detail?: unknown };
+  log_analysis: {
+    status: string;
+    worker: { status: string; detail?: unknown };
+    profile: string | null;
+    queue_depth: number | null;
+    dlq_depth: number | null;
+  };
+  daily_report: {
+    status: string;
+    worker: { status: string; detail?: unknown };
+    profile: string | null;
+    queue_depth: number | null;
+    dlq_depth: number | null;
+  };
+  last_successful_job: {
+    job_type: string;
+    completed_at: string;
+    provider: string | null;
+    model: string | null;
+  } | null;
+  dependencies: Record<string, { status: string; detail?: unknown }>;
+}

@@ -12,6 +12,7 @@ import type {
   StorageBucketStatus,
   SystemConfig,
   SystemConfigUpdate,
+  RuntimeStatus,
 } from "@/types/admin";
 import { httpRequest } from "@/lib/http";
 
@@ -265,6 +266,10 @@ export class ApiAdminService implements AdminService {
       "/api/v1/admin/system-config",
     );
     return toSystemConfig(raw);
+  }
+
+  async getRuntimeStatus(): Promise<RuntimeStatus> {
+    return httpRequest<RuntimeStatus>("/api/v1/admin/runtime");
   }
 
   async updateSystemConfig(update: SystemConfigUpdate): Promise<SystemConfig> {

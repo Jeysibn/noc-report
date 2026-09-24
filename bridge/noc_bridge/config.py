@@ -8,6 +8,8 @@ application and internal-runtime connection settings.
 from __future__ import annotations
 
 import pathlib
+from typing import Literal
+from urllib.parse import urlparse
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -15,7 +17,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class RuntimeSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="RUNTIME_", env_file=".env", extra="ignore")
 
-    environment: str = "development"
+    environment: Literal["development", "test", "production"] = "development"
+    worker_kind: Literal["log_triage", "daily_report"] = "log_triage"
     rabbitmq_url: str = "amqp://noc:noc-rabbit-secret@localhost:55672/"
     database_url: str = "postgresql://noc:noc@localhost:55432/noc_report"
     minio_endpoint_url: str = "http://localhost:59000"
@@ -58,3 +61,14 @@ def assert_runtime_secrets_are_safe(config: RuntimeSettings = settings) -> None:
         raise RuntimeError("Refusing to start the production AI worker without a real HERMES_API_KEY.")
     if len(config.hermes_api_key) < 32:
         raise RuntimeError("Refusing to start the production AI worker with a short HERMES_API_KEY.")
+    rabbit = urlparse(config.rabbitmq_url)
+    database = urlparse(config.database_url)
+    unsafe = []
+    if rabbit.password == "noc-rabbit-secret":
+        unsafe.append("RUNTIME_RABBITMQ_URL")
+    if database.password == "noc":
+        unsafe.append("RUNTIME_DATABASE_URL")
+    if config.minio_access_key == "noc-minio" or config.minio_secret_key == "noc-minio-secret":
+        unsafe.append("RUNTIME_MINIO credentials")
+    if unsafe:
+        raise RuntimeError("Refusing to start the production AI worker with development credentials: " + ", ".join(unsafe))

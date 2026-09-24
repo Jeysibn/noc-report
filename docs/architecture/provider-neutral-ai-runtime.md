@@ -15,18 +15,23 @@ FastAPI
    |
 Transactional outbox
    |
-RabbitMQ (`log_triage` and `daily_report`)
-   |
-AI Worker (claim, verify, preprocess, validate, persist)
-   |
-authenticated internal HTTP
-   |
-Hermes (`noc-log-analysis` or `noc-daily-report` profile)
+RabbitMQ
+   |-------------------------------|
+   |                               |
+log_triage                    daily_report
+   |                               |
+Log Analysis Worker           Daily Report Worker (opt-in)
+   |                               |
+noc-log-analysis profile      noc-daily-report profile
+   |                               |
+   +------ authenticated HTTP -----+
+                   |
+                 Hermes
    |
 configured provider/model
 ```
 
-Operational health reports Hermes liveness and AI Worker process health as
+Operational health reports Hermes liveness and each AI Worker readiness as
 separate dependencies. AI degradation does not make the core API readiness
 endpoint fail; PostgreSQL, RabbitMQ, and MinIO remain the core readiness gate.
 
@@ -60,8 +65,10 @@ persists the result or report artifact.
 Hermes is configured with two task-specific profiles: `noc-log-analysis`
 loads `log-triage-summary`, and `noc-daily-report` loads `daily-alert-report`.
 Both use the repository's skills through a read-only mount, allow one active
-run, and expose no general-purpose toolsets. The worker selects the profile
-from the immutable job type; the model is never asked to choose a skill.
+run, and expose no general-purpose toolsets. Each worker consumes only its
+assigned queue and validates only its assigned profile, so a Daily Report
+profile failure cannot prevent log analysis from starting. The model is never
+asked to choose a skill.
 
 For Daily Alert Reports, Hermes returns only a bilingual narrative
 `ReportPlan`. The worker validates it, stores the plan for crash recovery, and
@@ -80,5 +87,6 @@ manual provider setup boundary and failure classification.
 
 Daily Alert Report generation remains feature-gated. Enable it only after the
 Phase 1 log-analysis quality gate has passed, with
-`DAILY_REPORT_AI_ENABLED=true`. The worker consumes both queues but keeps the
-profiles, input projections, output schemas, and provenance separate.
+`DAILY_REPORT_AI_ENABLED=true` and start the independent
+`daily-report-worker` Compose profile. When the feature is disabled, that
+worker is not required; a long report job cannot occupy the log worker.

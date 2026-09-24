@@ -10,6 +10,7 @@ import type {
   StorageBucketStatus,
   SystemConfig,
   SystemConfigUpdate,
+  RuntimeStatus,
 } from "@/types/admin";
 
 export interface AdminService {
@@ -39,4 +40,5 @@ export interface AdminService {
   /** Generic worker configuration retained outside provider selection. */
   getSystemConfig(): Promise<SystemConfig>;
   updateSystemConfig(update: SystemConfigUpdate): Promise<SystemConfig>;
+  getRuntimeStatus(): Promise<RuntimeStatus>;
 }

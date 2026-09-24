@@ -38,6 +38,10 @@ def _timestamp(value: str | None) -> str | None:
 def _parse_timestamp(value: str | None) -> datetime | None:
     if not value:
         return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 
 def _trace_id(line: str, structured: dict | None) -> str | None:
@@ -55,10 +59,6 @@ def _trace_id(line: str, structured: dict | None) -> str | None:
                     return str(value).strip()
     matches = _TRACE.findall(line)
     return matches[0] if matches else None
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
 
 
 def _json_object(line: str) -> dict | None:

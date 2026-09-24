@@ -111,6 +111,30 @@ def delete_object(bucket: str, key: str, *, version_id: str | None = None) -> No
     get_client().delete_object(**params)
 
 
+def delete_object_versions(bucket: str, key: str) -> int:
+    """Delete every stored version for one exact, server-verified object key.
+
+    Upload URLs may be reused before expiry, creating multiple versions of
+    the same intent key. Listing by prefix is narrowed back to exact key
+    equality before any version is deleted.
+    """
+    client = get_client()
+    deleted = 0
+    paginator = client.get_paginator("list_object_versions")
+    for page in paginator.paginate(Bucket=bucket, Prefix=key):
+        for field in ("Versions", "DeleteMarkers"):
+            for item in page.get(field, []):
+                if item.get("Key") != key:
+                    continue
+                version_id = item.get("VersionId")
+                params = {"Bucket": bucket, "Key": key}
+                if version_id is not None:
+                    params["VersionId"] = version_id
+                client.delete_object(**params)
+                deleted += 1
+    return deleted
+
+
 def get_object_bytes(bucket: str, key: str, *, version_id: str | None = None) -> bytes:
     params: dict = {"Bucket": bucket, "Key": key}
     if version_id:

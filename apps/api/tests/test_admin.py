@@ -1,6 +1,45 @@
 from tests.conftest import auth_headers, make_user
 
 
+def test_runtime_status_distinguishes_disabled_daily_ai_from_log_worker_failure(
+    client, db_session, seeded, monkeypatch
+):
+    from app.api.v1.routers import admin as admin_router
+
+    make_user(db_session, "runtime-admin", "Admin")
+    headers = auth_headers(client, "runtime-admin")
+    monkeypatch.setattr(admin_router.settings, "ai_runtime", "hermes")
+    monkeypatch.setattr(admin_router.settings, "daily_report_ai_enabled", False)
+    monkeypatch.setattr(
+        admin_router,
+        "dependency_health",
+        lambda: {
+            "dependencies": {
+                "ai_worker": {"status": "degraded", "detail": {"metrics": {"runtime_ready": False}}},
+                "ai_runtime": {"status": "unavailable"},
+                "rabbitmq": {
+                    "status": "healthy",
+                    "detail": {"queues": {
+                        "log_triage": {"ready": 2, "dead_letter": 1},
+                        "daily_report": {"ready": 0, "dead_letter": 0},
+                    }},
+                },
+                "postgresql": {"status": "healthy"},
+                "minio": {"status": "healthy"},
+            }
+        },
+    )
+
+    response = client.get("/api/v1/admin/runtime", headers=headers)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["log_analysis"]["worker"]["status"] == "degraded"
+    assert body["log_analysis"]["queue_depth"] == 2
+    assert body["daily_report"]["status"] == "disabled"
+    assert body["daily_report"]["worker"]["status"] == "not_required"
+    assert "api_key" not in response.text.lower()
+
+
 def test_create_user_and_list(client, db_session, seeded):
     make_user(db_session, "root", "Admin")
     headers = auth_headers(client, "root")

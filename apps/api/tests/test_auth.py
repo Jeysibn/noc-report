@@ -2,6 +2,22 @@ from app.models.models import AuditLog
 from tests.conftest import make_user
 
 
+def test_refresh_cookie_security_follows_validated_environment(monkeypatch):
+    from fastapi import Response
+
+    from app.api.v1.routers import auth as auth_router
+
+    response = Response()
+    monkeypatch.setattr(auth_router.settings, "environment", "production")
+    auth_router._set_refresh_cookie(response, "opaque-refresh-token")
+    assert "secure" in response.headers["set-cookie"].lower()
+
+    response = Response()
+    monkeypatch.setattr(auth_router.settings, "environment", "development")
+    auth_router._set_refresh_cookie(response, "opaque-refresh-token")
+    assert "secure" not in response.headers["set-cookie"].lower()
+
+
 def test_login_success(client, db_session):
     make_user(db_session, "operator1", "NOC")
     resp = client.post(

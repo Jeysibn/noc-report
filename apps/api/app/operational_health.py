@@ -7,6 +7,7 @@ instead of being converted into a false green dashboard state.
 from __future__ import annotations
 
 import json
+import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
@@ -67,6 +68,15 @@ def _check_http_dependency(url: str, *, name: str) -> dict:
         if status in {"degraded", "unavailable"}:
             return {"status": status, "detail": payload}
         return {"status": "unknown", "detail": payload}
+    except urllib.error.HTTPError as exc:
+        try:
+            payload = json.loads(exc.read().decode("utf-8"))
+            status = payload.get("status")
+            if status in {"degraded", "unavailable"}:
+                return {"status": status, "detail": payload}
+        except Exception:
+            pass
+        return {"status": "unavailable", "detail": f"{name}: HTTP {exc.code}"}
     except Exception as exc:
         return {"status": "unavailable", "detail": f"{name}: {type(exc).__name__}"}
 
@@ -151,7 +161,7 @@ def dependency_health() -> dict:
         "rabbitmq": _check_rabbitmq,
         "minio": _check_minio,
         "ai_runtime": _check_hermes if settings.ai_runtime == "hermes" else lambda: {
-            "status": "disabled", "detail": "no external AI runtime is configured"
+            "status": "disabled", "detail": "AI runtime is disabled by configuration"
         },
     }
     if settings.local_prefill_ai_enabled:

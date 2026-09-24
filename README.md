@@ -44,21 +44,29 @@ field mapping. Suggestions require operator review before an Incident is
 created. See [`docs/phase-12-local-ai.md`](docs/phase-12-local-ai.md).
 
 The semantic runtime is provider-neutral. Local API development defaults to
-`AI_RUNTIME=disabled`; the Compose stack enables the separate Hermes service
-and `ai-worker` for log analysis and the opt-in Daily Alert Report flow. The
-worker owns evidence verification, deterministic preprocessing, RabbitMQ
-settlement, deterministic report rendering, and result validation; Hermes owns
-model/provider execution. Historical analyses and reports remain readable
-regardless of runtime availability.
+`AI_RUNTIME=disabled`; the Compose stack enables Hermes and the independent
+log worker. Daily Alert Report processing has a separate opt-in worker and
+queue consumer. The workers own evidence verification, deterministic
+preprocessing, RabbitMQ settlement, deterministic report rendering, and result
+validation; Hermes owns model/provider execution. Historical analyses and
+reports remain readable regardless of runtime availability.
 
 ```bash
 HERMES_API_KEY='replace-with-a-long-random-value' \
 docker compose -f infrastructure/docker-compose.dev.yml up -d postgres minio rabbitmq hermes ai-worker
 ```
 
+Start the batch worker only when Daily Report AI is enabled:
+
+```bash
+docker compose -f infrastructure/docker-compose.dev.yml --profile daily-report up -d daily-report-worker
+```
+
 `HERMES_API_KEY` is required; Compose intentionally fails closed rather than
-using a shared development credential. For production, also set
-`RUNTIME_ENVIRONMENT=production` so the worker rejects missing or short keys.
+using a shared development credential. For production, set `ENVIRONMENT=production`
+for the API and `RUNTIME_ENVIRONMENT=production` for workers. Both accept only
+`development`, `test`, or `production`; production startup rejects development
+credentials and non-HTTPS browser origins.
 
 Configure the provider inside the dedicated Hermes profiles before submitting a
 real analysis or report. Set `DAILY_REPORT_AI_ENABLED=true` on the API only
@@ -84,8 +92,10 @@ Run the API and runtime-support suites sequentially against separate test databa
 lifecycles; do not run them concurrently against the same local Postgres.
 
 The API exposes `/health` for liveness and `/health/dependencies` plus
-`/health/readiness` for real dependency state. The dashboard treats degraded,
-unavailable, and unknown dependencies distinctly.
+`/health/readiness` for dependency state. Workers expose `/health/live` and
+`/health/ready`; container health uses readiness. The Admin Runtime tab shows
+worker/profile state, queue and DLQ depths, and disabled features without
+exposing credentials.
 
 ## Daily Alert Report contract
 
