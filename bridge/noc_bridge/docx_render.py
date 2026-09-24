@@ -51,34 +51,94 @@ _SINGLE_MAX_HEIGHT_IN = 3.4
 _PAIR_MAX_WIDTH_IN = 3.0
 _PAIR_MAX_HEIGHT_IN = 3.2
 _REFERENCE_FONT = "Noto Sans CJK SC"
-_BODY_COLOR = RGBColor(26, 26, 26)
-_MUTED_COLOR = RGBColor(102, 102, 102)
-_ALERT_COLOR = RGBColor(46, 90, 172)
+_BODY_COLOR = RGBColor(30, 41, 59)
+_HEADING_COLOR = RGBColor(15, 42, 79)
+_MUTED_COLOR = RGBColor(100, 116, 139)
+_ALERT_COLOR = RGBColor(37, 99, 235)
+_LIGHT_FILL = "F1F5F9"
+_ACCENT_FILL = "EEF4FF"
+_RULE_COLOR = "CBD5E1"
 
 
 def _set_east_asia_font(style, name: str = _REFERENCE_FONT) -> None:
     style.font.name = name
-    style._element.get_or_add_rPr().rFonts.set(qn("w:eastAsia"), name)
+    fonts = style._element.get_or_add_rPr().rFonts
+    fonts.set(qn("w:ascii"), name)
+    fonts.set(qn("w:hAnsi"), name)
+    fonts.set(qn("w:eastAsia"), name)
+
+
+def _set_paragraph_border(paragraph, *, side: str, color: str = _RULE_COLOR, size: str = "8", space: str = "4") -> None:
+    p_pr = paragraph._p.get_or_add_pPr()
+    borders = p_pr.find(qn("w:pBdr"))
+    if borders is None:
+        borders = OxmlElement("w:pBdr")
+        p_pr.append(borders)
+    border = borders.find(qn(f"w:{side}"))
+    if border is None:
+        border = OxmlElement(f"w:{side}")
+        borders.append(border)
+    border.set(qn("w:val"), "single")
+    border.set(qn("w:sz"), size)
+    border.set(qn("w:space"), space)
+    border.set(qn("w:color"), color)
+
+
+def _set_paragraph_shading(paragraph, fill: str) -> None:
+    p_pr = paragraph._p.get_or_add_pPr()
+    shading = p_pr.find(qn("w:shd"))
+    if shading is None:
+        shading = OxmlElement("w:shd")
+        p_pr.append(shading)
+    shading.set(qn("w:val"), "clear")
+    shading.set(qn("w:fill"), fill)
+
+
+def _format_heading(paragraph, *, level: int) -> None:
+    paragraph.paragraph_format.keep_with_next = True
+    if level == 1:
+        paragraph.paragraph_format.space_before = Pt(14)
+        paragraph.paragraph_format.space_after = Pt(6)
+        _set_paragraph_border(paragraph, side="bottom", size="12", space="5")
+    elif level == 2:
+        paragraph.paragraph_format.space_before = Pt(11)
+        paragraph.paragraph_format.space_after = Pt(5)
+        _set_paragraph_border(paragraph, side="bottom", color="D8E2F0", size="6", space="4")
+    elif level == 3:
+        paragraph.paragraph_format.space_before = Pt(8)
+        paragraph.paragraph_format.space_after = Pt(3)
+    for run in paragraph.runs:
+        run.font.name = _REFERENCE_FONT
+        fonts = run._element.get_or_add_rPr().rFonts
+        fonts.set(qn("w:ascii"), _REFERENCE_FONT)
+        fonts.set(qn("w:hAnsi"), _REFERENCE_FONT)
+        fonts.set(qn("w:eastAsia"), _REFERENCE_FONT)
+        run.font.italic = False
+        run.font.bold = True
+        run.font.color.rgb = _HEADING_COLOR if level <= 1 else _ALERT_COLOR
 
 
 def _configure_document(doc: Document, title: str, metadata: tuple[Metadata, ...]) -> None:
     """Apply the compact, reference-report typography and page geometry."""
     for section in doc.sections:
-        # Match the reference report's usable portrait page area (roughly
-        # 0.65in side margins and 0.62in top/bottom margins). Screenshot
+        # Keep a little more breathing room than the compact reference layout
+        # while leaving enough usable portrait page area for evidence.
         # bounds remain deliberately smaller than this area.
-        section.top_margin = Inches(0.62)
+        section.top_margin = Inches(0.68)
         section.bottom_margin = Inches(0.62)
-        section.left_margin = Inches(0.65)
-        section.right_margin = Inches(0.65)
+        section.left_margin = Inches(0.72)
+        section.right_margin = Inches(0.72)
         header = section.header.paragraphs[0]
         header.text = title
         header.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        header.paragraph_format.space_after = Pt(3)
+        _set_paragraph_border(header, side="bottom", color="E2E8F0", size="4", space="3")
         for run in header.runs:
             run.font.size = Pt(8)
             run.font.color.rgb = RGBColor(100, 116, 139)
         footer = section.footer.paragraphs[0]
         footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        _set_paragraph_border(footer, side="top", color="E2E8F0", size="4", space="3")
         date = next((m.value for m in metadata if m.label == "Date"), "")
         shift = next((m.value for m in metadata if m.label == "Shift"), "")
         footer.add_run(" · ".join(value for value in (date, shift) if value))
@@ -99,44 +159,44 @@ def _configure_document(doc: Document, title: str, metadata: tuple[Metadata, ...
         if style_name == "Normal":
             style.font.size = Pt(10)
             style.font.color.rgb = _BODY_COLOR
-            style.paragraph_format.space_after = Pt(4)
-            style.paragraph_format.line_spacing = 1.08
+            style.paragraph_format.space_after = Pt(5)
+            style.paragraph_format.line_spacing = 1.15
         elif style_name == "Title":
-            style.font.size = Pt(20)
+            style.font.size = Pt(22)
             style.font.bold = True
-            style.font.italic = True
-            style.font.color.rgb = _BODY_COLOR
+            style.font.italic = False
+            style.font.color.rgb = _HEADING_COLOR
         elif style_name == "Heading 1":
-            style.font.size = Pt(16)
+            style.font.size = Pt(15)
             style.font.bold = True
-            style.font.italic = True
-            style.font.color.rgb = _BODY_COLOR
-            style.paragraph_format.space_before = Pt(12)
+            style.font.italic = False
+            style.font.color.rgb = _HEADING_COLOR
+            style.paragraph_format.space_before = Pt(14)
             style.paragraph_format.space_after = Pt(6)
             style.paragraph_format.keep_with_next = True
         elif style_name == "Heading 2":
-            style.font.size = Pt(13)
+            style.font.size = Pt(12.5)
             style.font.bold = True
-            style.font.italic = True
+            style.font.italic = False
             style.font.color.rgb = _ALERT_COLOR
-            style.paragraph_format.space_before = Pt(10)
+            style.paragraph_format.space_before = Pt(11)
             style.paragraph_format.space_after = Pt(5)
             style.paragraph_format.keep_with_next = True
         elif style_name == "Heading 3":
-            style.font.size = Pt(11.5)
-            style.font.bold = True
-            style.font.italic = True
-            style.font.color.rgb = _BODY_COLOR
-            style.paragraph_format.space_before = Pt(8)
-            style.paragraph_format.space_after = Pt(4)
-            style.paragraph_format.keep_with_next = True
-        elif style_name == "Intense Quote":
             style.font.size = Pt(10.5)
             style.font.bold = True
-            style.font.italic = True
-            style.font.color.rgb = RGBColor(51, 51, 51)
-            style.paragraph_format.space_before = Pt(6)
+            style.font.italic = False
+            style.font.color.rgb = _ALERT_COLOR
+            style.paragraph_format.space_before = Pt(8)
             style.paragraph_format.space_after = Pt(3)
+            style.paragraph_format.keep_with_next = True
+        elif style_name == "Intense Quote":
+            style.font.size = Pt(10)
+            style.font.bold = True
+            style.font.italic = False
+            style.font.color.rgb = _ALERT_COLOR
+            style.paragraph_format.space_before = Pt(7)
+            style.paragraph_format.space_after = Pt(4)
 
 
 def _add_hyperlink(paragraph, url: str, text: str) -> None:
@@ -195,7 +255,9 @@ def _add_bookmark(paragraph, name: str) -> None:
 def _add_link_paragraph(doc: Document, link: Link) -> None:
     paragraph = doc.add_paragraph()
     paragraph.paragraph_format.keep_with_next = True
-    paragraph.paragraph_format.space_after = Pt(3)
+    paragraph.paragraph_format.left_indent = Inches(0.12)
+    paragraph.paragraph_format.space_after = Pt(4)
+    paragraph.paragraph_format.line_spacing = 1.0
     # The reference report presents compact, human-readable link labels
     # instead of printing long dashboard URLs into the evidence block.
     _add_hyperlink(paragraph, link.url, link.prefix or link.label)
@@ -291,7 +353,7 @@ def _add_screenshots(doc: Document, shots: tuple[Screenshot, ...], screenshot_fe
 
 def _add_alert_navigation(doc: Document, block: AlertNavigation) -> None:
     heading = doc.add_heading("Alert Navigation", level=3)
-    heading.paragraph_format.keep_with_next = True
+    _format_heading(heading, level=3)
     _add_bookmark(heading, "alerts_start")
     for entry in block.entries:
         paragraph = doc.add_paragraph(style="List Bullet")
@@ -301,12 +363,15 @@ def _add_alert_navigation(doc: Document, block: AlertNavigation) -> None:
 def _add_log_file(doc: Document, log_file: LogFileReference) -> None:
     paragraph = doc.add_paragraph()
     paragraph.paragraph_format.keep_with_next = True
-    paragraph.paragraph_format.space_before = Pt(4)
-    paragraph.paragraph_format.space_after = Pt(4)
+    paragraph.paragraph_format.left_indent = Inches(0.12)
+    paragraph.paragraph_format.space_before = Pt(5)
+    paragraph.paragraph_format.space_after = Pt(5)
+    paragraph.paragraph_format.line_spacing = 1.0
     run = paragraph.add_run("Log File: ")
     run.bold = True
-    run.italic = True
-    run.font.size = Pt(10.5)
+    run.font.name = _REFERENCE_FONT
+    run.font.size = Pt(10)
+    run.font.color.rgb = _HEADING_COLOR
     if log_file.url:
         _add_hyperlink(paragraph, log_file.url, log_file.filename)
     else:
@@ -316,21 +381,34 @@ def _add_log_file(doc: Document, log_file: LogFileReference) -> None:
 def _add_finds(doc: Document, heading: str, finds, *, zh: bool) -> None:
     compact = heading == "Secondary Finds"
     heading_paragraph = doc.add_paragraph(heading, style="Intense Quote")
-    heading_paragraph.paragraph_format.keep_with_next = True
+    heading_paragraph.paragraph_format.left_indent = Inches(0.06)
+    heading_paragraph.paragraph_format.right_indent = Inches(0.06)
+    _set_paragraph_shading(heading_paragraph, _ACCENT_FILL)
+    _set_paragraph_border(heading_paragraph, side="left", color="2563EB", size="18", space="6")
     for i, find in enumerate(finds, start=1):
         stats = f"（{find.stat}）" if (zh and find.stat) else (f" ({find.stat})" if find.stat else "")
         p = doc.add_paragraph()
-        p.paragraph_format.left_indent = Inches(0.1)
-        p.paragraph_format.right_indent = Inches(0.1)
+        p.paragraph_format.left_indent = Inches(0.30)
+        p.paragraph_format.first_line_indent = Inches(-0.20)
+        p.paragraph_format.right_indent = Inches(0.05)
         p.paragraph_format.space_after = Pt(2 if compact else 4)
-        label_run = p.add_run(f"{i}. {find.label}{stats}")
+        p.paragraph_format.line_spacing = 1.08
+        p.paragraph_format.keep_together = True
+        number_run = p.add_run(f"{i}. ")
+        number_run.font.color.rgb = _MUTED_COLOR
+        label_run = p.add_run(find.label)
         label_run.bold = True
-        if compact:
-            label_run.font.size = Pt(9.5)
+        label_run.font.color.rgb = _HEADING_COLOR
+        label_run.font.size = Pt(9.5 if compact else 10)
+        if stats:
+            stats_run = p.add_run(stats)
+            stats_run.bold = True
+            stats_run.font.color.rgb = _ALERT_COLOR
+            stats_run.font.size = Pt(9.5 if compact else 10)
         if find.detail:
             detail_run = p.add_run(f" - {find.detail}")
-            if compact:
-                detail_run.font.size = Pt(9.5)
+            detail_run.font.size = Pt(9.5 if compact else 10)
+            detail_run.font.color.rgb = _BODY_COLOR
 
 
 def _add_bilingual_find_list(doc: Document, find_list: BilingualFindList) -> None:
@@ -340,15 +418,23 @@ def _add_bilingual_find_list(doc: Document, find_list: BilingualFindList) -> Non
 
 def _add_bilingual_text(doc: Document, block: BilingualText) -> None:
     if block.heading_zh:
-        doc.add_heading(block.heading_zh, level=3)
+        _format_heading(doc.add_heading(block.heading_zh, level=3), level=3)
     zh = doc.add_paragraph(block.text_zh)
-    zh.paragraph_format.left_indent = Inches(0.1)
-    zh.paragraph_format.right_indent = Inches(0.1)
+    zh.paragraph_format.left_indent = Inches(0.12)
+    zh.paragraph_format.right_indent = Inches(0.12)
+    zh.paragraph_format.space_after = Pt(8)
+    zh.paragraph_format.line_spacing = 1.15
+    _set_paragraph_shading(zh, _LIGHT_FILL)
+    _set_paragraph_border(zh, side="left", color="93C5FD", size="12", space="6")
     if block.heading_en:
-        doc.add_heading(block.heading_en, level=3)
+        _format_heading(doc.add_heading(block.heading_en, level=3), level=3)
     en = doc.add_paragraph(block.text_en)
-    en.paragraph_format.left_indent = Inches(0.1)
-    en.paragraph_format.right_indent = Inches(0.1)
+    en.paragraph_format.left_indent = Inches(0.12)
+    en.paragraph_format.right_indent = Inches(0.12)
+    en.paragraph_format.space_after = Pt(8)
+    en.paragraph_format.line_spacing = 1.15
+    _set_paragraph_shading(en, _LIGHT_FILL)
+    _set_paragraph_border(en, side="left", color="93C5FD", size="12", space="6")
 
 
 def _add_incident_evidence(doc: Document, block: IncidentEvidence, screenshot_fetcher: ScreenshotFetcher | None, *, include_provenance: bool = False) -> None:
@@ -356,19 +442,24 @@ def _add_incident_evidence(doc: Document, block: IncidentEvidence, screenshot_fe
     # automatic pagination does not strand "Alert #n - <title>" alone at the
     # bottom of a page with its evidence pushed to the next one.
     heading = doc.add_heading("", level=2)
-    heading.paragraph_format.keep_with_next = True
     if block.navigation_target:
         _add_internal_hyperlink(heading, block.navigation_target, block.heading)
     else:
         heading.add_run(block.heading)
+    _format_heading(heading, level=2)
     _add_screenshots(doc, block.screenshots, screenshot_fetcher)
     if block.metadata:
         for index, item in enumerate(block.metadata):
             metadata = doc.add_paragraph()
+            metadata.paragraph_format.left_indent = Inches(0.12)
             metadata.paragraph_format.space_before = Pt(2 if index == 0 else 0)
-            metadata.paragraph_format.space_after = Pt(2)
-            metadata.add_run(f"{item.label}: ").bold = True
-            metadata.add_run(item.value)
+            metadata.paragraph_format.space_after = Pt(1)
+            metadata.paragraph_format.line_spacing = 1.0
+            label = metadata.add_run(f"{item.label}: ")
+            label.bold = True
+            label.font.color.rgb = _HEADING_COLOR
+            value = metadata.add_run(item.value)
+            value.font.color.rgb = _BODY_COLOR
     links = list(block.links)
     if block.link:
         links.insert(0, block.link)
@@ -388,7 +479,7 @@ def _add_analysis_reference(
     include_provenance: bool = False,
 ) -> None:
     heading = doc.add_heading(block.heading, level=2)
-    heading.paragraph_format.keep_with_next = True
+    _format_heading(heading, level=2)
     if heading.runs:
         heading.runs[0].font.color.rgb = _ALERT_COLOR
     if block.bookmark:
@@ -431,7 +522,7 @@ def _add_analysis_reference(
 
 def _render_block(doc: Document, block, screenshot_fetcher: ScreenshotFetcher | None, *, include_provenance: bool = False) -> None:
     if isinstance(block, Heading):
-        doc.add_heading(block.text, level=block.level)
+        _format_heading(doc.add_heading(block.text, level=block.level), level=block.level)
     elif isinstance(block, Paragraph):
         doc.add_paragraph(block.text, style=block.style) if block.style else doc.add_paragraph(block.text)
     elif isinstance(block, Metadata):
@@ -478,12 +569,13 @@ def render_document(
     title = doc.add_heading(document.title, level=0)
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
     title.paragraph_format.keep_with_next = True
-    title.paragraph_format.space_after = Pt(2)
+    title.paragraph_format.space_after = Pt(4)
+    _set_paragraph_border(title, side="bottom", color="93C5FD", size="14", space="6")
     if title.runs:
-        title.runs[0].font.size = Pt(20)
+        title.runs[0].font.size = Pt(22)
         title.runs[0].font.bold = True
-        title.runs[0].font.italic = True
-        title.runs[0].font.color.rgb = _BODY_COLOR
+        title.runs[0].font.italic = False
+        title.runs[0].font.color.rgb = _HEADING_COLOR
     if document.metadata:
         subtitle_values = [
             item.value if item.label in {"Date", "Shift"} else f"{item.label}: {item.value}"
@@ -491,15 +583,16 @@ def render_document(
         ]
         subtitle = doc.add_paragraph(" | ".join(subtitle_values))
         subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        subtitle.paragraph_format.space_after = Pt(12)
+        subtitle.paragraph_format.space_after = Pt(14)
+        subtitle.paragraph_format.line_spacing = 1.0
         for run in subtitle.runs:
-            run.font.size = Pt(10.5)
+            run.font.size = Pt(10)
             run.font.bold = True
-            run.font.italic = True
+            run.font.italic = False
             run.font.color.rgb = _MUTED_COLOR
 
     if include_provenance and document.provenance:
-        doc.add_heading("Audit Provenance", level=2)
+        _format_heading(doc.add_heading("Audit Provenance", level=2), level=2)
         for metadata in document.provenance:
             doc.add_paragraph(f"{metadata.label}: {metadata.value}")
 

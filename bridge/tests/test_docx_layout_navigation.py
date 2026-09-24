@@ -192,8 +192,8 @@ def test_daily_report_uses_reference_inspired_typography_and_evidence_lines(tmp_
     assert paragraphs[0].text == "Daily Alert & Log Analysis Report"
     assert paragraphs[0].alignment == WD_ALIGN_PARAGRAPH.CENTER
     assert paragraphs[0].runs[0].bold is True
-    assert paragraphs[0].runs[0].italic is True
-    assert paragraphs[0].runs[0].font.size.pt == 20
+    assert paragraphs[0].runs[0].italic is False
+    assert paragraphs[0].runs[0].font.size.pt == 22
     assert paragraphs[1].alignment == WD_ALIGN_PARAGRAPH.CENTER
 
     texts = [paragraph.text for paragraph in paragraphs]

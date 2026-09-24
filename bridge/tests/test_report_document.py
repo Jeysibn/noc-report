@@ -12,6 +12,7 @@ import pathlib
 import base64
 
 from docx import Document
+from docx.oxml.ns import qn
 
 from noc_bridge.docx_render import render_daily_report_docx, render_document
 from noc_bridge.report_composition import compose_report
@@ -266,3 +267,23 @@ def test_render_daily_report_docx_end_to_end_produces_a_valid_docx(tmp_path):
     assert "INC-001" in all_text
     assert "NullPointerException in PaymentWorker" in all_text
     assert "No log analysis available yet for this incident." in all_text
+
+
+def test_daily_report_docx_uses_clear_non_italic_typography(tmp_path):
+    destination = tmp_path / "typography.docx"
+
+    render_daily_report_docx(_RESULT, destination, screenshot_fetcher=lambda *_: _PNG)
+
+    doc = Document(str(destination))
+    title = doc.paragraphs[0]
+    assert title.runs[0].italic is False
+    assert title.runs[0].font.size.pt == 22
+    assert title.runs[0].font.bold is True
+
+    alerts = next(paragraph for paragraph in doc.paragraphs if paragraph.text == "Alerts")
+    assert alerts.runs[0].italic is False
+    assert alerts.runs[0].font.bold is True
+    assert alerts._p.pPr.find(qn("w:pBdr")) is not None
+
+    summary = next(paragraph for paragraph in doc.paragraphs if paragraph.text == "本班次两起事件。")
+    assert summary._p.pPr.find(qn("w:shd")) is not None
