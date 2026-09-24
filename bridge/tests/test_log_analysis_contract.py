@@ -153,6 +153,25 @@ def test_key_find_detail_is_substantive_and_secondary_detail_is_brief():
         validate_log_triage_result(result)
 
 
+@pytest.mark.parametrize(
+    "field, value, message",
+    [
+        ("summary_en", "The log contains two dominant failures. The parser rejected the VALUES clause because", "incomplete phrase"),
+        ("summary_zh", "日志显示两个主要故障。解析器在VALUES子句处中断", "complete-sentence punctuation"),
+        ("detail_en", "The parser rejected the VALUES clause and", "incomplete phrase"),
+        ("detail_zh", "解析器拒绝了VALUES子句……", "appears truncated"),
+    ],
+)
+def test_incomplete_narratives_are_rejected(field, value, message):
+    result = _valid_result()
+    if field.startswith("summary"):
+        result[field] = value
+    else:
+        result["key_finds"][0][field] = value
+    with pytest.raises(OutputValidationError, match=message):
+        validate_log_triage_result(result)
+
+
 def test_web_and_docx_semantics_use_the_same_canonical_presentation(tmp_path):
     snapshot = _fixture()
     document = compose_report(

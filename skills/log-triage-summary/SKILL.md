@@ -95,6 +95,10 @@ structured finding fields instead.
 - Do not repeat the same evidence in the summary, a finding, and another
   finding. Do not include recommendations unless a separate task explicitly
   requests them.
+- Every summary and finding detail must end at a complete sentence boundary.
+  Keep the wording concise enough to finish within the field limit; never
+  stop mid-sentence, leave a dangling colon/conjunction, or use an ellipsis to
+  signal truncation.
 - Counts mean matching operational occurrences after deterministic correlation
   de-duplication, not estimated unique failures. The same request may be logged
   by multiple layers; say so only when the log provides that evidence. Never independently invent different counts,

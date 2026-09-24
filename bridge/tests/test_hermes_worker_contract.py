@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from noc_bridge.hermes import (
     HermesClient,
     HermesPolicyError,
@@ -459,6 +461,17 @@ def test_fallback_narrative_compaction_respects_frozen_field_limits():
     assert result["summary_en"].count(".") <= 4
     assert result["key_finds"][0]["detail_en"].count(".") <= 3
     assert result["secondary_finds"][0]["detail_en"].count(".") <= 1
+
+
+def test_fallback_narrative_compaction_rejects_mid_sentence_cut():
+    result = {
+        "summary_zh": "第一句。第二句。",
+        "summary_en": "First sentence. Second sentence.",
+        "key_finds": [{"detail_zh": "完整句子。", "detail_en": "The parser returned" + (" more" * 200)}],
+        "secondary_finds": [],
+    }
+    with pytest.raises(ValueError, match="complete sentence boundary"):
+        compact_log_triage_narrative(result)
 
 
 def test_prompt_injection_is_below_trusted_security_instruction():

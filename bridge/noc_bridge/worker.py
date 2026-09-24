@@ -383,7 +383,9 @@ def _process_log_triage_message(
                             "Return one concise bilingual result: summary_zh/summary_en "
                             "must be at most 800 characters and 2-4 sentences; key "
                             "details at most 600 characters and 3 sentences; secondary "
-                            "details at most 320 characters and 1 sentence."
+                            "details at most 320 characters and 1 sentence. Every "
+                            "summary and detail must end with complete sentence "
+                            "punctuation; never stop mid-sentence or use an ellipsis."
                             if output_attempt > 0
                             else None
                         ),

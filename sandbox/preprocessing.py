@@ -375,11 +375,9 @@ def _compact_narrative(value: str, *, max_chars: int, max_sentences: int, chines
     if usable:
         cutoff = usable[min(max_sentences, len(usable)) - 1]
         return text[:cutoff].strip()
-    bounded = text[:max_chars].rstrip()
-    if bounded and bounded[-1] not in _SENTENCE_ENDINGS:
-        punctuation = "。" if chinese else "."
-        bounded = bounded[:-1].rstrip() + punctuation
-    return bounded
+    raise ValueError(
+        "cannot safely compact narrative without a complete sentence boundary"
+    )
 
 
 def compact_log_triage_narrative(result: dict) -> dict:

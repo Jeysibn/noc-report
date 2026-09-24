@@ -30,6 +30,11 @@ class OutputValidationError(ValueError):
 
 
 _SENTENCE_ENDINGS = re.compile(r"[.!?。！？]")
+_TRAILING_INCOMPLETE = re.compile(
+    r"(?:[:;,/]|\b(?:and|or|but|because|including|such as|that|which|with|from|to|of|the|a|an|in|on|for|as|due|via)\b|"
+    r"(?:并且|包括|例如|由于|导致|以及|和|或|其中|与|在|对|从|通过))$",
+    re.IGNORECASE,
+)
 _LINKING_EVIDENCE = re.compile(
     r"(?:trace|request\s*(?:id|identifier)|correlation\s*(?:id|identifier)|"
     r"nested\s+exception|caller|callee|same\s+dependency|explicit(?:ly)?\s+linked|"
@@ -58,6 +63,27 @@ _CAUSATION_NEGATION = re.compile(
 def _sentence_count(value: str) -> int:
     """Count operator-readable sentence boundaries conservatively."""
     return max(1, len(_SENTENCE_ENDINGS.findall(value)))
+
+
+def _validate_narrative_completion(value: str, *, path: str) -> None:
+    """Reject narratives that are syntactically present but visibly cut off.
+
+    JSON/schema validation cannot detect a provider stopping halfway through a
+    string. Requiring terminal sentence punctuation and rejecting common
+    dangling conjunctions keeps a partial explanation from becoming a
+    successful AnalysisRun. Closing quotes/brackets are ignored when checking
+    the final lexical token.
+    """
+    text = value.strip()
+    if not text:
+        raise OutputValidationError(f"{path} must be a complete sentence")
+    if text.endswith(("...", "…")):
+        raise OutputValidationError(f"{path} appears truncated")
+    lexical = text.rstrip(')]}"\'”’》）】')
+    if _TRAILING_INCOMPLETE.search(lexical.rstrip(".!?。！？")):
+        raise OutputValidationError(f"{path} ends with an incomplete phrase")
+    if not lexical or not _SENTENCE_ENDINGS.search(lexical[-1]):
+        raise OutputValidationError(f"{path} must end with complete-sentence punctuation")
 
 
 def _analysis_text(result: dict) -> str:
@@ -132,6 +158,7 @@ def _validate_finding_detail_density(result: dict, *, label: str) -> None:
                     raise OutputValidationError(
                         f"{path}.{field} must be no more than {maximum_sentences} sentence"
                     )
+                _validate_narrative_completion(value, path=f"{path}.{field}")
 
 
 def _validate_causation_language(result: dict, *, label: str) -> None:
@@ -177,6 +204,7 @@ def validate_log_triage_result(result: dict, *, label: str = "log_triage output"
             raise OutputValidationError(f"{label}.{field} must be a non-empty string")
         if len(value) > 800:
             raise OutputValidationError(f"{label}.{field} is too long for Short Summary")
+        _validate_narrative_completion(value, path=f"{label}.{field}")
         sentence_count = _sentence_count(value)
         if not 2 <= sentence_count <= 4:
             raise OutputValidationError(
